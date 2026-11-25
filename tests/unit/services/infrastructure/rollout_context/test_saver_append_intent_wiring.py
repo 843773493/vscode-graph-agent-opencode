@@ -260,29 +260,31 @@ def test_append_items_supports_shadow_tool_call_single_call_list(
     assert [item.item_id for item in stored] == ["item-ingress-1", "item-shadow-call-1"]
 
 
-def test_append_items_rejects_multi_call_tool_call(
+@pytest.mark.parametrize("payload_kind", ["tool_call", "structured_content"])
+@pytest.mark.parametrize("calls", [[], None, {}, [
+    {"id": "call-1", "name": "get_goal", "args": {}},
+    {"id": "call-2", "name": "get_goal", "args": {}},
+]])
+def test_canonical_rejects_non_single_tool_call_before_append(
     saver: RolloutCheckpointSaver,
+    payload_kind: str,
+    calls: object,
 ) -> None:
     before = saver.read_canonical_items(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID))
-    call = CanonicalItemRecord.create(
-        item_sequence=1,
-        item_id="item-multi-call-1",
-        semantic_kind="tool_call",
-        wire_role="assistant",
-        payload_kind="tool_call",
-        status=CanonicalItemStatus.COMPLETED,
-        producer_ref={"producer_kind": "provider", "producer_id": "model-call-1"},
-        payload={
-            "tool_calls": [
-                {"id": "call-1", "name": "get_goal", "args": {}},
-                {"id": "call-2", "name": "get_goal", "args": {}},
-            ]
-        },
-        turn_id="turn-1",
-        turn_scope=TurnScope.TURN_MEMBER,
-    )
-    with pytest.raises(ValueError, match="多 call 批式 tool_call"):
-        saver.append_items(SESSION_ID, (call,), thread_id=saver._storage.storage.main_thread_id(SESSION_ID))
+    with pytest.raises(ValueError, match="tool_calls 必须恰含一次调用"):
+        CanonicalItemRecord.create(
+            item_sequence=1,
+            item_id="item-multi-call-1",
+            semantic_kind="tool_call",
+            wire_role="assistant",
+            payload_kind=payload_kind,
+            status=CanonicalItemStatus.COMPLETED,
+            producer_ref={"producer_kind": "provider", "producer_id": "model-call-1"},
+            # 即使混入合法 singular 字段，也不能借它绕过非法数组。
+            payload={"tool_calls": calls, "tool_call_id": "call-1", "name": "get_goal", "args": {}},
+            turn_id="turn-1",
+            turn_scope=TurnScope.TURN_MEMBER,
+        )
     assert saver.read_canonical_items(SESSION_ID, saver._storage.storage.main_thread_id(SESSION_ID)) == before
 
 

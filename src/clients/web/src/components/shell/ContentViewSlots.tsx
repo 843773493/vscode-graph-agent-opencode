@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { t } from '../../../../shared/core/i18n/index.js';
 import type { RequestLogNavigation } from "../../hooks/runtime/useRequestLogNavigation";
 import type { TraceNavigation } from "../../hooks/runtime/useTraceNavigation";
@@ -200,7 +201,7 @@ export default function ContentViewSlots({
     return (
       <div className="empty-state error-state">
         <div className="error-title">{t('shell.bootstrap.failed')}</div>
-        <div className="error-message">{error}</div>
+        <div className="error-message failure-summary">{failureSummary(error)}</div>
         <button
           type="button"
           className="error-retry-button"

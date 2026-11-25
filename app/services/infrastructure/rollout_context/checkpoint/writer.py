@@ -8,6 +8,7 @@ from pathlib import Path
 
 from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMetadata
 
+from app.domain.itemized.compaction import ApplyCompactionCandidateIntent
 from app.domain.itemized.mutation_intents import RebuildContextEpochIntent
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
@@ -41,6 +42,7 @@ class RolloutAppendWriter:
         new_versions: ChannelVersions,
         branch_id: str | None = None,
         consume_epoch_intent: Callable[[RebuildContextEpochIntent, sqlite3.Connection], None] | None = None,
+        compaction_intent: ApplyCompactionCandidateIntent | None = None,
     ) -> None:
         self._storage.checkpoints.append_checkpoint(
             thread_id=thread_id,
@@ -52,6 +54,7 @@ class RolloutAppendWriter:
             messages_state=messages_state,
             branch_id=branch_id,
             consume_epoch_intent=consume_epoch_intent,
+            compaction_intent=compaction_intent,
             new_versions=new_versions,
         )
 

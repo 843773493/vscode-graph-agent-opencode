@@ -1,5 +1,5 @@
 import { useTranscriptDisclosure, useDisclosureFocus } from "../TranscriptViewContext";
-import { nodeAttributes, partNode, nodeKey, type TranscriptNodeKey } from "../../../state/timeline/transcriptNodes";
+import { nodeAttributes, responseNode, responseNodeMembers, nodeKey, type TranscriptNodeKey } from "../../../state/timeline/transcriptNodes";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { ConversationView } from "../../../types/frontend";
@@ -12,6 +12,7 @@ import ContextNotice from "../ContextNotice";
 import { copyItemAction, responseItemMenuActions, responseItemTarget, useChatItemMenu } from "../itemContextMenu";
 import type { ChatTurnActions } from "./useChatTurnActions";
 import { MessageSearchLocationContext } from "../messageSearchLocation";
+import { errorMessage } from "../../../utils/errorMessage";
 import { failureSummary } from "../../../../../shared/core/failurePresentation";
 
 export function ErrorPart({ item }: { item: Extract<TimelineItem, { kind: "trace" }> }) {
@@ -227,17 +228,21 @@ export function ExecutionLostRecoveryPart({
 
 export function ResponsePart({
   item,
-  onForkItem, parentNode,
+  onForkItem, parentNode, load,
 }: {
   parentNode?: TranscriptNodeKey;
   item: TimelineItem;
+  load?: (item: Extract<TimelineItem, {kind: "aggregated_text" | "aggregated_tool"}>) => Promise<void>;
   onForkItem?: (itemId: string) => void;
 }): React.ReactNode {
   const menu = useChatItemMenu(() => responseItemMenuActions(item, onForkItem), true, () => responseItemTarget(item));
   if (item.kind === "context_event") return <ContextNotice notices={item.notices} />;
+  if (item.kind === "aggregated_text" && item.partKind === "content") {
+    return <OutputContentPart item={item} parentNode={parentNode} menu={menu} load={load} />;
+  }
   if (item.kind === "aggregated_text" && item.partKind === "markdown") {
     return (
-      <div {...nodeAttributes(item.responseSources?.[0] ? partNode(item.responseSources[0]) : nodeKey({ kind: "stream", id: item.id }), parentNode)}><MarkdownContent
+      <div {...nodeAttributes(item.responseSources?.[0] ? responseNode(item.responseSources[0]) : nodeKey({ kind: "stream", id: item.id }), parentNode)}><MarkdownContent
         value={item.text}
         className={`chat-response-bubble${item.active ? " is-streaming" : ""}`}
         streaming={item.active}
@@ -265,11 +270,42 @@ export function ResponsePart({
   return null;
 }
 
+function OutputContentPart({item, parentNode, menu, load}: {
+  item: Extract<TimelineItem, {kind: "aggregated_text"}>; parentNode?: TranscriptNodeKey;
+  menu: ReturnType<typeof useChatItemMenu>; load?: (item: Extract<TimelineItem, {kind: "aggregated_text"}>) => Promise<void>;
+}) {
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [mediaError, setMediaError] = React.useState(false);
+  React.useEffect(() => setMediaError(false), [item.media?.source]);
+  const key = item.responseSources?.[0] ? responseNode(item.responseSources[0]) : nodeKey({kind: "stream", id: item.id});
+  const pending = item.responseSources?.some(source => source.projection === "summary") === true;
+  const read = async () => {
+    if (!load || loading) return;
+    setLoading(true); setError(null);
+    try { await load(item); }
+    catch (cause) { setError(errorMessage(cause)); }
+    finally { setLoading(false); }
+  };
+  return <section className="chat-response-bubble chat-output-content" {...nodeAttributes(key, parentNode)} {...menu} aria-busy={loading}>
+    {pending ? <button type="button" disabled={!load || loading} onClick={() => void read()}>
+      {t(loading ? "chat.activity.loading" : "chat.output.load")}</button>
+      : item.truncated ? <p role="status">{t("chat.output.tooLarge")}</p>
+        : item.media?.kind === "image" ? <img src={item.media.source} alt={t("chat.output.image")} loading="lazy" onError={() => setMediaError(true)} />
+          : item.media?.kind === "audio" ? <audio src={item.media.source} controls preload="none" onError={() => setMediaError(true)} />
+            : item.media?.kind === "video" ? <video src={item.media.source} controls preload="metadata" onError={() => setMediaError(true)} />
+              : item.content ? <details><summary>{t("chat.output.structured")}</summary><pre>{JSON.stringify(item.content, null, 2)}</pre></details>
+                : <p role="status">{t("chat.output.pending")}</p>}
+    {error ? <p className="chat-inline-error failure-summary" role="alert">{failureSummary(error)}</p> : null}
+    {mediaError ? <p className="chat-inline-error" role="alert">{t("chat.output.loadFailed")}</p> : null}
+  </section>;
+}
+
 function CompactionPart({item, parentNode, menu}: {
   item: Extract<TimelineItem, {kind: "aggregated_text"}>; parentNode?: TranscriptNodeKey;
   menu: ReturnType<typeof useChatItemMenu>;
 }) {
-  const key = item.responseSources?.[0] ? partNode(item.responseSources[0], "header") : nodeKey({kind: "stream", id: item.id}, "header");
+  const key = item.responseSources?.[0] ? responseNode(item.responseSources[0], "header") : nodeKey({kind: "stream", id: item.id}, "header");
   const [open, setOpen] = useTranscriptDisclosure(key);
   const focus = useDisclosureFocus(open);
   const location = React.useContext(MessageSearchLocationContext);
@@ -278,7 +314,7 @@ function CompactionPart({item, parentNode, menu}: {
   const containsTarget = Boolean(target && item.responseSources?.some(part => part.source.item_id === target));
   React.useEffect(() => { if (containsTarget) setOpen(true); }, [navigationTarget, containsTarget, setOpen]);
   return <section ref={focus.root} className="chat-compaction-summary" {...menu}>
-    <button ref={focus.header} type="button" {...nodeAttributes(key, parentNode)} data-transcript-members={JSON.stringify(item.responseSources?.map(part => partNode(part).source_ref) ?? [key.source_ref])}
+    <button ref={focus.header} type="button" {...nodeAttributes(key, parentNode)} data-transcript-members={JSON.stringify(item.responseSources?.flatMap(responseNodeMembers) ?? [key])}
       aria-expanded={open} onClick={() => { if (open && containsTarget) location.close(); setOpen(!open); }}>{t("chat.status.compactionSummary")}</button>
     {open ? <div {...nodeAttributes({...key, slot: "body"}, key)}><MarkdownContent value={item.text} renderMode="plain" /></div> : null}
   </section>;

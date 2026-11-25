@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.turn import (
     TurnDetailDTO,
+    TurnResponseItemDTO,
     TurnSummaryDTO,
     TurnThinkingBlockDTO,
     TurnUserMessageDTO,
@@ -155,15 +156,15 @@ def project_detail(
             bounded, content_truncated = bounded_text(block.text, budget)
             thinking_blocks.append(block.model_copy(update={"text": bounded}))
             output_truncated = output_truncated or content_truncated
-    response_parts = []
-    for part in detail.response_parts:
+    response_items = []
+    for part in detail.response_items:
         requested = (
             "metadata"
             if part.kind == "context_notice"
             else "final_response"
-            if part.kind == "final_text"
+            if part.final or part.kind == "final_text"
             else "text"
-            if part.kind == "text"
+            if part.kind in {"text", "content"}
             else "reasoning_detail"
             if part.kind == "reasoning"
             else "reasoning_summary"
@@ -200,9 +201,9 @@ def project_detail(
             )
         ):
             continue
-        text, content_truncated = bounded_text(part.text, budget)
-        response_parts.append(part.model_copy(update={"text": text}))
-        output_truncated = output_truncated or content_truncated
+        bounded = bounded_response_item(part, budget)
+        response_items.append(bounded)
+        output_truncated = output_truncated or bounded.truncated
     return detail.model_copy(
         update={
             "user_messages": projected_user_messages,
@@ -222,12 +223,37 @@ def project_detail(
                 final_response_truncated or len(final_response) > 1000
             ),
             "items": items,
-            "response_parts": response_parts,
+            "response_items": response_items,
             "detail_truncated": output_truncated
             or detail.detail_truncated
             or (tool_detail_requested and len(items) < expected_items),
         }
     )
+
+
+def bounded_response_item(part: TurnResponseItemDTO, budget: HistoryProjectionBudget) -> TurnResponseItemDTO:
+    """Turn 与独立执行的全部正文共用一份页面预算，保留成员身份和截断事实。"""
+    changes: dict[str, object] = {}
+    truncated = part.truncated
+    for name in ("text", "arguments", "result"):
+        value = getattr(part, name)
+        if value is not None:
+            changes[name], limited = bounded_text(value, budget)
+            truncated = truncated or limited
+    changes["content"], limited = bounded_content(part.content, budget)
+    return part.model_copy(update={**changes, "truncated": truncated or limited})
+
+
+def bounded_content(value: dict[str, object] | None, budget: HistoryProjectionBudget) -> tuple[dict[str, object] | None, bool]:
+    """结构化单块原样交付或明确受限，不能切断JSON或媒体引用。"""
+    if value is None:
+        return None, False
+    encoded = json.dumps(value, ensure_ascii=False)
+    size = len(encoded.encode("utf-8"))
+    if not budget.can_add(byte_count=size, char_count=len(encoded)):
+        return None, True
+    budget.add(byte_count=size, char_count=len(encoded))
+    return value, False
 
 
 def bounded_text(
@@ -297,7 +323,7 @@ def summary(detail: TurnDetailDTO) -> TurnSummaryDTO:
         thinking_blocks=detail.thinking_blocks,
         tool_summary=detail.tool_summary,
         tool_summary_truncated=detail.tool_summary_truncated,
-        response_parts=[
+        response_items=[
             part.model_copy(
                 update={
                     "projection": "summary",
@@ -309,10 +335,11 @@ def summary(detail: TurnDetailDTO) -> TurnSummaryDTO:
                     "text": ""
                     if part.kind in {"tool_call", "tool_result"}
                     else part.text,
+                    "content": None,
                 }
             )
             # 空正文的来源标记不挤占普通内容预算，也不能因附在详情末尾而被截掉。
-            for index, part in enumerate(detail.response_parts)
+            for index, part in enumerate(detail.response_items)
             if index < 128 or part.kind == "context_notice"
         ],
         activity_stats=detail.activity_stats,

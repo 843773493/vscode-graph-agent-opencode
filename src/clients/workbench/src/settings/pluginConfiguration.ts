@@ -13,6 +13,7 @@ import { gateway } from '../agentApi.js';
 import { createManagementTargetLifecycle, managementGateway, managementTargetDisplayName } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ConfigurationSourceOwner, sourceBaseline, sourceDocumentPath, sourceStatus, type SourceDocument } from './sourceOwner.js';
+import { errorMessage } from '../../../web/src/utils/errorMessage.js';
 
 export type Scope = 'gateway' | 'workspace' | 'defaults';
 export interface PluginConfigurationTarget extends PluginTarget {
@@ -127,21 +128,20 @@ async function chooseSource(quickInput: IQuickInputService, sources: Source[], s
   return selected?.source;
 }
 
-type SourceSaveResult = { document: SourceDocument } | { error: string };
+type SourceSaveResult = { document: SourceDocument } | { error: Error };
 
 async function saveSourceEdit(owner: ConfigurationSourceOwner,
   intent: ReturnType<ConfigurationSourceOwner['intent']>): Promise<SourceSaveResult> {
   try {
     return { document: await owner.save(intent) };
   } catch (saveError) {
-    const original = saveError instanceof Error ? saveError.message : String(saveError);
     try {
       const document = await owner.read(intent.source_key, intent.idempotency_key);
       if (document.edit) return { document };
-      return { error: t('plugins.saveUnknownMissingEdit', intent.idempotency_key, original) };
+      return { error: new Error(t('plugins.saveUnknownMissingEdit', intent.idempotency_key, errorMessage(saveError)), { cause: saveError }) };
     } catch (readError) {
-      const query = readError instanceof Error ? readError.message : String(readError);
-      return { error: t('plugins.saveUnknownQueryFailed', intent.idempotency_key, query, original) };
+      return { error: new AggregateError([saveError, readError], t('plugins.saveUnknownQueryFailed', intent.idempotency_key,
+        errorMessage(readError), errorMessage(saveError))) };
     }
   }
 }
@@ -156,7 +156,7 @@ export async function readPluginBindings(scope: Scope, target: GatewayRequestTar
 
 export async function setPluginBindings(scope: Scope, target: ReturnType<typeof managementGateway>, workspace: GatewayWorkspaceRequestTarget | undefined,
   quickInput: IQuickInputService, bindings: ConfigurationBinding[], enabled: boolean, check: () => void,
-  token: CancellationToken, signal: AbortSignal): Promise<{ binding: ConfigurationBinding; configuration: string }[] | undefined> {
+  token: CancellationToken, signal: AbortSignal): Promise<{ binding: ConfigurationBinding; configuration: string | Error }[] | undefined> {
   if (scope === 'workspace' && !workspace) throw new Error(t('plugins.noWorkspaceSelected'));
   check();
   const owner = new ConfigurationSourceOwner(scope === 'workspace' ? workspace! : target);
@@ -168,17 +168,17 @@ export async function setPluginBindings(scope: Scope, target: ReturnType<typeof 
       scope === 'workspace' ? t('plugins.chooseWorkspaceSource') : t('plugins.chooseGatewaySource'), token);
     check();
   } catch (error) {
-    return bindings.map(binding => ({ binding, configuration: t('plugins.notSubmitted', error instanceof Error ? error.message : String(error)) }));
+    return bindings.map(binding => ({ binding, configuration: new Error(t('plugins.notSubmitted', errorMessage(error)), { cause: error }) }));
   }
   if (!selected?.source_key) return;
   const path = scope === 'defaults' ? ['plugins', 'workspace_defaults', 'entries'] : ['plugins', 'runtime', 'entries'];
-  const results: { binding: ConfigurationBinding; configuration: string }[] = [];
+  const results: { binding: ConfigurationBinding; configuration: string | Error }[] = [];
   for (let index = 0; index < bindings.length; index++) {
     const binding = bindings[index];
     try { check(); }
     catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      results.push(...bindings.slice(index).map(item => ({ binding: item, configuration: t('plugins.notSubmitted', reason) })));
+      const failure = new Error(t('plugins.notSubmitted', errorMessage(error)), { cause: error });
+      results.push(...bindings.slice(index).map(item => ({ binding: item, configuration: failure })));
       break;
     }
     let intent: ReturnType<ConfigurationSourceOwner['intent']>;
@@ -196,7 +196,7 @@ export async function setPluginBindings(scope: Scope, target: ReturnType<typeof 
       await owner.preflight(intent, signal);
       check();
     } catch (error) {
-      results.push({ binding, configuration: t('plugins.notSubmitted', error instanceof Error ? error.message : String(error)) });
+      results.push({ binding, configuration: new Error(t('plugins.notSubmitted', errorMessage(error)), { cause: error }) });
       continue;
     }
     const saved = await saveSourceEdit(owner, intent);
@@ -328,7 +328,7 @@ export async function manageConfig(scope: Scope, gatewayTarget: PluginTarget, wo
   try { preflight = await owner.preflight(intent, privateInputConfirmed ? undefined : signal); }
   catch (error) {
     if (!privateInputConfirmed) check();
-    notification.error(t('plugins.notSubmitted', error instanceof Error ? error.message : String(error)));
+    notification.error(new Error(t('plugins.notSubmitted', errorMessage(error)), { cause: error }));
     return;
   }
   if (!privateInputConfirmed) check();

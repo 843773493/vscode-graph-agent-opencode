@@ -158,7 +158,13 @@ try {
   }
   const save = async () => {
     await command('notifications.hideToasts');
+    const preflight = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'POST'
+        && url.pathname === '/api/v1/config/sources/workspace_root_mutable_override/preflight' && !url.search;
+    });
     await form.getByRole('button', { name: '保存来源', exact: true }).click();
+    await receipt(await preflight);
     const modal = page.locator('.monaco-dialog-box[role="dialog"]');
     await expect(modal).toContainText('保存目标配置来源');
     const saved = page.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname.endsWith('/config/sources/workspace_root_mutable_override'));
@@ -168,11 +174,31 @@ try {
     await expect(page.locator('.tabs-container .tab.active')).not.toHaveClass(/\bdirty\b/);
   };
   const modelRef = { provider_id: providerId, model_id: modelId };
+  let agentBound = false;
   for (const streaming of [true, false]) {
     result.phase = `formal-session-${streaming ? 'stream' : 'complete'}`;
     await openDetails(model.locator('.configuration-model-overrides'));
     await model.getByRole('combobox', { name: /^响应方式/ }).selectOption(String(streaming));
     await save();
+    if (!agentBound) {
+      // 新目录项仍须经产品配置绑定给 Agent，不能绕过原模型允许列表。
+      const sourceUrl = '/api/v1/config/sources/workspace_root_mutable_override';
+      const source = (await api(sourceUrl)).data;
+      const document = parse(source.jsonc);
+      document.settings.workspace.agents.default.model = { primary: modelRef, fallbacks: [] };
+      const bound = await api(sourceUrl, 'PUT', {
+        gateway_id: fixture.gatewayId, workspace_id: fixture.workspaceId,
+        source_key: 'workspace_root_mutable_override', jsonc: JSON.stringify(document, null, 2),
+        base_file_digest: source.file_digest, base_layer_revision: source.layer_revision,
+        base_layer_digest: source.layer_digest, expected_active_revision: source.active_revision,
+        expected_active_digest: source.active_digest, idempotency_key: crypto.randomUUID(),
+      });
+      assert(bound.data.edit.source_saved && bound.data.edit.state === 'active');
+      result.agentBinding = { model: modelRef, requestId: bound.requestId };
+      agentBound = true;
+      await command('workbench.action.closeActiveEditor');
+      await command('boxteam.settings.modelsProviders', location, providerId, modelId);
+    }
     const inspection = await api(`/api/v1/config/llm/inspection?provider_id=${providerId}&model_id=${modelId}`);
     assert.equal(inspection.data.model_options.options.api_mode.streaming, streaming);
     const session = (await api('/api/v1/sessions', 'POST', { title: `真实代理${streaming ? '流式' : '非流式'}`, agent_id: 'default' })).data;
@@ -237,6 +263,9 @@ try {
     base_layer_digest: loadedSource.layer_digest, expected_active_revision: loadedSource.active_revision,
     expected_active_digest: loadedSource.active_digest, idempotency_key: crypto.randomUUID() });
   assert(savedWorkspace.data.edit.source_saved && savedWorkspace.data.edit.state === 'active');
+  // 临时终端仍须关联真实 Thread；模型设置编辑器不提供该创建上下文。
+  await command('_workbench.open', `boxteam://${fixture.gatewayId}/workspace/${fixture.workspaceId}/resources/session/${terminalSession.session_id}/threads/${terminalMain.thread_id}`);
+  await expect(page.locator(`section.boxteam-thread[data-session-id="${terminalSession.session_id}"]`).getByTestId('composer-input')).toBeVisible();
   await command('boxteam.terminal.focus');
   const oldEnvironmentDigest = await terminalDigest(frame, 'OLD');
   const newTerminalResponse = page.waitForResponse(response => response.request().method() === 'POST'

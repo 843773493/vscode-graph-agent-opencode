@@ -57,8 +57,9 @@ def _patch_dialer(
     connection: FakeConnection,
 ) -> None:
     async def fake_connect(
-        url: str, *, additional_headers: dict[str, str]
+        url: str, *, additional_headers: dict[str, str], proxy: None,
     ) -> FakeConnection:
+        assert proxy is None
         del url, additional_headers
         return connection
 

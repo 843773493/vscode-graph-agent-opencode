@@ -32,6 +32,7 @@ internal_v2/
 ├── 执行调度与协作
 │   ├── persistent_task.py            持久任务组件、定义和运行回执
 │   ├── job.py / pending_request.py   Job 执行快照与待处理请求
+│   ├── derived_execution.py          派生执行的精确归属、有限预算及有界引用回执
 │   ├── communication.py / team.py   跨 Session 通信与团队 DTO
 │   ├── tool.py / tool_test.py        工具选择与工具测试结果
 │   ├── mcp.py                        MCP 工具和 Server 目录 DTO

@@ -87,6 +87,7 @@ class ProviderContextRequest:
 
     projection: ContextProjectionResult
     wire_request: dict[str, object]
+    semantic_messages: tuple[BaseMessage, ...]
 
     def budget(self, capacity: ModelCapacity) -> ContextBudget:
         """计数只消费本次最终正文；调用方提供与模型实例同快照的容量。"""
@@ -152,7 +153,7 @@ class ContextProjectionOwnerMixin:
             entry
             for entry in snapshot.selection
             if entry.ref.ref_type == "canonical_item" and (
-                entry.included or snapshot.selection_policy == "summary_candidate"
+                entry.included or snapshot.selection_policy == "derived_request"
             )
         )
         for entry in entries:
@@ -222,7 +223,7 @@ class ContextProjectionOwnerMixin:
             refs = [
                 entry.ref
                 for entry in committed.selection
-                if (entry.included or committed.selection_policy == "summary_candidate")
+                if (entry.included or committed.selection_policy == "derived_request")
                 and isinstance(entry.ref, ContextRef)
                 and entry.ref.ref_type == "canonical_item"
             ]
@@ -430,6 +431,10 @@ class ContextProjectionOwnerMixin:
                 actual_token = body_hash
                 if body_length != ref.content_length or actual_token != expected_token:
                     raise ValueError(f"source-mismatch: request-only ref: {ref_id}")
+                if contribution is not None and contribution.contribution_kind == "model_message":
+                    if contribution.source_binding is None or contribution.source_binding.summary_result_ref != DetailRef.from_dict(body["result_ref"]):
+                        raise ValueError("summary-source-mismatch: 合并结果与 typed source binding 不一致")
+                    self.validate_summary_result_source(session_id, thread_id, body, checkpoint_ns=checkpoint_ns)
         for contribution in plan.contributions:
             if not contribution.request_only:
                 continue

@@ -10,8 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class CompactionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    prepare_fraction: float = Field(default=0.70, gt=0, lt=1)
-    apply_fraction: float = Field(default=0.85, gt=0, lt=1)
+    prepare_fraction: float = Field(default=0.80, gt=0, lt=1)
+    apply_fraction: float = Field(default=0.90, gt=0, lt=1)
     target_fraction: float = Field(default=0.55, gt=0, lt=1)
     apply_policy: Literal["on_demand", "next_request"] = "on_demand"
 
@@ -113,10 +113,12 @@ class ContextBudget(BaseModel):
 class ContextCapacityError(ValueError):
     """本地容量拒绝，不能归因于上游服务失败。"""
 
-    def __init__(self, budget: ContextBudget) -> None:
+    def __init__(self, budget: ContextBudget, *, apply_fraction: float | None = None) -> None:
         self.budget = budget
+        reason = ("完整 Provider 输入超出本次模型预算" if apply_fraction is None
+                  else f"完整请求没有满足压缩应用阈值 {apply_fraction:g}")
         super().__init__(
-            "context-capacity-exceeded: 完整 Provider 输入超出本次模型预算; "
+            f"context-capacity-exceeded: {reason}; "
             f"input_estimate={budget.estimate.known_tokens}, "
             f"input_budget={budget.capacity.input_budget_tokens}, "
             f"count_quality={budget.estimate.quality}"

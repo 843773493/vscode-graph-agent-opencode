@@ -14,15 +14,15 @@ from app.runtime import provider_model
 from app.runtime.agent_runtime import prepare_agent_model
 from app.services.business.agent_service import AgentService
 from app.services.infrastructure.config_service import ConfigService
+from configs.installer import install_user_configuration
 
 
 @pytest.fixture
 def agent_config_service(tmp_path: Path) -> ConfigService:
-    config_path = tmp_path / "workspace.jsonc"
-    config_path.write_bytes(Path("configs/workspace_inline.jsonc").read_bytes())
+    install_user_configuration(config_root=tmp_path, profile="default")
     return ConfigService(
         config_dir=Path.cwd() / "configs",
-        config_path=config_path,
+        config_path=tmp_path / "workspace.jsonc",
     )
 
 
@@ -98,13 +98,16 @@ async def test_agent_list_rechecks_oauth_credentials_without_sdk(
     from app.runtime import chatgpt_auth
 
     config = commentjson.loads(Path("configs/workspace_inline.jsonc").read_text())
-    primary = config["agents"]["default"]["model"]["primary"]
-    provider = config["llm"]["providers"][primary["provider_id"]]["defaults"]
-    config["llm"]["providers"][primary["provider_id"]]["models"][primary["model_id"]]["model"] = "chatgpt/gpt-5.6-codex"
+    config["extends"] = "builtin:workspace"
+    workspace = config["settings"]["workspace"]
+    primary = workspace["agents"]["default"]["model"]["primary"]
+    provider = config["profiles"][f"provider.{primary['provider_id']}"]["settings"]["model_options"]
+    workspace["llm"]["providers"][primary["provider_id"]]["models"][primary["model_id"]]["model"] = "chatgpt/gpt-5.6-codex"
     provider.update({"custom_llm_provider": "chatgpt",
         "auth": {"type": "oauth", "method": "chatgpt"},
         "api_mode": {"protocol": "responses", "model_info": {"supports_function_calling": True, "supports_reasoning": False}, "supports_reasoning": {}}})
-    config_path = tmp_path / "oauth-workspace.jsonc"
+    install_user_configuration(config_root=tmp_path, profile="default")
+    config_path = tmp_path / "workspace.jsonc"
     config_path.write_text(json.dumps(config))
     auth_dir = tmp_path / "oauth"
     auth_dir.mkdir()

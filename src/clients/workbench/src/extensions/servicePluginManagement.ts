@@ -1,3 +1,6 @@
+import { errorDiagnostic, errorMessage, errorSummary } from '../../../web/src/utils/errorMessage.js';
+import { failureSummary } from '../../../shared/core/failurePresentation.js';
+import { copyTextToClipboard } from '../../../web/src/utils/clipboard.js';
 import { t } from '../../../shared/core/i18n/index.js';
 import { append, $, clearNode } from '../../upstream/src/vs/base/browser/dom.js';
 import { ViewPane, type IViewPaneOptions } from '../../upstream/src/vs/workbench/browser/parts/views/viewPane.js';
@@ -46,7 +49,6 @@ import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extensi
 import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extensionsWidgets.css';
 import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extensionActions.css';
 import './plugins.css';
-const errorsText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const activePluginInstallations = new Map<string, Promise<void>>();
 const pluginGatewayLabel = (target: PluginTarget) => t('plugins.nativeGateway', target.gateway_id, target.gateway_connection_id ? t('plugins.connectionSuffix', target.gateway_connection_id) : '');
 
@@ -119,7 +121,7 @@ export class ServicePluginPackagesView extends ViewPane {
     this.searchInput.inputElement.type = 'search';
     this.searchInput.value = this.query;
     this._register(this.searchInput.onDidChange(value => void this.commands.executeCommand('workbench.extensions.search', value)
-      .catch(error => this.notifications.error(errorsText(error)))));
+      .catch(error => this.notifications.error(error instanceof Error ? error : errorMessage(error)))));
     this.controls = append(container, $('div'));
     this.controls.className = 'service-plugin-scope';
     const gatewayAction = this._register(new Action('plugins.gateway', t('plugins.managementGateway'), undefined, true, index => {
@@ -141,7 +143,7 @@ export class ServicePluginPackagesView extends ViewPane {
     const toolbar = this._register(new ActionBar(this.controls, { focusOnlyEnabledItems: true,
       actionViewItemProvider: action => action === gatewayAction ? this.gatewaySelector : action === workspaceAction ? this.workspaceSelector : undefined,
     }));
-    this._register(toolbar.onDidRun(({ error }) => { if (error) this.notifications.error(errorsText(error)); }));
+    this._register(toolbar.onDidRun(({ error }) => { if (error) this.notifications.error(error instanceof Error ? error : errorMessage(error)); }));
     const moreAction = this._register(new Action('plugins.scope', t('plugins.scopeMenu'), 'codicon codicon-ellipsis', true, () => {
       const target = { ...managementGateway('extensions') };
       const actions = (['workspace', 'gateway', 'defaults'] as const).map(scope => new Action(`plugins.scope.${scope}`,
@@ -232,7 +234,12 @@ export class ServicePluginPackagesView extends ViewPane {
       const feedback = this.feedback!;
       clearNode(feedback);
       feedback.hidden = false;
-      append(feedback, $('span')).textContent = errorsText(error);
+      append(feedback, $('span')).textContent = errorSummary(error);
+      const copy = append(feedback, $('button'));
+      copy.textContent = t('shell.copyDiagnostic');
+      copy.addEventListener('click', () => {
+        void copyTextToClipboard(errorDiagnostic(error)).catch(copyError => this.notifications.error(copyError));
+      });
       const retry = append(feedback, $('button'));
       retry.textContent = t('plugins.retry');
       retry.addEventListener('click', () => void this.refresh());
@@ -244,7 +251,7 @@ export class ServicePluginPackagesView extends ViewPane {
   private async runOperation(operation: () => Promise<void>): Promise<void> {
     const revision = this.refreshRevision;
     try { await operation(); }
-    catch (error) { this.notifications.error(errorsText(error)); }
+    catch (error) { this.notifications.error(error instanceof Error ? error : errorMessage(error)); }
     finally { if (revision === this.refreshRevision) await this.refresh(); }
   }
 
@@ -268,12 +275,12 @@ export class ServicePluginPackagesView extends ViewPane {
       if (!packageId || !pluginId) continue;
       const status = this.state.slot(packageId, pluginId);
       const output = row.querySelector<HTMLElement>('[data-plugin-runtime-value]');
-      row.title = [this.state.label(packageId, pluginId, row.dataset.runtime === 'true'), status?.error, this.state.error].filter(Boolean).join('\n');
+      row.title = this.state.label(packageId, pluginId, row.dataset.runtime === 'true');
       if (output) output.textContent = this.state.summary(packageId, pluginId, row.dataset.runtime === 'true');
       const failure = row.querySelector<HTMLElement>('[data-plugin-runtime-error]');
       if (failure) {
         failure.hidden = !(status?.error || this.state.error);
-        failure.textContent = status?.error ?? this.state.error ?? '';
+        failure.textContent = status?.error || this.state.error ? errorSummary(status?.error ?? this.state.error) : '';
       }
     }
     const workspace = container.querySelector<HTMLElement>('[data-plugin-workspace-handoff]');
@@ -281,7 +288,7 @@ export class ServicePluginPackagesView extends ViewPane {
       const state = this.runtimeStatus?.workspace_configurations.find(item => item.workspace_id === workspace.dataset.workspaceId);
       workspace.hidden = state?.state === 'ready';
       workspace.textContent = t('plugins.workspaceHandoffSummary', state ? pluginStateLabel(state.state) : t('plugins.notReceived'));
-      workspace.title = t('plugins.workspaceHandoff', workspace.dataset.workspaceId, state ? pluginStateLabel(state.state) : t('plugins.notReceived'), state?.error ? ` · ${state.error}` : '');
+      workspace.title = failureSummary(t('plugins.workspaceHandoff', workspace.dataset.workspaceId, state ? pluginStateLabel(state.state) : t('plugins.notReceived'), state?.error ? ` · ${state.error}` : ''));
     }
   }
 
@@ -322,7 +329,7 @@ export class ServicePluginPackagesView extends ViewPane {
     this.workspaceTarget = workspace;
     if (scope === 'workspace' && !workspace) { this.packageActions.clear(); this.lists.length = 0; clearNode(container); container.inert = false; append(container, $('p')).textContent = t('plugins.chooseWorkspaceFirst'); return; }
     const pluginTarget: PluginTarget = { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id };
-    const state = this.state = new PluginScope(scope, pluginTarget, workspace, this.notifications);
+    const state = this.state = new PluginScope(scope, pluginTarget, workspace);
     const [inventory] = await Promise.all([
       gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory', { method: 'POST', body: JSON.stringify(pluginTarget) }),
       state.load(),
@@ -350,7 +357,7 @@ export class ServicePluginPackagesView extends ViewPane {
       summary.dataset.workspaceId = workspace.workspace_id;
       summary.hidden = handoff?.state === 'ready';
       summary.textContent = t('plugins.workspaceHandoffSummary', handoff ? pluginStateLabel(handoff.state) : t('plugins.notReceived'));
-      summary.title = t('plugins.workspaceHandoff', workspace.workspace_id, handoff ? pluginStateLabel(handoff.state) : t('plugins.notReceived'), handoff?.error ? ` · ${handoff.error}` : '');
+      summary.title = failureSummary(t('plugins.workspaceHandoff', workspace.workspace_id, handoff ? pluginStateLabel(handoff.state) : t('plugins.notReceived'), handoff?.error ? ` · ${handoff.error}` : ''));
     }
     const pluginScope = scope === 'gateway' ? 'gateway' : 'workspace';
     const bindings = scopeBindings.filter(item => scope === 'workspace'
@@ -381,7 +388,7 @@ export class ServicePluginPackagesView extends ViewPane {
       };
       const packageActions: Action[] = [];
       if (group.versions.length > 1) packageActions.push(new Action('plugin.package.versions', t('plugins.installedVersions'), undefined, true,
-        () => openVersion().catch(error => this.notifications.error(errorsText(error)))));
+        () => openVersion().catch(error => this.notifications.error(error instanceof Error ? error : errorMessage(error)))));
       const batchButtons = [true, false].map(enabled => {
         const button = new Action(`plugin.package.${enabled}`, enabled ? t('plugins.enableAll') : t('plugins.disableAll'), undefined, true, () => this.runTargetOperation(async lifecycle => {
           batchButtons.forEach(item => { item.enabled = false; });
@@ -409,7 +416,7 @@ export class ServicePluginPackagesView extends ViewPane {
                   { method: 'POST', body: JSON.stringify(pluginTarget) });
                 lifecycle.check();
               }
-              catch (error) { readError = errorsText(error); }
+              catch (error) { readError = errorMessage(error); }
             }
             const lines = results.map(({ binding: item, configuration }) => {
               const actual = current?.plugins.find(slot => slot.gateway_id === target.gateway_id && slot.binding?.package_id === item.package_id
@@ -417,7 +424,7 @@ export class ServicePluginPackagesView extends ViewPane {
                 && (scope === 'workspace' ? slot.binding.workspace_id === workspace?.workspace_id : slot.binding.workspace_id == null));
               const state = scope === 'defaults' ? t('plugins.defaultsChanged') : readError ? t('plugins.runtimeReadFailed', readError)
                 : actual ? `${actual.binding?.enabled ? t('plugins.enabled') : t('plugins.disabled')} · ${actual.declarative ? t('plugins.declarative') : pluginStateLabel(actual.state)}${actual.error ? ` · ${actual.error}` : ''}${actual.instance ? t('plugins.instanceSuffix', actual.instance.instance_id) : ''}` : t('plugins.runtimeUnpublished');
-              return t('plugins.batchResult', owner, item.package_id, item.plugin_id, item.package_version, configuration, state);
+              return t('plugins.batchResult', owner, item.package_id, item.plugin_id, item.package_version, typeof configuration === 'string' ? configuration : errorDiagnostic(configuration), state);
             });
             await this.dialogs.info(t('plugins.batchResultsTitle'), lines.join('\n\n'));
           } finally { batchButtons.forEach(item => { item.enabled = true; }); }
@@ -471,7 +478,7 @@ export class ServicePluginPackagesView extends ViewPane {
             const gearBar = template.disposables.add(new ActionBar(footer));
             const gear = template.disposables.add(new Action('plugins.plugin.manage', t('plugins.managePlugin', plugin.name), 'extension-action icon codicon codicon-gear', true, () => {
               const actions = pluginActions(state, manifest, plugin, this.quickInput, this.notifications);
-              if (group.versions.filter(item => item.plugins.some(candidate => candidate.id === plugin.id && candidate.instance_scope === pluginScope)).length > 1) actions.push(new Action('plugin.versions', t('plugins.installedVersions'), undefined, true, () => openVersion(plugin.id).catch(error => this.notifications.error(errorsText(error)))));
+              if (group.versions.filter(item => item.plugins.some(candidate => candidate.id === plugin.id && candidate.instance_scope === pluginScope)).length > 1) actions.push(new Action('plugin.versions', t('plugins.installedVersions'), undefined, true, () => openVersion(plugin.id).catch(error => this.notifications.error(error instanceof Error ? error : errorMessage(error)))));
               this.pluginMenus.showContextMenu({ getAnchor: () => footer, getActions: () => actions,
                 onHide: () => actions.forEach(action => action.dispose()) });
             }));
@@ -481,6 +488,7 @@ export class ServicePluginPackagesView extends ViewPane {
             runtimeValue.textContent = state.summary(manifest.package_id, plugin.id, Boolean(plugin.runtime));
             const failure = append(publisher, $('span'));
             failure.dataset.pluginRuntimeError = 'true';
+            failure.setAttribute('role', 'alert');
             failure.hidden = true;
           },
           disposeTemplate: (template: { disposables: DisposableStore }) => template.disposables.dispose(),
@@ -492,7 +500,7 @@ export class ServicePluginPackagesView extends ViewPane {
         if (!event.element) return;
         const { plugin, manifest } = event.element;
         void this.editors.openEditor(new PluginEditorInput(pluginTarget, workspace, scope, manifest.package_id, manifest.version, plugin.id, plugin.name), event.editorOptions, event.sideBySide ? SIDE_GROUP : undefined)
-          .catch(error => this.notifications.error(errorsText(error)));
+          .catch(error => this.notifications.error(error instanceof Error ? error : errorMessage(error)));
       }));
       this.lists.push(list);
       list.splice(0, 0, group.plugins);
@@ -526,7 +534,7 @@ export class ServicePluginPackagesView extends ViewPane {
       const failure = append(row, $('p'));
       failure.dataset.pluginRuntimeError = 'true';
       failure.hidden = !status?.error;
-      failure.textContent = status?.error ?? '';
+      failure.textContent = status?.error ? failureSummary(status.error) : '';
       this.renderInstanceLog(row, target, status?.log_id, state.lifecycle.signal);
       const install = append(section, $('button'));
       install.textContent = t('plugins.installMissing');
@@ -639,7 +647,7 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
         // 明确拒绝保留原原因；响应未确认时仅查询原操作，不能另发安装。
         try { operation = await readInstallation(target, operationId); }
         catch (queryError) {
-          throw new Error(t('plugins.installationResponseUnknown', errorsText(error), errorsText(queryError), operationId, target.gateway_id));
+          throw new AggregateError([error, queryError], t('plugins.installationResponseUnknown', errorMessage(error), errorMessage(queryError), operationId, target.gateway_id));
         }
       }
       await observeInstallation(progress, notifications, target, operationId, operation);
@@ -729,7 +737,7 @@ async function observeInstallation(progress: IProgressService, notifications: IN
     notifications.info(t('plugins.installationSucceeded', pluginGatewayLabel(target), operation.artifact.package_id, operation.artifact.package_version));
   }, () => { void gateway.request('/api/gateway/service-plugins/cancel-install',
     { method: 'POST', body: JSON.stringify({ ...target, operation_id: operationId }) })
-    .catch(error => notifications.error(t('plugins.cancellationUnknown', operationId, errorsText(error)))); });
+    .catch(error => notifications.error(t('plugins.cancellationUnknown', operationId, errorMessage(error)))); });
 }
 
 export async function installServicePluginPackage(accessor: ServicesAccessor, explicitTarget?: PluginTarget): Promise<void> {

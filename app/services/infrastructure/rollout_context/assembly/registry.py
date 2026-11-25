@@ -125,7 +125,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
         """唯一 contribution manifest writer；调用方持有活动事务。"""
         if not connection.in_transaction:
             raise RuntimeError("contribution registry 写入需要调用方活动事务")
-        self._storage._require_v2_runtime(connection)
+        self._storage._require_current_rollout_format(connection)
         source_revision, replacement_policy = expected[1], expected[9]
         existing = connection.execute(
             'SELECT source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, binding_manifest_json, source_ordinal FROM context_contributions WHERE contribution_id = ?',

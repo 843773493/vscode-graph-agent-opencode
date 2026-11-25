@@ -100,7 +100,7 @@
 
 选择已有 vault 或环境引用 SHALL 仍使用原 owner，仅解析当前连接所需凭据；缺失不尝试另一来源。active 测试不能夹带临时 Key。草稿测试成功不创建／更新 vault、不替换其他模型引用；用户明确保存时才沿原密钥写入与来源引用保存链反馈结果。
 
-`credential_input` SHALL 包含 scope、provider_id、可选 model_id 及短暂 value。provider scope 禁止 model_id，替换本次内存副本的 Provider defaults.api_key；model scope 必须有 model_id，替换该 Model overrides.api_key。对象必须属于本次选择，替换后先完成正常继承再解析最终唯一凭据；已被替换的引用不得先行解析。Provider 临时输入不压过 Model 显式覆盖；输入未实际成为本次有效凭据时 SHALL 网络前拒绝并指出覆盖来源，不静默忽略或测试另一把 Key。Provider 发现只允许对应 provider scope，active 与 OAuth 模式拒绝此输入；保存时沿同一绑定位置写入新 vault 引用。
+`credential_input` SHALL 包含 scope、provider_id、可选 model_id 及短暂 value。provider scope 禁止 model_id，model scope 必须有 model_id；两者只在本次草稿探测的内存连接中替换对应 Provider 或 Model 选项节点解析后的有效 api_key，不改写 config_ref 或来源文件。对象必须属于本次选择，且 Provider 临时输入不能覆盖 Model 节点明确另行定义的凭据；输入未实际成为本次有效凭据时 SHALL 网络前拒绝并指出覆盖来源，不静默忽略或测试另一把 Key。被替换的旧引用不得先行解析。Provider 发现只允许对应 provider scope，active 与 OAuth 模式拒绝此输入；保存时沿所选节点的原来源写入新 vault 引用。
 
 #### Scenario: 新 Key 测试后取消创建
 - **WHEN** 用户在 B 的新连接表单输入 Key，完成自动发现或显式测试后取消

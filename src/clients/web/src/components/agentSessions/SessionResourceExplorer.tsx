@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { formatNumber, t } from '../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { resolveCatalogSearchTarget } from "../../api/gateway/catalogSearch";
@@ -382,7 +383,7 @@ export default function SessionResourceExplorer({
           <li className="session-resource-error-card" role="status">
             <strong>{t('navigation.catalog.mirrorUnconfirmed')}</strong>
             {mirror.authoritative_confirmed_at ? <span>{t('navigation.catalog.mirrorConfirmedAt', mirror.authoritative_confirmed_at)}</span> : null}
-            {mirror.error ? <span>{mirror.error}</span> : null}
+            {mirror.error ? <span className="failure-summary">{failureSummary(mirror.error)}</span> : null}
             <button type="button" onClick={() => refreshSessionCatalogBranchInBackground(workspaceId, parentNodeId)}>{t('navigation.catalog.reload')}</button>
           </li>
         ) : null}
@@ -402,8 +403,8 @@ export default function SessionResourceExplorer({
         ) : null}
         {failure ? (
           <li className="session-resource-error-card" role="alert">
-            <strong>{failure.title}</strong>
-            <span>{failure.message}</span>
+            <strong className="failure-summary">{failureSummary(failure.title)}</strong>
+            <span className="failure-summary">{failureSummary(failure.message)}</span>
             <div className="session-resource-error-actions">
               <button type="button" disabled={recovering} onClick={() => void recoverWorkspace()}>
                 {recovering
@@ -609,7 +610,7 @@ export default function SessionResourceExplorer({
                 data-pending-state={node.pending_state}
                 data-catalog-state={node.state ?? undefined}
                 data-deletion-settlement={node.settlement ?? undefined}
-                title={node.settlement_error ?? t('navigation.catalog.changeStatus', node.settlement === "pending" ? t('navigation.catalog.deleteDraining') : node.pending_state === "accepted" ? t('navigation.catalog.acceptedPending') : node.pending_state ?? node.state)}
+                title={node.settlement_error ? failureSummary(node.settlement_error) : t('navigation.catalog.changeStatus', node.settlement === "pending" ? t('navigation.catalog.deleteDraining') : node.pending_state === "accepted" ? t('navigation.catalog.acceptedPending') : node.pending_state ?? node.state)}
               >
                 {node.settlement_error ? t('navigation.catalog.deleteRepair') : node.settlement === "pending" ? t('navigation.catalog.deleteDraining') : node.settlement === "settled" ? t('navigation.catalog.deleteRefreshing') : node.state === "deleting" ? t('navigation.catalog.deleting') : node.pending_state === "committed" ? t('navigation.catalog.committed') : node.pending_state === "accepted" ? t('navigation.catalog.waitingToCommit') : t('navigation.catalog.syncing')}
               </span>
@@ -859,7 +860,7 @@ export default function SessionResourceExplorer({
 
   const actionErrorCard = actionError && !actionError.workspaceId ? (
     <div className="session-resource-error-card global session-resource-error" role="alert">
-      <strong>{actionError.title}</strong>
+      <strong className="failure-summary">{failureSummary(actionError.title)}</strong>
       <div className="session-resource-error-actions">
         <button type="button" onClick={() => openDiagnostic(actionError.title, actionError.detail)}>{t('navigation.diagnostic.viewLogs')}</button>
         <button type="button" onClick={() => setActionError(null)}>{t('navigation.close')}</button>

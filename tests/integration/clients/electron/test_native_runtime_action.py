@@ -61,7 +61,7 @@ async def test_packaged_electron_quick_access_stops_runtime_resource(
         config_path=context.project_root / "configs/tests/workspace/default.jsonc",
         schema_path=context.project_root / "configs/workspace_schema.jsonc")
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+    config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
         "url"
     ] = str(client.base_url).rstrip("/")
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

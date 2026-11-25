@@ -242,8 +242,8 @@ export function useChildThreadConversation({
     const missing = new Map<string, string[]>();
     for (const item of items) {
       const execution = page?.internal_executions?.find(execution => execution.execution_id === item.executionId);
-      if (!execution?.display_parts.some(part => part.item_id === item.itemId && part.bodyEvicted)
-        && !execution?.response_parts.some(part => part.source.item_id === item.itemId && part.bodyEvicted)) continue;
+      if (!execution?.display_items.some(part => part.item_id === item.itemId && part.bodyEvicted)
+        && !execution?.response_items.some(part => part.source.item_id === item.itemId && part.bodyEvicted)) continue;
       const ids = missing.get(item.executionId) ?? [];
       if (!ids.includes(item.itemId)) ids.push(item.itemId);
       missing.set(item.executionId, ids);

@@ -69,7 +69,7 @@ class ContextAssemblyReaderMixin:
                 "AND assembly.status IN ('sealed','terminal') "
                 # 先按输入身份定位 selection，再核封存和派发状态；不能逐个历史请求重查同一输入。
                 # 保留 assembly/attempt 原序，失败重试可复用同一 assembly，不能只查其最新 call 指针。
-                "AND json_extract(assembly.snapshot_json,'$.selection_policy')<>'summary_candidate' AND assembly.assembly_id IN ("
+                "AND json_extract(assembly.snapshot_json,'$.selection_policy')<>'derived_request' AND assembly.assembly_id IN ("
                 "SELECT selection.assembly_id FROM context_assembly_selections selection LEFT JOIN context_assembly_contributions contribution "
                 "ON contribution.assembly_id=selection.assembly_id AND contribution.contribution_id=selection.contribution_id "
                 "WHERE selection.included=1 AND " + predicate + ") "
@@ -173,7 +173,7 @@ class ContextAssemblyReaderMixin:
         row = connection.execute(
             "SELECT assembly.assembly_id FROM context_assemblies assembly "
             "WHERE assembly.status IN ('sealed','terminal') "
-            "AND json_extract(assembly.snapshot_json,'$.selection_policy') <> 'summary_candidate' "
+            "AND json_extract(assembly.snapshot_json,'$.selection_policy') <> 'derived_request' "
             "AND (? IS NULL OR assembly.assembly_id<>?) "
             "AND ((assembly.session_id=? AND assembly.thread_id=?) OR assembly.model_call_id IN ("
             "SELECT COALESCE(json_extract(item.producer_ref_json,'$.model_call_id'),"
@@ -218,7 +218,7 @@ class ContextAssemblyReaderMixin:
         session_id/thread_id 是当前目标物理存储 owner，historical_owner 是
         snapshot 保留的原执行 scope；binding 仅核准历史 scope，不定位源库。
         """
-        self._storage._require_v2_runtime(connection)
+        self._storage._require_current_rollout_format(connection)
         # header 只核标量身份；完整 snapshot 正文由下方 registry 唯一读取和校验，
         # 避免冷读或前驱检查把随历史增长的同一份 manifest 重复取回 Python。
         row = connection.execute(

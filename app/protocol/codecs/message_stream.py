@@ -217,9 +217,6 @@ def _normalize_payload(event_type: str, payload: Mapping[str, Any]) -> dict[str,
                     model_call.pop("reason", None)
             for tool_call in snapshot.get("tool_calls", []):
                 if isinstance(tool_call, dict):
-                    # tool-call 聚合需要记录模型调用归属，但公共 ToolCall
-                    # 没有该内部对账字段；运行中的快照也必须经过同一投影。
-                    tool_call.pop("model_call_id", None)
                     # tool-call 聚合会保留旧版本的内部错误详情，但公共
                     # ToolCall 没有 error 字段；终态 StreamFailure 承载对用户
                     # 可见的失败原因，不能让旧字段把整个 snapshot 编码成 500。

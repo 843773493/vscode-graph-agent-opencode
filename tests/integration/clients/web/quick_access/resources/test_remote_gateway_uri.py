@@ -79,10 +79,10 @@ def remote_uri_environment(
     del resource_web_assets
     configuration_path = Path(integration_workspace_config_path)
     config = commentjson.loads(configuration_path.read_text(encoding="utf-8"))
-    primary = config["llm"]["providers"]["primary"]
+    primary = config["settings"]["workspace"]["llm"]["providers"]["primary"]
     primary["models"]["default"]["model"] = "e2e-stub-model"
-    primary["defaults"]["api_key"] = ""
-    config["agents"]["default"]["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
+    config["profiles"]["provider.primary"]["settings"]["model_options"]["api_key"] = ""
+    config["settings"]["workspace"]["agents"]["default"]["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
     configuration_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     with model_stream_replay(

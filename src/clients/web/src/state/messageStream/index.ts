@@ -3,4 +3,4 @@ export * from "./types";
 export { createMessageStreamState, writeMessageStreamCache } from "./state";
 export { applyMessageStreamEvent } from "./eventReducer";
 export { applyMessageStreamSnapshot } from "./snapshotHydration";
-export { messageStreamToResponseParts } from "./responseProjection";
+export { messageStreamToResponseItems } from "./responseProjection";

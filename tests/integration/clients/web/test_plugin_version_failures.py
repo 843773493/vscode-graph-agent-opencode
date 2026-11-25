@@ -92,7 +92,7 @@ def test_workbench_version_failure_keeps_desired_and_requires_explicit_restart(
         schema_path=context.project_root / "configs/workspace_schema.jsonc")
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     clear_test_provider_api_keys(config)
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{version_failure_port}"
+    config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{version_failure_port}"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     attempts = context.artifacts_dir / "actual-plugin-starts.jsonl"
     packages = []

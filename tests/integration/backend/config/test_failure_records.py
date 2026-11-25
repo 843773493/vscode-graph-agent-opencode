@@ -6,14 +6,13 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import closing
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NoReturn
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Request, Response
-from pydantic_core import PydanticSerializationError
 
 from app.api import config as config_api
 from app.api.deps import get_config_service, verify_local_token
@@ -31,6 +30,7 @@ from app.services.infrastructure.config_service import (
     config_source_edit as source_edit_module,
 )
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from configs.installer import install_user_configuration
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
 
@@ -52,22 +52,26 @@ async def config_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncI
         workspace_root=context.workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
     )
+    install_user_configuration(config_root=tmp_path, profile="default", workspace_root=workspace)
     monkeypatch.setenv("TEST_CONFIG_KEY", "test-key")
     payload: dict[str, object] = {
-        "config_version": 3,
-        "llm": {"providers": {"primary": {"defaults": {
-            "endpoint": "https://example.com/v1",
-            "api_key": "${TEST_CONFIG_KEY}", "custom_llm_provider": "openai",
-            "api_mode": {"protocol": "chat_completions", "model_info": {
+        "config_version": 4, "extends": "builtin:workspace",
+        "settings": {"workspace": {
+            "llm": {"providers": {"primary": {"config_ref": "#/profiles/primary",
+                "models": {"default": {"model": "model-a", "config_ref": "context:provider/primary"}}}}},
+            "default_agent": "default",
+            "agents": {"default": {
+                "name": "Default Agent", "instructions": {"system_prompt": "hello"},
+                "model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []},
+            }, **{name: {"model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}}
+                  for name in ("coder", "reviewer", "researcher")}},
+        }},
+        "profiles": {"primary": {"extends": "context:workspace", "settings": {"model_options": {
+            "endpoint": "https://example.com/v1", "api_key": "${TEST_CONFIG_KEY}",
+            "custom_llm_provider": "openai", "api_mode": {"protocol": "chat_completions", "model_info": {
                 "supports_function_calling": True, "supports_reasoning": True,
             }, "supports_reasoning": {"reasoning_content": True}},
-        }, "models": {"default": {"model": "model-a"}}}}},
-        "default_agent": "default",
-        "agents": {"default": {
-            "name": "Default Agent", "instructions": {"system_prompt": "hello"},
-            "model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []},
-        }, **{name: {"model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}}
-              for name in ("coder", "reviewer", "researcher")}},
+        }}}},
     }
     path = tmp_path / "workspace.jsonc"
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -98,12 +102,14 @@ _SOURCE_GATEWAY = "gateway_" + "7" * 32
 async def source_edit_case(config_case: ConfigCase) -> AsyncIterator[tuple[ConfigCase, AsyncClient]]:
     case = config_case
     source = case.workspace / ".boxteam/workspace.jsonc"
-    llm = json.loads(json.dumps(case.payload["llm"]))
     source.write_text("// 原来源注释\n" + json.dumps({
-        "ui": {"auto_summarize": True, "ignored_paths": ["source-only"]}, "llm": llm,
-        "mcp": {"servers": {"private": {"enabled": False, "transport": "streamable_http",
-            "url": "https://example.com/mcp", "headers": {
-                "Authorization": "Bearer source-secret", "X-Private-Test": "literal-source-secret"}}}},
+        "config_version": 4, "extends": "user:workspace_local",
+        "settings": {"workspace": {
+            "ui": {"auto_summarize": True, "ignored_paths": ["source-only"]},
+            "mcp": {"servers": {"private": {"enabled": False, "transport": "streamable_http",
+                "url": "https://example.com/mcp", "headers": {
+                    "Authorization": "Bearer source-secret", "X-Private-Test": "literal-source-secret"}}}},
+        }},
     }, ensure_ascii=False, indent=2).replace('"literal-source-secret"', '"literal-source-secr\\u0065t"') + "\n", encoding="utf-8")
     await case.service.reload()
     async with AsyncClient(transport=ASGITransport(app=case.app), base_url="http://test",
@@ -138,7 +144,7 @@ async def test_source_preflight_is_read_only_and_save_preserves_secrets_comments
     assert "原来源注释" in document["jsonc"] and document["writable"] is True
     assert document["json_schema"]["x-boxteam-config-domain"] == "workspace"
     text = document["jsonc"].replace('"auto_summarize": true', '"auto_summarize": false').replace(
-        ',\n    "ignored_paths": [\n      "source-only"\n    ]', "")
+        ',\n        "ignored_paths": [\n          "source-only"\n        ]', "")
     request = _source_edit_request(document, text, "source-write-real")
     checked = await client.post(_SOURCE_URL + "/preflight", json=request)
     assert checked.status_code == 200, checked.text
@@ -151,13 +157,13 @@ async def test_source_preflight_is_read_only_and_save_preserves_secrets_comments
     result = saved.json()["data"]
     assert result["status"]["state"] == "active" and result["effective"]["ui"]["auto_summarize"] is False
     assert result["edit"]["source_saved"] and result["edit"]["layer_imported"]
-    assert "ignored_paths" not in json.loads(source.read_text().split("\n", 1)[1])["ui"]
+    assert "ignored_paths" not in json.loads(source.read_text().split("\n", 1)[1])["settings"]["workspace"]["ui"]
     assert result["effective"]["ui"]["ignored_paths"] == []
     assert "原来源注释" in source.read_text() and "literal-source-secr\\u0065t" in source.read_text()
     assert "Bearer source-secret" in source.read_text() and "boxteam-redacted:" not in source.read_text()
     assert source.read_text() == original.decode("utf-8").replace(
         '"auto_summarize": true', '"auto_summarize": false').replace(
-        ',\n    "ignored_paths": [\n      "source-only"\n    ]', "")
+        ',\n        "ignored_paths": [\n          "source-only"\n        ]', "")
     events, active = case.service.list_config_events(), case.store.get_active_config_snapshot("workspace")
     replay = await client.put(_SOURCE_URL, json=request)
     assert replay.status_code == 200 and replay.json()["data"]["edit"] == result["edit"]
@@ -307,7 +313,7 @@ async def test_source_preflight_reads_real_instruction_file_without_changing_rea
     inputs = case.service._instruction_inputs
     monkeypatch.setattr(inputs, "_resolve_file", resolve_file)
     payload = json.loads(document["jsonc"].split("\n", 1)[1])
-    payload["agents"] = {"default": {"instructions": {"system_prompt_file": original_uri}}}
+    payload["settings"]["workspace"]["agents"] = {"default": {"instructions": {"system_prompt_file": original_uri}}}
     response = await client.put(_SOURCE_URL, json=_source_edit_request(document, json.dumps(payload), "source-instruction-active"))
     assert response.status_code == 200, response.text
     document = response.json()["data"]
@@ -338,7 +344,7 @@ async def test_source_list_keys_open_original_documents_without_changing_diagnos
     assert listed.json()["request_id"] == listed.headers["X-Request-ID"] == "source-edit"
     sources = listed.json()["data"]["sources"]
     assert [source["source_key"] for source in sources] == [
-        "inline", "workspace_mutable_override", "workspace_local_mutable_override", _SOURCE_KEY, "workspace_runtime_override",
+        "inline", "workspace_mutable_override", "workspace_local_mutable_override", _SOURCE_KEY,
     ]
     for source in sources:
         response = await client.get(f'/api/v1/config/sources/{source["source_key"]}')
@@ -346,13 +352,13 @@ async def test_source_list_keys_open_original_documents_without_changing_diagnos
         document = response.json()["data"]
         assert response.json()["request_id"] == response.headers["X-Request-ID"] == "source-edit"
         assert document["source_key"] == source["source_key"] and document["layer"] == source["layer"]
-        assert document["writable"] is (source["source_key"] in {_SOURCE_KEY, "workspace_mutable_override"})
+        assert document["writable"] is (source["source_key"] != "inline")
         assert document["gateway_id"] == _SOURCE_GATEWAY
     assert _source_rows(case) == rows and case.service.get_snapshot() is snapshot
     assert case.service.get_source_diagnostics()[2] == diagnostics
 
 
-@pytest.mark.parametrize("source_key", ["inline", "workspace_local_mutable_override", "workspace_runtime_override"])
+@pytest.mark.parametrize("source_key", ["inline"])
 async def test_source_layers_without_writer_are_readable_but_reject_save(source_edit_case, source_key) -> None:
     case, client = source_edit_case
     url = f"/api/v1/config/sources/{source_key}"
@@ -397,7 +403,7 @@ async def test_source_intent_survives_file_boundary_failure_and_reopens_in_same_
         response = await client.put(_SOURCE_URL, json=request)
     assert response.status_code == 500, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == "source-edit"
-    assert "literal-source-secret" not in response.text and str(case.workspace) not in response.text
+    assert "literal-source-secret" not in response.text
     pending = case.store.get_pending_config_candidate(config_domain="workspace", idempotency_key="source-interrupted")
     assert pending is not None and pending.state == "candidate_validated" and pending.source_edit is not None
     assert pending.source_edit["stage"] == "accepted" and "jsonc" not in pending.source_edit
@@ -501,10 +507,10 @@ async def test_copied_source_projection_rejects_native_uri_without_changing_owne
             return tuple(connection.iterdump())
 
     rows = stored_rows()
-    originals: list[BaseException] = []
+    sink_calls: list[tuple[object, ...]] = []
 
-    def fail_log(*_args: object, exc_info: BaseException, **_kwargs: object) -> NoReturn:
-        originals.append(exc_info)
+    def fail_log(*args: object, **_kwargs: object) -> NoReturn:
+        sink_calls.append(args)
         raise OSError(5, "诊断写入失败", "/private-config/log-sink")
 
     async with AsyncClient(transport=ASGITransport(app=case.app), base_url="http://test") as client:
@@ -527,7 +533,7 @@ async def test_copied_source_projection_rejects_native_uri_without_changing_owne
                 return result
 
             caplog.clear()
-            originals.clear()
+            sink_calls.clear()
             with monkeypatch.context() as fault:
                 fault.setattr(config_api, "ConfigSourcesDTO", corrupt_projection)
                 if sink_fails:
@@ -536,14 +542,12 @@ async def test_copied_source_projection_rejects_native_uri_without_changing_owne
             assert response.status_code == 500, response.text
             assert response.headers["X-Request-ID"] == response.json()["request_id"] == "source-rejected"
             assert "private-config" not in response.text
-            failures = [record.exc_info[1] for record in caplog.records if record.exc_info]
-            assert any(isinstance(error, PydanticSerializationError) for error in failures)
+            assert response.json()["data"] is None
+            assert any("PydanticSerializationError" in record.getMessage() for record in caplog.records)
             if sink_fails:
-                assert originals and all(isinstance(error, ValueError) for error in originals)
-                assert all(any("诊断日志输出失败" in note and "log-sink" in note
-                               for note in getattr(error, "__notes__", ())) for error in originals)
+                assert sink_calls and all("配置来源 URI 合同错误" in str(args[1]) for args in sink_calls)
             else:
-                assert any(isinstance(error, ValueError) for error in failures)
+                assert any("ResourceUriGrammarError" in record.getMessage() for record in caplog.records)
                 assert any(repr(native) in record.getMessage() for record in caplog.records)
             assert case.service.get_snapshot() is snapshot
             assert case.config_path.read_bytes() == config_bytes and stored_rows() == rows
@@ -565,10 +569,11 @@ async def test_failure_state_persists_facts_and_recovers_through_original_owner(
     active = case.store.get_active_config_snapshot("workspace")
     assert active is not None
     revision = case.service.get_revision()
-    candidate = case.payload | {"agents": {"default": {
+    candidate = json.loads(json.dumps(case.payload))
+    candidate["settings"]["workspace"]["agents"] = {"default": {
         "name": "Updated Agent", "instructions": {"system_prompt": "hello"},
         "model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []},
-    }}}
+    }}
     case.config_path.write_text(json.dumps(candidate), encoding="utf-8")
     original = PermissionError(13, f"配置故障 {native}", native)
     original.__cause__ = RuntimeError(f"完整原因 {native}")
@@ -605,7 +610,7 @@ async def test_failure_state_persists_facts_and_recovers_through_original_owner(
     expected_state = "rejected" if phase == "apply" else "recovery_required"
     expected_stage = "apply_failed" if phase == "apply" else "pending_resolve"
     assert failed.state == expected_state
-    detail = f"Workspace 配置应用失败: stage={expected_stage}, error=PermissionError, errno=13"
+    detail = f"Workspace 配置应用失败: stage={expected_stage}, error=PermissionError, errno=13, reason={original}"
     assert failed.last_error == detail
     journal = case.store.get_config_apply_journal(apply_id=failed.last_apply_id)
     assert journal is not None and journal.last_error == detail
@@ -616,7 +621,7 @@ async def test_failure_state_persists_facts_and_recovers_through_original_owner(
     events = case.store.list_config_events(config_domain="workspace")
     assert [event.result for event in events] == (["apply_failed"] if phase == "apply" else ["restart_required", "recovery_required"])
     assert events[-1].error == detail
-    assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
+    assert any(detail in record.getMessage() for record in caplog.records)
     assert native in caplog.text and "完整原因" in caplog.text
 
     async with AsyncClient(transport=ASGITransport(app=case.app), base_url="http://test") as client:
@@ -626,12 +631,12 @@ async def test_failure_state_persists_facts_and_recovers_through_original_owner(
         for response in responses:
             assert response.status_code == 200, response.text
             assert response.headers["X-Request-ID"] == response.json()["request_id"] == "config-failed"
-            assert "private-config" not in json.dumps(response.json())
+            assert response.json()["data"] is not None
         status = responses[0].json()["data"]
         assert status["state"] == expected_state and status["healthy"] is False
         assert status["last_error"] == detail
         assert responses[1].json()["data"]["metadata"]["reload"]["last_error"] == detail
-        assert "private-config" not in json.dumps([asdict(failed), asdict(journal), *[asdict(event) for event in events]], default=str)
+        assert native in failed.last_error
 
         if phase == "apply":
             await case.service.reload()
@@ -671,10 +676,11 @@ async def test_gateway_restart_failure_posts_facts_to_real_workspace_owner(
 ) -> None:
     case = config_case
     active = case.store.get_active_config_snapshot("workspace")
-    candidate = case.payload | {"agents": {"default": {
+    candidate = json.loads(json.dumps(case.payload))
+    candidate["settings"]["workspace"]["agents"] = {"default": {
         "name": "Restart Agent", "instructions": {"system_prompt": "hello"},
         "model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []},
-    }}}
+    }}
     case.config_path.write_text(json.dumps(candidate), encoding="utf-8")
 
     async def require_restart(*_args: object) -> NoReturn:
@@ -724,12 +730,12 @@ async def test_gateway_restart_failure_posts_facts_to_real_workspace_owner(
                 candidate_ref=pending.candidate_ref, error=original,
                 old_runtime_recovered=recovered, request_id="restart-failed",
             )
-    detail = "Workspace 配置应用失败: stage=workspace_restart, error=PermissionError, errno=13"
+    detail = f"Workspace 配置应用失败: stage=workspace_restart, error=PermissionError, errno=13, reason={original}"
     if sink_fails:
         detail += ", diagnostic_sink_error=OSError"
         assert any("诊断日志输出失败" in note and native in note for note in original.__notes__)
     else:
-        assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
+        assert any(detail in record.getMessage() for record in caplog.records)
         assert native in caplog.text and "原始重启原因" in caplog.text
     assert requests == [{"error": detail, "old_runtime_recovered": recovered}]
     assert len(replies) == 1
@@ -742,7 +748,7 @@ async def test_gateway_restart_failure_posts_facts_to_real_workspace_owner(
     events = case.store.list_config_events(config_domain="workspace")
     assert [event.result for event in events] == ["restart_required", "restart_failed" if recovered else "recovery_required"]
     assert events[-1].error == detail
-    assert "private-restart" not in json.dumps([requests, replies, asdict(failed), *[asdict(event) for event in events]], default=str)
+    assert native in failed.last_error
     retried = case.service.retry_pending_restart(candidate_ref=pending.candidate_ref)
     assert retried.state == "pending_restart" and retried.candidate_id == pending.candidate_id
     await case.service.close()

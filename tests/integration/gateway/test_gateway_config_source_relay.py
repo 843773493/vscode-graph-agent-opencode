@@ -216,7 +216,7 @@ def test_gateway_source_relay_keeps_native_target_and_original_submission(
         document = before_pending.json()["data"]
         local_status = exchange(relay, "GET", "/api/gateway/config/reload-status", "source-relay-local-baseline")
         pending_config = commentjson.loads(document["jsonc"])
-        pending_config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("process", {}).setdefault("health", {})[
+        pending_config["settings"]["gateway"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("process", {}).setdefault("health", {})[
             "request_timeout_seconds"
         ] = 3
         pending_text = json.dumps(pending_config, ensure_ascii=False, indent=2) + "\n"

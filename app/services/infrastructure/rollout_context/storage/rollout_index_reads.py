@@ -102,7 +102,7 @@ class RolloutIndexMixin:
                 cleanup.callback(connection.close)
                 connection.execute("BEGIN")
                 # 在事务入口校验一次格式，后续分页、投影与 checkpoint 共用同一快照。
-                self._host._require_v2_runtime(connection)
+                self._host._require_current_rollout_format(connection)
                 self._validate_schema_state(connection)
                 self._host._validate_reasoning_projection_connection(connection)
                 database_state = connection.execute(
@@ -113,7 +113,7 @@ class RolloutIndexMixin:
                     == "migrating"
                 ):
                     raise RuntimeError(
-                        "rollout 正在进行 legacy migration，暂不可建立业务 context snapshot"
+                        "rollout 尚未完成发布，暂不可建立业务 context snapshot；原件保留"
                     )
                 actual_owner = current_scope(connection)
                 expected_owner = (session_id, thread_id)
@@ -123,7 +123,7 @@ class RolloutIndexMixin:
                         f"expected={expected_owner!r}, actual={actual_owner!r}"
                     )
                 if validate_integrity:
-                    self._host._validate_v2_commit_offsets(connection, jsonl_path)
+                    self._host._validate_commit_offsets(connection, jsonl_path)
                 else:
                     # 完整审计已核对同一末尾边界，只有普通读取需要单独检查。
                     validate_commit_boundary(connection, jsonl_path.stat().st_size)

@@ -314,6 +314,7 @@ INTERNAL_MESSAGE_KIND_SPECS = (
         "mcp_connection_completed", frozenset({"control_context", "untrusted_instructions"}),
         frozenset({"control_context", "untrusted_instructions"}),
     ),
+    InternalMessageKindSpec("derived_task_instruction", frozenset()),
     InternalMessageKindSpec("compaction_summary_instruction", frozenset()),
     InternalMessageKindSpec("compaction_summary", frozenset({"summary"}), frozenset({"summary"})),
     InternalMessageKindSpec("compaction_retry_marker", frozenset()),

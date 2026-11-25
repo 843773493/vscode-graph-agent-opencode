@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import { taskLabel as label } from "./taskPresentation";
 import { formatLocalTimestamp } from "../../../utils/format";
@@ -30,7 +31,7 @@ function RunDetail({ apiPort, target, run, onOpenThread }: {
   };
   return <section aria-label={t("tasks.history.aria", run.run_id)}>
     <button onClick={() => setVersion((value) => value + 1)}>{t("tasks.history.refresh")}</button>
-    {error ? <div role="alert">{error}</div> : null}
+    {error ? <div className="failure-summary" role="alert">{failureSummary(error)}</div> : null}
     {!detail && !error ? <p role="status">{t("tasks.history.loadingDetail")}</p> : null}
     {detail ? <>
       <p>{t("tasks.history.triggered", time(run.scheduled_for ?? run.created_at), label(run.trigger_type), formatNumber(run.definition_revision))}</p>
@@ -59,7 +60,7 @@ function RunRow({ apiPort, target, run, onOpenSession, onOpenThread }: {
     {run.delivery ? <p>{run.delivery.state === "saved" ? t("tasks.history.saved") : run.delivery.state === "accepted" ? t("tasks.history.accepted") : t("tasks.history.unknownDelivery", run.delivery.state)}<br />{t("tasks.history.source")}<code>{run.delivery.source_id}</code>{run.delivery.execution_id ? <><br />{t("tasks.history.execution")}<code>{run.delivery.execution_id}</code></> : null}</p> : null}
     {run.evaluation ? <p>{t("tasks.history.evaluationThread")}<code>{run.evaluation.thread_uri}</code><br />{t("tasks.history.evaluationExecution")}<code>{run.evaluation.execution_id}</code></p> : null}
     {run.generation ? <div><strong>{t("tasks.history.sessionAction", label(run.generation.status))}</strong>{run.generation.outputs.map((output) => <p key={output.session_id}><button onClick={() => void onOpenSession(output.session_id)}>{output.title || output.session_id}</button> · {output.navigation_path.join("/") || t("tasks.generation.workspaceRoot")}</p>)}{run.generation.job_id ? <p>{t("tasks.history.workExecution")}<code>{run.generation.job_id}</code></p> : null}{run.generation.report_back_job_id ? <p>{t("tasks.history.reportExecution")}<code>{run.generation.report_back_job_id}</code></p> : null}</div> : null}
-    {run.error ? <div role="alert">{run.error}</div> : null}
+    {run.error ? <div className="failure-summary" role="alert">{failureSummary(run.error)}</div> : null}
     <button aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? t("tasks.history.collapse") : t("tasks.history.expand")}</button>
     {expanded ? <RunDetail apiPort={apiPort} target={target} run={run} onOpenThread={onOpenThread} /> : null}
   </li>;

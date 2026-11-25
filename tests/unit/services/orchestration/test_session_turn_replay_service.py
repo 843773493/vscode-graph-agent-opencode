@@ -29,7 +29,6 @@ from app.services.orchestration.session_turn_replay_service import (
     SessionTurnReplayService,
 )
 from tests.support.message_service import build_message_service
-from tests.support.messages import compaction_summary_message
 from tests.support.rollout.fixture_output import commit_fixture_output
 
 NOW = datetime(2026, 7, 16, tzinfo=UTC)
@@ -173,7 +172,6 @@ async def _put_checkpoint(
     admission: ExecutionAdmission,
     messages: list[object],
     todos: list[str],
-    summarization_event: dict[str, object] | None = None,
 ) -> dict:
     with (
         session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
@@ -191,13 +189,6 @@ async def _put_checkpoint(
             "todos": todos_version,
         }
         new_versions: dict[str, object] = dict(versions)
-        if summarization_event is not None:
-            event_version = saver.get_next_version(
-                previous_versions.get("_summarization_event"), None
-            )
-            values["_summarization_event"] = summarization_event
-            versions["_summarization_event"] = event_version
-            new_versions["_summarization_event"] = event_version
         checkpoint = {
             "v": 1,
             "ts": NOW.isoformat(),
@@ -280,11 +271,6 @@ async def _build_service(
         owner=owner, admission=second_admission,
         messages=second_messages,
         todos=["after_second"],
-        summarization_event={
-            "cutoff_index": 2,
-            "summary_message": compaction_summary_message(id="summary-first-turn", content="第一轮摘要"),
-            "file_path": "/history/ses_019c205391bb7a4b81b6728df70f63e6.jsonl",
-        },
     )
     dispatcher = RecordingDispatcher(saver)
     session_service = SimpleNamespace(
@@ -404,7 +390,6 @@ async def test_edit_first_turn_removes_all_following_turns(
     )
     assert replacement_count == 1
     assert latest.checkpoint["channel_values"]["todos"] == ["after_first"]
-    assert "_summarization_event" not in latest.checkpoint["channel_values"]
 
 
 @pytest.mark.asyncio

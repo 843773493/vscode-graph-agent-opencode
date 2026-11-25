@@ -1,6 +1,6 @@
 # 目录用途
 
-承载 v2 canonical catalog 与其 SQLite 派生索引的存取和完整性边界。
+承载当前 canonical catalog 与其 SQLite 派生索引的存取和完整性边界；canonical 格式与 SQLite 结构采用各自 owner 的版本，不混用编号。
 
 # 可修改内容
 

@@ -8,7 +8,7 @@ from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING
 
-from app.core.hashing import sha256_hex as _hash_bytes
+from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
     CommitKind,
     CommitMode,
@@ -20,6 +20,7 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.refs import ContextRef, ref_identity
 from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
+from app.domain.itemized.runtime import ProvenanceEdge
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     check_resource_target,
 )
@@ -130,7 +131,7 @@ class RolloutItemsMixin:
         ) as connection:
             connection.execute("BEGIN")
             self._validate_schema_state(connection)
-            self._require_v2_runtime(connection)
+            self._require_current_rollout_format(connection)
             owner = connection.execute(
                 "SELECT session_id,thread_id,database_state,committed_jsonl_offset "
                 "FROM database_meta WHERE singleton_id=1"
@@ -176,8 +177,6 @@ class RolloutItemsMixin:
         """写入唯一 canonical catalog，并生成对应 item projection。"""
         # 提交事务在追加 JSONL 前已完整校验 item；这里只提取镜像字段，不重复编码正文。
         source_revision = item.source_manifest.source_revision if item.source_manifest is not None else None
-        identity = item.projection_identity
-        part_ordinal = identity.block_index if identity is not None and identity.block_id is not None else 0
         if item.projection_group is None or item.projection_group.ordinal == item.projection_group.size - 1:
             validate_message_revision_source(connection, item)
         if (
@@ -195,15 +194,15 @@ class RolloutItemsMixin:
         jsonl_length = len(jsonl_bytes)
         if jsonl_length == 0:
             raise RuntimeError("item_catalog.jsonl_length 必须是正整数")
-        # catalog 和 part locator 共用本次正文长度；line_hash 直接取实际追加的字节。
+        # 正文长度与唯一 canonical locator 在本次提交中登记。
         payload_length = payload_content_length(item.payload_kind, item.payload)
         connection.execute(
             "INSERT INTO item_catalog(item_sequence, item_id, semantic_kind, "
             "payload_kind, status, turn_id, turn_scope, message_group_id, "
             "wire_role, producer_ref_json, payload_length, source_revision, "
             "content_hash, jsonl_offset, jsonl_length, commit_id, "
-            "operation_anchor_capable, searchable, created_at, projection_manifest_json, tool_call_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "searchable, created_at, projection_manifest_json, tool_call_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 item.item_sequence,
                 item.item_id,
@@ -221,14 +220,6 @@ class RolloutItemsMixin:
                 jsonl_offset,
                 jsonl_length,
                 commit_id,
-                int(
-                    item.semantic_kind
-                    in {
-                        SemanticKind.TOOL_CALL,
-                        SemanticKind.TOOL_RESULT,
-                        SemanticKind.COMPACTION_SUMMARY,
-                    }
-                ),
                 int(
                     item.semantic_kind
                     in {SemanticKind.USER_INPUT, SemanticKind.ASSISTANT_OUTPUT}
@@ -256,34 +247,6 @@ class RolloutItemsMixin:
                     "INSERT INTO item_resource_references VALUES (?, ?, 'attachment', ?)",
                     (item.item_id, ordinal, file_id),
                 )
-        block_id = (
-            item.projection_identity.block_id
-            if item.projection_identity is not None
-            else None
-        )
-        if block_id is not None:
-            locator = {
-                "json_pointer": "/payload",
-                "encoding": "jcs:v1",
-                "offset": 0,
-                "length": payload_length,
-            }
-            connection.execute(
-                "INSERT INTO item_parts(item_id, part_id, part_ordinal, "
-                "part_semantic_kind, content_prefix_hash, content_hash, "
-                "locator_json, line_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    item.item_id,
-                    block_id,
-                    part_ordinal,
-                    item.semantic_kind,
-                    None,
-                    item.content_hash,
-                    _json(locator),
-                    _hash_bytes(jsonl_bytes),
-                    item.created_at,
-                ),
-            )
 
     def _insert_canonical_relations(
         self,
@@ -340,7 +303,7 @@ class RolloutItemsMixin:
             if origin == "internal" and turn_id is not None:
                 raise RuntimeError("internal request item admission 必须 Turn-less")
             # 同一批请求共用提交与历史授权的校验结果；每个成员仍读取实际正文并核对边界和投影。
-            read_item = partial(self._read_v2_item_at, validated_commits=set(), validated_scopes=set())
+            read_item = partial(self._read_item_at, validated_commits=set(), validated_scopes=set())
             with self.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id).open("rb") as stream:
                 for message_id, item_id in message_locators:
                     locator = find_message_locator(connection, message_id, item_id=item_id)
@@ -453,7 +416,7 @@ class RolloutItemsMixin:
             ) as read_connection:
                 # 快照入口已核格式和发布状态；借用 writer 事务仍须检查可读状态。
                 if connection is not None:
-                    self._require_v2_readable(read_connection)
+                    self._require_rollout_readable(read_connection)
                 # None 请求全部；显式空选集仍须过滤，不得读回全部历史。
                 query = (
                     "SELECT item.item_sequence,item.item_id,item.content_hash,item.payload_length,"
@@ -600,6 +563,45 @@ class RolloutItemsMixin:
         )
         if cursor.rowcount != 1:
             raise RuntimeError(f"canonical item execution 绑定失败: {item_id}")
+
+    def register_provenance_edge(
+        self,
+        session_id: str,
+        thread_id: str,
+        edge: ProvenanceEdge,
+        *,
+        checkpoint_ns: str = "",
+    ) -> None:
+        session_id = strict_text(session_id, field="session_id")
+        thread_id = strict_text(thread_id, field="thread_id")
+        owner_thread_id = self.fork_paths.thread_identity(session_id, thread_id)
+        checkpoint_ns = strict_text(
+            checkpoint_ns, field="checkpoint_ns", allow_empty=True
+        )
+        with self.write_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
+            existing = connection.execute(
+                "SELECT relation, source_ref, target_ref, attempt, supersedes_relation_id, replay_input FROM item_relations WHERE relation_id = ?",
+                (edge.edge_id,),
+            ).fetchone()
+            expected = (
+                edge.relation,
+                edge.source_ref,
+                edge.target_ref,
+                edge.attempt,
+                edge.supersedes_edge_id,
+                int(edge.replay_input),
+            )
+            if existing is not None:
+                if tuple(existing) == expected:
+                    return
+                raise ValueError("provenance edge identity 冲突")
+            result = connection.execute(
+                "INSERT INTO item_relations(relation_id, relation, source_ref, target_ref, attempt, supersedes_relation_id, replay_input, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (edge.edge_id, *expected, _now()),
+            )
+            if result.rowcount != 1:
+                raise RuntimeError(f"provenance edge 写入失败: {edge.edge_id}")
+            connection.commit()
 
 
 __all__ = ["RolloutItemsMixin"]

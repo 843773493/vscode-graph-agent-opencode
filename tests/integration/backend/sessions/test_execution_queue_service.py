@@ -27,9 +27,10 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
-    EXECUTION_QUEUE_SCHEMA_SQL,
     EXECUTION_PAUSE_SCHEMA_SQL,
+    EXECUTION_QUEUE_SCHEMA_SQL,
     EXECUTION_SCHEDULING_MIGRATION_SQL,
+    ROLLOUT_SCHEMA_VERSION,
     SKILL_SELECTION_MIGRATION_SQL,
     TEAM_OBSERVATIONS_MIGRATION_SQL,
     VIEW_CREATION_MIGRATION_SQL,
@@ -110,7 +111,10 @@ async def test_cold_projection_reads_canonical_body_and_frozen_identity(queue_ca
     case = queue_case
     model = {"provider_id": "frozen-provider", "model_id": "frozen-model"}
     record = case.accept(internal=internal, model=model)
-    loaded, = await case.store.load(case.session)
+    batch = await case.store.load(case.session)
+    loaded = await case.store.project(batch.records[0], position=0, snapshot_version=batch.snapshot_version)
+    assert batch.records == (record,)
+    assert loaded.snapshot_version == batch.snapshot_version > 0
     assert (loaded.job_id, loaded.execution_binding, loaded.message_id) == (
         record.cursor.admission.job_id, record.input.execution_binding, record.input.message_id)
     assert (loaded.gateway_id, loaded.request_id, loaded.message_metadata["boxteam_session_model"]) == (
@@ -131,18 +135,18 @@ async def test_global_queue_scan_holds_read_guard_until_snapshot_finishes(
     entered = threading.Event()
     release = threading.Event()
     drained = asyncio.Event()
-    validate = case.saver.validate_execution_queue
+    snapshot = case.saver.execution_queue_snapshot
 
-    def blocked_validate(session_id: str, thread_id: str) -> None:
+    def blocked_snapshot(session_id: str, thread_id: str, *, validate_inputs: bool = False):
         entered.set()
         assert release.wait(5), "测试未释放原队列读取"
-        validate(session_id, thread_id)
+        return snapshot(session_id, thread_id, validate_inputs=validate_inputs)
 
     async def drain(session_id: str) -> None:
         assert session_id == case.session
         drained.set()
 
-    monkeypatch.setattr(case.saver, "validate_execution_queue", blocked_validate)
+    monkeypatch.setattr(case.saver, "execution_queue_snapshot", blocked_snapshot)
     case.workspace.delete_service.set_session_drain_callback(drain)
     reading = asyncio.create_task(case.store.records())
     deletion = None
@@ -292,13 +296,14 @@ async def test_v5_invalid_input_preserves_original_and_publishes_nothing(queue_c
     assert case.saver.execution_queue_snapshot(case.session, case.thread).records == ()
 
 
-async def test_schema_23_upgrade_then_v5_import_preserves_original_bytes(queue_case: QueueCase):
+async def test_schema_23_to_29_preserves_original_bytes_and_requires_remaining_upgrade(queue_case: QueueCase):
     case = queue_case
     record = case.accept()
     path = case.legacy([record])
+    pending_original = path.read_bytes()
     storage = case.saver._storage.storage
     original = storage.jsonl_path(case.session, thread_id=case.thread).read_bytes()
-    # 模拟已支持的上版结构；历史内容仍来自真实 acceptance。
+    # 隔离检验已登记的23→29步骤，不将其冒充已验收发布版或完整当前版升级链。
     import hashlib
     with storage._connect(case.thread, session_id=case.session) as connection:
         restore_schema24(connection)
@@ -330,10 +335,14 @@ async def test_schema_23_upgrade_then_v5_import_preserves_original_bytes(queue_c
         case.thread, session_id=case.session, to_version=29,
         migration_name="execution_pause_028_029", migration_sql=EXECUTION_PAUSE_SCHEMA_SQL,
     )
-    await case.store.migrate_schema(case.session)
-    assert not path.exists() and storage.jsonl_path(case.session, thread_id=case.thread).read_bytes() == original
-    recovered, = await case.store.records()
-    assert recovered.cursor == record.cursor
+    with storage._connect(case.thread, session_id=case.session) as connection:
+        assert connection.execute("SELECT schema_version FROM database_meta").fetchone() == (29,)
+        assert connection.execute("SELECT COUNT(*) FROM execution_queue").fetchone() == (0,)
+    # v5导入不能跳过尚未登记到当前结构的升级；当前库的成功导入由独立用例覆盖。
+    with pytest.raises(RuntimeError, match=rf"schema-incompatible.*current=29, target={ROLLOUT_SCHEMA_VERSION}"):
+        await case.store.migrate_schema(case.session)
+    assert path.read_bytes() == pending_original
+    assert storage.jsonl_path(case.session, thread_id=case.thread).read_bytes() == original
 
 
 async def test_missing_frozen_queue_rejects_startup_instead_of_losing_old_active(queue_case: QueueCase):
@@ -344,8 +353,9 @@ async def test_missing_frozen_queue_rejects_startup_instead_of_losing_old_active
     with storage._connect(case.thread, session_id=case.session) as connection:
         connection.execute("DELETE FROM execution_queue")
         connection.commit()
+    assert case.saver.execution_queue_snapshot(case.session, case.thread).records == ()
     with pytest.raises(RuntimeError, match="缺少冻结队列输入"):
-        case.saver.validate_execution_queue(case.session, case.thread)
+        case.saver.execution_queue_snapshot(case.session, case.thread, validate_inputs=True)
     with pytest.raises(RuntimeError, match="artifact=execution_queue") as rejected:
         await case.store.records()
     assert "缺少冻结队列输入" in str(rejected.value.__cause__)
@@ -365,7 +375,7 @@ async def test_control_error_exposes_logical_owner_without_native_path(queue_cas
     case.accept()
     native = str(case.workspace.session_dir(case.session) / "private-index.sqlite")
 
-    def reject(*args):
+    def reject(session_id: str, thread_id: str, *, validate_inputs: bool = False):
         raise OSError(5, "队列读取失败", native)
 
     monkeypatch.setattr(case.saver, "execution_queue_snapshot", reject)

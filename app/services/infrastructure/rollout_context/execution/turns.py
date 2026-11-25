@@ -321,7 +321,7 @@ class RolloutTurnsMixin:
                         "SELECT item_sequence, jsonl_offset, jsonl_length FROM item_catalog WHERE item_id = ?",
                         (stored_root_item_id,),
                     ).fetchone()
-                    restored_root = self._storage._read_v2_item_at(
+                    restored_root = self._storage._read_item_at(
                         connection,
                         root_stream,
                         sequence=strict_non_negative_int(

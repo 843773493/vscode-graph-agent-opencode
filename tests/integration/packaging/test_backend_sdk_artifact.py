@@ -54,7 +54,7 @@ def backend_artifact(request: pytest.FixtureRequest) -> tuple[Path, Path, Path, 
         config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
     config = commentjson.loads(config_path.read_text())
-    config.setdefault("plugins", {})["runtime"] = {"entries": []}
+    config["settings"]["workspace"].setdefault("plugins", {})["runtime"] = {"entries": []}
     config_path.write_text(json.dumps(config))
     home = context.boxteam_home_for_node(request.node.nodeid)
     install_user_configuration(config_root=home / "config", profile="default", project_root=application)

@@ -19,7 +19,6 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.message_channe
     checkpoint_messages,
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
-    CANONICAL_GROUP_FIELD,
     canonical_message_anchor,
 )
 from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
@@ -139,25 +138,29 @@ async def test_graph_same_id_replacement_publishes_new_canonical_version(revisio
         stored, = cold._storage.storage.read_items(admission.session_id, admission.thread_id, item_ids=(new_anchor,))
         assert stored.provenance_relations[-1].target_id == source.item_id
         assert stored.provenance_relations[-1].target_model_call_id == source.projection_identity.model_call_id
+        old_count = cold.raw_message_count(
+            admission.session_id, admission.thread_id,
+            item_ids=tuple(canonical_message_anchor(message) for message in old_messages),
+        )
+        new_count = cold.raw_message_count(
+            admission.session_id, admission.thread_id,
+            item_ids=tuple(canonical_message_anchor(message) for message in messages),
+        )
+        assert old_count == 2 and new_count == old_count
         with sqlite3.connect(index) as connection:
             before_preflight = tuple(connection.iterdump())
         jsonl = index.with_name("rollout.jsonl")
         before_jsonl = jsonl.read_bytes()
-        # 同一 logical ID 已有两个版本；显式 anchor 和无 anchor 的内存状态
-        # 都只能解析到当前冻结选集，不能因缩小查询范围接受旧版本。
-        unanchored = [message.model_copy(update={"response_metadata": {
-            key: value for key, value in message.response_metadata.items() if key != CANONICAL_GROUP_FIELD
-        }}) for message in messages]
-        for state in (messages, unanchored):
-            assert cold.safe_compaction_prefix_cutoffs(
-                admission.session_id, admission.thread_id, checkpoint_ns="",
-                state_messages=state, cutoff_indexes=[0, 1, 2],
-            ) == frozenset({0, 1, 2})
-        with pytest.raises(RuntimeError, match="缺少指定 canonical item"):
-            cold.safe_compaction_prefix_cutoffs(
-                admission.session_id, admission.thread_id, checkpoint_ns="",
-                state_messages=old_messages, cutoff_indexes=[2],
-            )
+        # 同一 logical ID 已有两个版本；原分支必须按冻住的 canonical anchors 计数，
+        # 不能把旧 checkpoint 的回答误认成最新版本或因后续 append 改变计数。
+        assert cold.raw_message_count(
+            admission.session_id, admission.thread_id,
+            item_ids=tuple(canonical_message_anchor(message) for message in old_messages),
+        ) == old_count
+        assert cold.raw_message_count(
+            admission.session_id, admission.thread_id,
+            item_ids=tuple(canonical_message_anchor(message) for message in messages),
+        ) == new_count
         with sqlite3.connect(index) as connection:
             assert tuple(connection.iterdump()) == before_preflight
         assert jsonl.read_bytes() == before_jsonl
@@ -304,8 +307,8 @@ def test_cold_read_rejects_corrupt_source_ownership_without_repair(revision_case
         assert connection.execute("SELECT thread_id FROM model_calls").fetchone() == ("wrong-thread",)
 
 
-def test_schema20_upgrade_preserves_all_locators_then_allows_explicit_revision(revision_case):
-    saver, admission, index, source, revision, child = revision_case
+def test_schema20_to28_preserves_locators_without_claiming_current_format_support(revision_case):
+    saver, admission, index, _source, revision, child = revision_case
     with sqlite3.connect(index) as connection:
         restore_schema20(connection)
         rows_before = connection.execute("SELECT * FROM messages ORDER BY message_sequence").fetchall()
@@ -350,10 +353,16 @@ def test_schema20_upgrade_preserves_all_locators_then_allows_explicit_revision(r
         assert connection.execute("SELECT from_version,to_version,status FROM schema_migrations ORDER BY migration_id").fetchall() == [(0, 20, "completed"), (20, 21, "completed"), (21, 22, "completed"), (22, 23, "completed"), (23, 24, "completed"), (24, 25, "completed"), (25, 26, "completed"), (26, 27, "completed"), (27, 28, "completed")]
     cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
     with _execution_scope(admission):
-        cold.append_items(SESSION_ID, (revision,), thread_id=admission.thread_id)
-        assert cold.get_tuple(child).checkpoint["channel_values"]["messages"][-1].content == source.payload
+        # 这组旧 SQL 只证明20→28的索引迁移，不是当前format3的升级来源。
+        # 未登记的完整转换不能靠修改版本号伪装成功，也不能继续写入原件。
+        with pytest.raises(RuntimeError, match="schema-incompatible"):
+            cold.get_tuple(child)
+        with pytest.raises(MutationIntentConsumptionRejected, match="schema-incompatible"):
+            cold.append_items(SESSION_ID, (revision,), thread_id=admission.thread_id)
+    assert index.with_name("rollout.jsonl").read_bytes() == before
     with sqlite3.connect(index) as connection:
-        assert connection.execute("SELECT count(*) FROM messages WHERE message_id='revision-answer'").fetchone() == (2,)
+        assert connection.execute("SELECT * FROM messages ORDER BY message_sequence").fetchall() == rows_before
+        assert connection.execute("SELECT schema_version,database_state FROM database_meta").fetchone() == (28, "active")
 
 
 def test_interrupted_message_migration_rolls_back_schema_and_retains_backup(revision_case, monkeypatch):

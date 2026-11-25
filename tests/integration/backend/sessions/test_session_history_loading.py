@@ -56,6 +56,7 @@ def _turn_messages(
     *,
     tool_result_size: int = 0,
     tool_count: int = 1,
+    tool_argument_size: int = 0,
 ) -> list[object]:
     turn_id = f"job-{turn_index:04d}"
     created_at = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=turn_index)
@@ -82,7 +83,7 @@ def _turn_messages(
             {
                 "name": "read_fixture",
                 "args": {
-                    "path": f"fixture/{turn_index:04d}"
+                    "path": "文" * tool_argument_size if tool_argument_size else f"fixture/{turn_index:04d}"
                     f"{'-' + str(index) if tool_count > 1 else ''}.json"
                 },
                 "id": f"call-{turn_index:04d}"
@@ -201,6 +202,7 @@ def _seed_rollout(
     count: int,
     tool_result_size: int = 0,
     tool_count: int = 1,
+    tool_argument_size: int = 0,
 ) -> Path:
     sessions_dir = workspace_root / ".boxteam" / "sessions"
     saver = RolloutCheckpointSaver(sessions_dir)
@@ -210,6 +212,7 @@ def _seed_rollout(
     for turn_index in range(1, count + 1):
         messages = _turn_messages(
             turn_index, tool_result_size=tool_result_size, tool_count=tool_count,
+            tool_argument_size=tool_argument_size,
         )
         turn_id = f"job-{turn_index:04d}"
         all_messages.extend(messages)
@@ -275,16 +278,18 @@ async def test_history_loads_rollout_summary_and_tool_details(
     summary = await _load_history(
         integration_client,
         session_id,
-        {"direction": "tail", "turns": 1},
+        {"direction": "tail", "turns": 1,
+         "include": ["user", "tool_summary", "final_response"]},
     )
     assert [item["ordinal"] for item in summary["items"]] == [24]
     assert [item["ordinal"] for item in summary["summaries"]] == [24]
     authoritative_summary = summary["summaries"][0]
     assert authoritative_summary["items_view"] == "summary"
-    assert authoritative_summary["item_count"] == 3
+    # 独立的过程文本、调用、回执和两个不同来源的reasoning各计一次；final不计。
+    assert authoritative_summary["item_count"] == 5
     assert all(
         part.get("arguments") is None and part.get("result") is None
-        for part in authoritative_summary["response_parts"]
+        for part in authoritative_summary["response_items"]
         if part["kind"] in {"tool_call", "tool_result"}
     )
     latest = summary["items"][0]
@@ -295,19 +300,20 @@ async def test_history_loads_rollout_summary_and_tool_details(
     assert latest["final_response"] == "模型最终响应 24"
     assert isinstance(latest["thinking_blocks"], list)
     assert latest["tool_summary"]
-    assert [part["kind"] for part in latest["response_parts"]] == [
+    assert [part["kind"] for part in latest["response_items"]] == [
+        "text",
         "tool_call",
         "tool_result",
         "final_text",
     ]
-    assert latest["response_parts"][0]["source"]["call_index"] == 0
+    assert latest["response_items"][1]["source"]["call_index"] == 0
     assert [
-        part["source"]["item_sequence"] for part in latest["response_parts"]
+        part["source"]["item_sequence"] for part in latest["response_items"]
     ] == sorted(
-        part["source"]["item_sequence"] for part in latest["response_parts"]
+        part["source"]["item_sequence"] for part in latest["response_items"]
     )
     assert all(
-        part["source"]["item_id"] for part in latest["response_parts"]
+        part["source"]["item_id"] for part in latest["response_items"]
     )
     assert len(latest["items"]) == 2
     assert all(item["job_id"] == latest["job_id"] for item in latest["items"])
@@ -352,7 +358,8 @@ async def test_history_loads_rollout_summary_and_tool_details(
     assert detailed["items"][0]["raw"]["payload"]["args"]["path"] == "fixture/0024.json"
     assert detailed["items"][1]["raw"]["payload"]["result"]
     assert detailed["final_response"] == "模型最终响应 24"
-    assert [part["kind"] for part in detailed["response_parts"]] == [
+    assert [part["kind"] for part in detailed["response_items"]] == [
+        "text",
         "tool_call",
         "tool_result",
         "final_text",
@@ -372,11 +379,11 @@ async def test_history_loads_rollout_summary_and_tool_details(
         "text": "检查问题 24",
     }
     assert [
-        part["kind"] for part in reasoning["items"][0]["response_parts"]
-    ] == ["tool_call", "tool_result", "reasoning", "final_text"]
+        part["kind"] for part in reasoning["items"][0]["response_items"]
+    ] == ["text", "tool_call", "tool_result", "reasoning", "reasoning_summary", "final_text"]
     assert all(
         part.get("arguments") is None and part.get("result") is None
-        for part in reasoning["items"][0]["response_parts"]
+        for part in reasoning["items"][0]["response_items"]
         if part["kind"] in {"tool_call", "tool_result"}
     )
     assert "encrypted-0024" not in json.dumps(reasoning, ensure_ascii=False)
@@ -581,12 +588,12 @@ async def test_history_tool_selector_only_materializes_requested_tool(
         },
     )
     detail = page["items"][0]
-    assert [part["kind"] for part in detail["response_parts"]] == [
+    assert [part["kind"] for part in detail["response_items"]] == [
         "tool_call",
         "tool_result",
     ]
     assert {
-        part["tool_call_id"] for part in detail["response_parts"]
+        part["tool_call_id"] for part in detail["response_items"]
     } == {"call-0001-1"}
     assert len(detail["items"]) == 2
     assert all(
@@ -638,8 +645,8 @@ async def test_history_tool_selector_accepts_model_call_scoped_tool_call_id(
         },
     )
 
-    raw_parts = raw_page["items"][0]["response_parts"]
-    scoped_parts = scoped_page["items"][0]["response_parts"]
+    raw_parts = raw_page["items"][0]["response_items"]
+    scoped_parts = scoped_page["items"][0]["response_items"]
     assert [part["kind"] for part in scoped_parts] == ["tool_call", "tool_result"]
     assert [part["kind"] for part in raw_parts] == ["tool_call", "tool_result"]
     assert scoped_parts[0]["arguments"] == raw_parts[0]["arguments"]
@@ -845,7 +852,7 @@ async def test_rollout_history_cursor_windows_are_complete_and_unique(
             part["projection"] == "summary"
             and part["arguments"] is None
             and part["result"] is None
-            for part in item["response_parts"]
+            for part in item["response_items"]
             if part["kind"] in {"tool_call", "tool_result"}
         )
         for item in before_five["items"]
@@ -917,9 +924,9 @@ async def test_rollout_history_around_anchor_returns_bidirectional_cursors(
     assert isinstance(activity_stats, dict)
     assert isinstance(activity_stats["duration_ms"], int)
     assert activity_stats["duration_ms"] >= 0
-    # user/final projection 不属于可展开的中间 item；该 fixture 每轮只有
-    # 1 个 reasoning carrier、1 个 tool call 和 1 个 tool result。
-    assert activity_stats["item_count"] == 3
+    # user/final 输出不计入活动；独立文本和两个不同来源的思考各自计数，
+    # 再加一次工具声明、一次回执，共五个语义 Item。
+    assert activity_stats["item_count"] == 5
     assert activity_stats["first_item_sequence"] <= activity_stats["last_item_sequence"]
     assert set(activity_stats) == {
         "duration_ms",
@@ -928,6 +935,16 @@ async def test_rollout_history_around_anchor_returns_bidirectional_cursors(
         "last_item_sequence",
     }
     assert all(item["items"] == [] for item in around["items"])
+
+    details = await _load_history(integration_client, session_id, {
+        "turn_ids": ["job-0020"],
+        "include": ["assistant_text", "thinking", "tool_summary", "final_response"],
+    })
+    activity = [item for item in details["items"][0]["response_items"] if item["kind"] != "final_text"]
+    assert [item["kind"] for item in activity] == [
+        "text", "tool_call", "tool_result", "reasoning", "reasoning_summary",
+    ]
+    assert len({item["id"] for item in activity}) == activity_stats["item_count"]
 
     before = await _load_history(
         integration_client,
@@ -1290,10 +1307,10 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
         "execution_id":admission.execution_id, "include":["internal", "activity_outline", "assistant_text"], **binding,
     })
     assert internal_outline["before_cursor"]
-    tail_ids = {part["source"]["item_id"] for entry in internal_outline["internal_executions"] for part in entry["response_parts"]}
+    tail_ids = {part["source"]["item_id"] for entry in internal_outline["internal_executions"] for part in entry["response_items"]}
     assert internal_items[0].item_id not in tail_ids
     earlier_outline = await _load_history(integration_client, session_id, {"direction":"before", "cursor":internal_outline["before_cursor"]})
-    early_ids = {part["source"]["item_id"] for entry in earlier_outline["internal_executions"] for part in entry["response_parts"]}
+    early_ids = {part["source"]["item_id"] for entry in earlier_outline["internal_executions"] for part in entry["response_items"]}
     assert not early_ids & tail_ids
     assert {item.item_id for item in internal_items} <= early_ids | tail_ids
     around_item = await _load_history(integration_client, session_id, {
@@ -1306,7 +1323,7 @@ async def test_internal_leading_messages_do_not_create_empty_indexed_turn(
     selected_bodies = await _load_history(integration_client, session_id, {
         "execution_id":admission.execution_id, "item_ids":selected_items, "include":["internal", "reasoning_detail"], **binding,
     })
-    body_parts = [part for entry in selected_bodies["internal_executions"] for part in entry["response_parts"]]
+    body_parts = [part for entry in selected_bodies["internal_executions"] for part in entry["response_items"]]
     assert {part["source"]["item_id"] for part in body_parts} == set(selected_items)
     assert all(part["text"].startswith("内部步骤 ") for part in body_parts)
     assert selected_bodies["before_cursor"] is None
@@ -1385,6 +1402,46 @@ async def test_history_detail_enforces_per_item_budget(
     item = page["items"][0]
     assert item["detail_truncated"] is True
     assert len(item["items"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_large_tool_arguments_remain_readable_by_item_id(
+    integration_client: httpx.AsyncClient,
+    integration_workspace_root_path: str,
+    frozen_provider_prepare,
+) -> None:
+    session_id = await create_session(integration_client, "大参数逐项读取")
+    _seed_rollout(frozen_provider_prepare, Path(integration_workspace_root_path), session_id,
+        count=1, tool_argument_size=70000)
+    tail = await _load_history(integration_client, session_id, {"direction": "tail"})
+    binding = {name: tail[name] for name in ("source_view_id", "source_view_revision")}
+    outline = await _load_history(integration_client, session_id, {
+        "turn_ids": ["job-0001"], "include": ["activity_outline"], **binding,
+    })
+    call, = (part for part in outline["items"][0]["response_items"] if part["kind"] == "tool_call")
+    assert call["arguments"] is None and call["projection"] == "summary"
+    assert {name: outline[name] for name in binding} == binding
+    mixed = await _load_history(integration_client, session_id, {
+        "turn_ids": ["job-0001"], "include": ["assistant_text", "tool_summary"], **binding,
+    })
+    tool_items = [part for part in mixed["items"][0]["response_items"]
+        if part["kind"] in {"tool_call", "tool_result"}]
+    assert tool_items and all(part["projection"] == "summary" for part in tool_items)
+    assert all(part["arguments"] is None and part["result"] is None and part["text"] == ""
+        for part in tool_items)
+    response = await integration_client.post(f"/api/v1/sessions/{session_id}/history", json={
+        "turn_ids": ["job-0001"], "item_ids": [call["id"]], "include": ["tool_call"], **binding,
+    })
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"]
+    detail = response.json()["data"]
+    part, = detail["items"][0]["response_items"]
+    assert part["id"] == part["source"]["item_id"] == call["id"]
+    assert part["tool_call_id"] == call["tool_call_id"]
+    assert part["arguments"] and len(part["arguments"]) <= 65536
+    assert json.dumps({"path": "文" * 70000}, ensure_ascii=False).startswith(part["arguments"])
+    assert part["truncated"] and detail["items"][0]["detail_truncated"]
+    assert {name: detail[name] for name in binding} == binding
 
 
 @pytest.mark.asyncio
@@ -1476,8 +1533,8 @@ async def test_history_final_summary_never_reads_final_jsonl_body(
     assert final_text.startswith(detail.final_response)
     assert len(detail.final_response) < len(final_text)
     assert detail.detail_truncated is True
-    assert detail.response_parts
-    assert all(part.kind == "final_text" for part in detail.response_parts)
+    assert detail.response_items
+    assert all(part.kind == "final_text" for part in detail.response_items)
     latest, _, _ = reader.bootstrap(session_id, owner.thread_id)
     assert latest is not None
     assert latest.ordinal == 1
@@ -1637,7 +1694,7 @@ async def test_item_navigation_and_process_details_share_http_snapshot(
     assert outline_response.json()["request_id"] == outline_response.headers["x-request-id"]
     outline = outline_response.json()["data"]
     assert {name: outline[name] for name in binding} == binding
-    parts = outline["items"][0]["response_parts"]
+    parts = outline["items"][0]["response_items"]
     assert parts
     assert all(part["projection"] == "summary" for part in parts)
     assert all(not (part.get("text") or part.get("arguments") or part.get("result"))
@@ -1649,7 +1706,7 @@ async def test_item_navigation_and_process_details_share_http_snapshot(
         "turn_ids": ["job-0008"], "item_ids": selected,
         "include": ["text", "reasoning_detail", "tool_call", "tool_result"], **binding,
     })
-    assert {part["source"]["item_id"] for part in point["items"][0]["response_parts"]} == set(selected)
+    assert {part["source"]["item_id"] for part in point["items"][0]["response_items"]} == set(selected)
     assert point["next_cursor"] is None and point["before_cursor"] is None and point["after_cursor"] is None
     around = await _load_history(integration_client, session_id, {
         "direction": "around", "anchor_item_id": ids[0], "before_turns": 0, "after_turns": 0,

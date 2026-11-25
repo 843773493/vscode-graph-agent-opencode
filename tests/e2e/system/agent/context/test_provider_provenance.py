@@ -379,7 +379,7 @@ def _audit_attempt(
             (reference["execution_id"], reference["callback_model_call_id"]),
         ).fetchall()
         with index.with_name("rollout.jsonl").open("rb") as stream:
-            carriers = [RolloutCanonicalReadMixin._read_v2_item_at(
+            carriers = [RolloutCanonicalReadMixin._read_item_at(
                 connection, stream, sequence=row[0], offset=row[1], length=row[2],
             ) for row in output_rows]
         # 原始 stream/shadow 仍留在 canonical；checkpoint/history 按已提交的替代身份投影。
@@ -398,7 +398,7 @@ def _audit_attempt(
         with index.with_name("rollout.jsonl").open("rb") as stream:
             checkpoint_items = {item.item_id for anchor in checkpoint_anchors for item in read_message_group(
                 connection, stream, offset=anchor[1], length=anchor[2],
-                read_item=RolloutCanonicalReadMixin._read_v2_item_at,
+                read_item=RolloutCanonicalReadMixin._read_item_at,
             )}
         assert set(output_ids) <= checkpoint_items
         assert {entry.ref.ref_id for entry in snapshot.selection
@@ -711,7 +711,7 @@ async def test_real_provider_provenance_survives_cold_history(
         turn = history["items"][0]
         assert (turn["turn_id"], turn["job_id"]) == (snapshot.turn_id, sent["job_id"])
         assert turn["user_messages"][0]["content"] == prompt
-        projected_ids = {part["source"]["item_id"] for part in turn["response_parts"]}
+        projected_ids = {part["source"]["item_id"] for part in turn["response_items"]}
         assert output_item_ids == projected_ids, "历史必须精确投影有效输出，不能重复 stream/shadow"
         if succeeded:
             # 先收齐来源链和冷恢复证据，最终仍以精确 marker 判定整场通过。

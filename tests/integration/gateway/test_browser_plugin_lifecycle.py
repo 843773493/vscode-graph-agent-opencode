@@ -42,7 +42,7 @@ def _enable_browser(client: httpx.Client, *, gateway_id: str, workspace_id: str,
     headers = {"X-BoxTeam-Workspace-Id": workspace_id}
     document = _json(client.get(path, headers=headers))["data"]
     config = commentjson.loads(str(document["jsonc"]))
-    config.setdefault("plugins", {}).setdefault("runtime", {})["entries"] = [{
+    config["settings"]["workspace"].setdefault("plugins", {}).setdefault("runtime", {})["entries"] = [{
         "package_id": PACKAGE_ID,
         "package_version": PACKAGE_VERSION,
         "plugin_id": PLUGIN_ID,
@@ -116,7 +116,7 @@ def test_browser_plugin_runs_through_workspace_owner_and_exact_gateway_routes(
         )
         config_path = root / ".boxteam/workspace.jsonc"
         config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+        config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
             "url"
         ] = f"http://127.0.0.1:{unused_tcp_port}"
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

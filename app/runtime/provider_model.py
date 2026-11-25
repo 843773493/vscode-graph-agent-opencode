@@ -145,18 +145,18 @@ def build_model_from_provider(
                 protocol=api_mode.protocol, endpoint=str(endpoint).rstrip("/"),
                 model=provider["model"], authentication=authentication,
             )
-    capacity_profile = {
-        name: capacity for name, capacity in (
-            ("max_input_tokens", api_mode.model_info.max_input_tokens),
-            ("context_window", api_mode.model_info.context_window),
-        ) if capacity is not None
+    model.profile = {
+        **(model.profile or {}),
+        "image_inputs": api_mode.model_info.supports_vision,
+        "audio_inputs": api_mode.model_info.supports_audio_input,
+        "video_inputs": api_mode.model_info.supports_video_input,
+        **{
+            name: capacity for name, capacity in (
+                ("max_input_tokens", api_mode.model_info.max_input_tokens),
+                ("context_window", api_mode.model_info.context_window),
+            ) if capacity is not None
+        },
     }
-    if capacity_profile:
-        # 容量属于模型元数据，不向上游发送，也不据此设置输出上限。
-        model.profile = {
-            **(model.profile or {}),
-            **capacity_profile,
-        }
     return model
 
 

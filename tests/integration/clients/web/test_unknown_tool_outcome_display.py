@@ -128,7 +128,7 @@ async def test_unknown_tool_outcome_is_explicit_in_real_web_chain(
     assert history_item["status"] == "failed"
     unknown_tool = next(
         part
-        for part in history_item["response_parts"]
+        for part in history_item["response_items"]
         if part.get("kind") == "tool_call"
     )
     assert unknown_tool["tool_name"] == "large_test_output"

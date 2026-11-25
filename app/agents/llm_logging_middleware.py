@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Literal
 
 from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
@@ -32,7 +33,10 @@ from app.core.failures import (
 )
 from app.core.path_utils import get_session_path_resolver, get_sessions_dir
 from app.core.shielded_cleanup import run_sync_shielded
-from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.execution_admission import (
+    DerivedExecutionReference,
+    ExecutionAdmission,
+)
 
 _JSON_VALUE_ADAPTER = TypeAdapter(JsonValue)
 LLM_LOG_MAX_PAYLOAD_BYTES = 256 * 1024
@@ -102,6 +106,19 @@ def _response_messages(
     raise TypeError(f"不支持的模型响应类型: {type(response).__name__}")
 
 
+@dataclass(frozen=True, slots=True)
+class ModelCallLogRequest:
+    """日志只消费真实准入与请求值，不要求 Graph runtime。"""
+
+    admission: ExecutionAdmission
+    model: object
+    messages: Sequence[BaseMessage]
+    tools: Sequence[BaseTool | dict[str, Any]] = ()
+    system_message: BaseMessage | None = None
+    purpose: Literal["agent", "derived", "compaction"] = "agent"
+    derived_reference: DerivedExecutionReference | None = None
+
+
 class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
     """把每次模型调用的完整请求和响应写入当前工作区。"""
 
@@ -128,17 +145,23 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         logs_dir.mkdir(exist_ok=True, parents=True)
         return logs_dir
 
+    def _log_request(self, request: ModelRequest[Any]) -> ModelCallLogRequest:
+        if request.runtime is None:
+            raise RuntimeError("模型请求缺少 runtime，无法关联 LLM 日志")
+        return ModelCallLogRequest(
+            self._execution_admission(request.runtime), request.model, request.messages,
+            request.tools, request.system_message,
+        )
+
     def _save_log(
         self,
-        session_id: str,
-        request: ModelRequest[Any],
+        request: ModelCallLogRequest,
         response: ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any] | None,
         upstream_attempts: list[dict[str, Any]],
         error: BaseException | None = None,
     ) -> None:
-        if request.runtime is None:
-            raise RuntimeError("模型请求缺少 runtime，无法关联 LLM 日志")
-
+        admission = request.admission
+        session_id = admission.session_id
         # handler 结束或失败后组装日志的 epoch 毫秒时刻。
         logged_at_ms = int(time.time() * 1000)
         serialized_tools = (
@@ -146,11 +169,16 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             if request.tools
             else []
         )
-        job_id = self._execution_admission(request.runtime).job_id
+        job_id = admission.job_id
         request_log = {
             "timestamp": logged_at_ms,
             "session_id": session_id,
             "job_id": job_id,
+            "thread_id": admission.thread_id,
+            "execution_id": admission.execution_id,
+            "turn_id": admission.turn_id,
+            "purpose": request.purpose,
+            "derived_reference": asdict(request.derived_reference) if request.derived_reference is not None else None,
             "model_name": (
                 getattr(request.model, "model_name", None)
                 or getattr(request.model, "model", None)
@@ -230,9 +258,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
-        if request.runtime is None:
-            raise RuntimeError("模型请求缺少 runtime，无法确定日志会话")
-        session_id = self._execution_admission(request.runtime).session_id
+        log_request = self._log_request(request)
         capture_token = begin_upstream_capture()
         try:
             response = handler(request)
@@ -241,14 +267,14 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             record_upstream_error(error)
             upstream_attempts = end_upstream_capture(capture_token)
             try:
-                self._save_log(session_id, request, None, upstream_attempts, error)
+                self._save_log(log_request, None, upstream_attempts, error)
             except Exception as log_error:  # noqa: BLE001 — 日志落盘失败须透明，原模型故障仍是主因。
                 detail = f"LLM 请求日志写入失败: error={type(log_error).__name__}, reason={failure_message(log_error)}"
                 error.add_note(detail)
                 report_failure(error, detail=detail, diagnostic_logger=logging.getLogger(__name__))
             raise
         else:
-            self._save_log(session_id, request, response, upstream_attempts)
+            self._save_log(log_request, response, upstream_attempts)
             return response
 
     async def awrap_model_call(
@@ -256,12 +282,17 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
-        if request.runtime is None:
-            raise RuntimeError("模型请求缺少 runtime，无法确定日志会话")
-        session_id = self._execution_admission(request.runtime).session_id
+        return await self.alog_call(self._log_request(request), lambda: handler(request))
+
+    async def alog_call(
+        self,
+        request: ModelCallLogRequest,
+        handler: Callable[[], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
+        """Graph 与独立派生请求复用同一采集、错误和受保护写盘链。"""
         capture_token = begin_upstream_capture()
         try:
-            response = await handler(request)
+            response = await handler()
             upstream_attempts = end_upstream_capture(capture_token)
         except BaseException as error:
             record_upstream_error(error)
@@ -269,7 +300,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             # 原 handler 已失败，后续取消不能打断日志结算或替换它的异常。
             try:
                 await run_cleanup_shielded(
-                    partial(run_sync_shielded, self._save_log, session_id, request, None, upstream_attempts, error)
+                    partial(run_sync_shielded, self._save_log, request, None, upstream_attempts, error)
                 )
             except Exception as log_error:  # noqa: BLE001 — 日志落盘失败须透明，原模型故障仍是主因。
                 detail = f"LLM 请求日志写入失败: error={type(log_error).__name__}, reason={failure_message(log_error)}"
@@ -277,5 +308,5 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
                 report_failure(error, detail=detail, diagnostic_logger=logging.getLogger(__name__))
             raise
         else:
-            await run_sync_shielded(self._save_log, session_id, request, response, upstream_attempts)
+            await run_sync_shielded(self._save_log, request, response, upstream_attempts)
             return response

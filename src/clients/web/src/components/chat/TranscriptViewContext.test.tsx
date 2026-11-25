@@ -6,7 +6,7 @@ import type { SessionViewState } from "../../state/sessionViewState";
 
 const saved: SessionViewState = {
   gateway_id: "gateway", workspace_id: "workspace", session_id: "session", thread_id: "thread",
-  projection_version: 2, updated_at: "2026-11-23T00:00:00Z", tool_details_expanded: false,
+  projection_version: 3, updated_at: "2026-11-23T00:00:00Z", tool_details_expanded: false,
   reading_anchor: null, follow_latest: false, disclosures: { group: true },
 };
 

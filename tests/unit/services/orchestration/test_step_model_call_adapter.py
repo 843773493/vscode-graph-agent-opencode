@@ -48,6 +48,7 @@ def saver() -> MagicMock:
             "converge_execution", "append_items",
             "register_model_call", "consume_prepared_context_for_dispatch",
             "update_model_call_outcome",
+            "read_canonical_items",
         ]
     )
     port.consume_prepared_context_for_dispatch.return_value = {
@@ -120,6 +121,40 @@ async def test_final_checkpoint_requires_pre_persist_atomic_convergence(
 
     saver.converge_execution.assert_not_called()
     saver.append_items.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admission_context", ["user_turn", "internal"], indirect=True)
+@pytest.mark.parametrize("content", [
+    [{"type": "text", "text": "第一段"},
+     {"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}},
+     {"type": "text", "text": "第二段"},
+     {"type": "thinking", "thinking": "末尾思考", "signature": "signed"}],
+    [{"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}}],
+])
+async def test_final_group_keeps_all_items_and_points_to_last_output(
+    adapter: StepModelCallAdapter, saver: MagicMock, admission_context, content,
+) -> None:
+    message = AIMessage(id="msg_mixed_final", content=content,
+                        response_metadata={"phase": "final_answer", "model_call_id": "model_final"})
+    adapter.converge_final_message(message)
+    await adapter.converge_final_checkpoint(message.id)
+    saver.converge_execution.assert_called_once()
+    kwargs = saver.converge_execution.call_args.kwargs
+    items = kwargs["items"]
+    assert len(items) == len(content)
+    assert [item.semantic_kind for item in items] == [
+        "reasoning" if block["type"] == "thinking" else "assistant_output" for block in content
+    ]
+    expected_final = items[-2] if content[-1]["type"] == "thinking" else items[-1]
+    assert kwargs["final_item_id"] == (expected_final.item_id if admission_context.turn_id else None)
+    assert kwargs["outcome"] == "completed"
+    assert all(item.turn_id == admission_context.turn_id for item in items)
+    codec = LangChainMessageCodec()
+    restored = codec.from_dict(codec.project_message(items))
+    assert restored.content == content
+    assert restored.id == message.id
+    assert restored.response_metadata["phase"] == "final_answer"
 
 
 @pytest.mark.asyncio

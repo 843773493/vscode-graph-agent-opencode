@@ -88,13 +88,13 @@ def test_snapshot_retry_reads_assembly_and_detail_in_one_fresh_authority_snapsho
 
         monkeypatch.setattr(reader._storage.storage, "open_read_snapshot", observe_snapshot)
         maintenance = reader._storage.storage._maintenance_owner
-        validate = maintenance._validate_v2_commit_offsets
+        validate = maintenance._validate_commit_offsets
 
         def observe(*args, **kwargs):
             audits.append(kwargs.get("validate_jsonl_items", True))
             return validate(*args, **kwargs)
 
-        monkeypatch.setattr(maintenance, "_validate_v2_commit_offsets", observe)
+        monkeypatch.setattr(maintenance, "_validate_commit_offsets", observe)
         monkeypatch.setattr(reader._detail_store, "prepare", _no_allocation)
         for attempt in range(2):
             assert reader.seal_context_assembly(session, thread, snapshot, **options) == commit

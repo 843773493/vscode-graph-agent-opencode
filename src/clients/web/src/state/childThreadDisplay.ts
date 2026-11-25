@@ -1,7 +1,7 @@
 import { t } from "../../../shared/core/i18n/index.js";
 import type { ChildThreadStatus, TurnHistoryPage } from "../types/protocol";
 import { mergeInternalExecutions, type InternalExecutionRecord } from "./session/internalExecutionHistory";
-import { mergeCanonicalParts } from "./timeline/responseParts";
+import { mergeCanonicalItems } from "./timeline/responseItems";
 
 export type ChildThreadHistoryPage = Omit<TurnHistoryPage, "internal_executions" | "items"> & {
   internal_executions?: InternalExecutionRecord[];
@@ -57,7 +57,7 @@ export function mergeChildThreadHistory(previous: ChildThreadHistoryPage | null,
   for (const turn of page.items) {
     const current = turns.get(turn.turn_id);
     if (fragment && current) turns.set(turn.turn_id, {...current,
-      response_parts: mergeCanonicalParts(current.response_parts ?? [], turn.response_parts ?? []),
+      response_items: mergeCanonicalItems(current.response_items ?? [], turn.response_items ?? []),
       ...(outline ? {activityOutline: {beforeCursor: page.before_cursor ?? null}} : {})});
     else if (!fragment) turns.set(turn.turn_id, turn);
   }

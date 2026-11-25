@@ -107,7 +107,7 @@ class RolloutTurnLifecycleMixin:
             with self._storage._connect(
                 admission.thread_id, checkpoint_ns, session_id=admission.session_id,
             ) as connection:
-                self._storage._require_v2_runtime(connection)
+                self._storage._require_current_rollout_format(connection)
                 execution = connection.execute(
                     "SELECT outcome FROM executions WHERE session_id = ? "
                     "AND thread_id = ? AND execution_id = ?",

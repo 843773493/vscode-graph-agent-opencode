@@ -6,6 +6,7 @@
 model_stream/
 ├── config.py          回放配置、记录和生命周期
 ├── frozen_provider.py 冻结 Provider 请求与检查点读取观测
+├── compaction_model.py 真实候选测试和静态历史生成器共用的固定摘要模型流与生命周期
 └── crash_worker.py    独立模型流故障执行入口
 ```
 

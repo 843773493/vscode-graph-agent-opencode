@@ -10,7 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
@@ -522,6 +522,39 @@ def test_execution_output_excludes_typed_shadows_after_restart(
         ) == admission
 
 
+@pytest.mark.parametrize("invalid_calls", [[], [{
+    "id": "invalid", "name": "read", "args": "{private-arguments", "error": "invalid JSON", "type": "invalid_tool_call",
+}]])
+def test_execution_output_reads_selected_members_without_reconstructing_incomplete_group(saver, invalid_calls) -> None:
+    thread_id = saver._storage.storage.main_thread_id(SESSION_ID)
+    intent = InternalExecutionIntent(message_id="output-group-input", execution_id="output-group-execution",
+                                     admission_idempotency_key="output-group")
+    admission = saver.admit_internal_execution(
+        SESSION_ID, thread_id=thread_id, job_id="output-group-job", intent=intent,
+        message=_internal_notice(intent.message_id),
+    )
+    message = AIMessage(id="output-group-message", content=[
+        {"type": "thinking", "thinking": "不得进入输出的私有思考", "signature": "private-signature"},
+        {"type": "text", "text": "第一段"}, {"type": "text", "text": "第二段"},
+    ], invalid_tool_calls=invalid_calls, response_metadata={"model_call_id": "output-group-model"})
+    items = saver._storage.storage._codec().items_for_message(
+        message, item_sequence=1, message_id=message.id, turn_id=None,
+        execution_id=admission.execution_id, timestamp="2026-11-23T00:00:00Z",
+    )
+    with (
+        session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        saver.append_items(SESSION_ID, items, thread_id=thread_id)
+    expected = ("第一段\n第二段", InternalDisplayProvenance(
+        source_session_id=SESSION_ID, source_thread_id=thread_id,
+        source_execution_id=admission.execution_id, source_item_id=items[-1].item_id,
+    ))
+    assert saver.execution_output(SESSION_ID, thread_id, admission.execution_id) == expected
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        assert cold.execution_output(SESSION_ID, thread_id, admission.execution_id) == expected
+
+
 def test_internal_execution_lost_converges_without_creating_a_turn(
     saver: RolloutCheckpointSaver,
 ) -> None:
@@ -616,6 +649,48 @@ def test_user_turn_admission_hash_binds_acceptance_payload_without_conflating_ha
     assert saver.execution_admission_for_job(
         SESSION_ID, thread_id=thread_id, job_id="job-user-admission"
     ) == admission
+
+
+@pytest.mark.parametrize("checkpoint_ns", ["", "input-checkpoint"])
+@pytest.mark.parametrize("corruption", [None, "preimage", "root_binding"])
+def test_accepted_user_reader_returns_matching_admission_and_keeps_frozen_checks(
+    saver: RolloutCheckpointSaver, checkpoint_ns: str, corruption: str | None,
+) -> None:
+    thread_id = saver._storage.storage.main_thread_id(SESSION_ID)
+    for suffix in ("original", "other"):
+        saver.accept_turn(
+            SESSION_ID, thread_id=thread_id, checkpoint_ns=checkpoint_ns,
+            accepted_ingress_id=f"message-{suffix}", acceptance_idempotency_key=f"accept-{suffix}",
+            job_id=f"job-{suffix}", admission_idempotency_key=f"admit-{suffix}",
+            payload=f"冻结输入 {suffix}", turn_id=f"turn-{suffix}", root_item_id=f"item-message-{suffix}",
+        )
+    admission, message = saver.accepted_user_message(
+        SESSION_ID, thread_id=thread_id, job_id="job-original",
+        message_id="message-original", checkpoint_ns=checkpoint_ns,
+    )
+    assert admission == saver.execution_admission_for_job(
+        SESSION_ID, thread_id=thread_id, job_id="job-original", checkpoint_ns=checkpoint_ns,
+    )
+    assert message.id == "message-original" and message.content == "冻结输入 original"
+    assert message.response_metadata["message_metadata"]["turn_id"] == admission.turn_id
+    if corruption is None:
+        with pytest.raises(KeyError, match="Job execution admission 不存在"):
+            saver.accepted_user_message(SESSION_ID, thread_id=thread_id, job_id="wrong-job",
+                                        message_id="message-original", checkpoint_ns=checkpoint_ns)
+        with pytest.raises(ValueError, match="Job 消息身份"):
+            saver.accepted_user_message(SESSION_ID, thread_id=thread_id, job_id="job-original",
+                                        message_id="message-other", checkpoint_ns=checkpoint_ns)
+        return
+    with sqlite3.connect(saver._storage.storage.index_path(SESSION_ID, checkpoint_ns, thread_id=thread_id)) as db:
+        if corruption == "preimage":
+            db.execute("UPDATE executions SET admission_payload_hash=? WHERE execution_id=?",
+                       (sha256_jcs({"changed": True}), admission.execution_id))
+        else:
+            db.execute("UPDATE turn_records SET root_input_item_id='missing-other-root' WHERE turn_id='turn-other'")
+            db.execute("UPDATE turn_records SET root_input_item_id='item-message-other' WHERE turn_id='turn-original'")
+    with pytest.raises(RuntimeError, match="preimage|已接受用户根输入"):
+        saver.accepted_user_message(SESSION_ID, thread_id=thread_id, job_id="job-original",
+                                    message_id="message-original", checkpoint_ns=checkpoint_ns)
 
 
 def test_job_admission_lookup_rejects_missing_and_ambiguous_identity(

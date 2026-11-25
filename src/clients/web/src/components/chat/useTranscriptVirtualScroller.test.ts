@@ -1,4 +1,4 @@
-import { nodeKey, encodeNode, partNode, contextNode } from "../../state/timeline/transcriptNodes";
+import { nodeKey, encodeNode, responseNode, contextNode } from "../../state/timeline/transcriptNodes";
 import { findTranscriptNode } from "./transcriptGeometry";
 import { HttpRequestError } from "../../api/http";
 import type { TranscriptViewportPosition } from "./useTranscriptNavigation";
@@ -216,17 +216,18 @@ function position(id: string, offset = 0): TranscriptViewportPosition {
 }
 
 describe("语义节点导航与虚拟列表", () => {
-  test("同一 Item 的折叠祖先保留 Part 身份，不命中兄弟部位或同名其它来源", () => {
-    const part0 = nodeKey({kind:"item",id:"shared",part:0});
-    const part1 = nodeKey({kind:"item",id:"shared",part:1});
-    const header = (key: typeof part0) => ({dataset:{transcriptNode:encodeNode({...key,slot:"header"}),
-      transcriptMembers:JSON.stringify([key.source_ref])},getAttribute:()=>"false",
+  test("同一 Item 的折叠祖先按 slot 区分，不命中兄弟部位或同名其它来源", () => {
+    const body = nodeKey({kind:"item",id:"shared"}, "body");
+    const summary = nodeKey({kind:"item",id:"shared"}, "summary");
+    const header = (key: typeof body) => ({dataset:{transcriptNode:encodeNode({...key,slot:`${key.slot}:header`}),
+      transcriptMembers:JSON.stringify([key])},getAttribute:()=>"false",
       getBoundingClientRect:()=>({height:20})}) as unknown as HTMLElement;
-    const first = header(part0), second = header(part1);
+    const first = header(body), second = header(summary);
     const scroller = {querySelectorAll:()=>[first,second]} as unknown as HTMLElement;
-    expect(findTranscriptNode(scroller,part0)).toEqual({element:first,ancestor:true});
-    expect(findTranscriptNode(scroller,part1)).toEqual({element:second,ancestor:true});
-    expect(findTranscriptNode(scroller,nodeKey({kind:"item",id:"shared",part:9}))).toBeUndefined();
+    expect(findTranscriptNode(scroller,body)).toEqual({element:first,ancestor:true});
+    expect(findTranscriptNode(scroller,summary)).toEqual({element:second,ancestor:true});
+    expect(findTranscriptNode(scroller,nodeKey({kind:"item",id:"shared"},"missing"))).toBeUndefined();
+    expect(findTranscriptNode(scroller,nodeKey({kind:"item",id:"other"}))).toBeUndefined();
     expect(findTranscriptNode(scroller,nodeKey({kind:"context",id:"shared"}))).toBeUndefined();
   });
 
@@ -234,7 +235,7 @@ describe("语义节点导航与虚拟列表", () => {
     const context = nodeKey({kind:"context",id:"shared",process:{kind:"execution",id:"exec-1"}});
     const stream = nodeKey({kind:"stream",id:"temporary",model:"model-1",block:0,part_kind:"text"});
     const element = {dataset:{transcriptNode:encodeNode(nodeKey({kind:"execution",id:"exec-1"},"header")),
-      transcriptMembers:JSON.stringify([context.source_ref,stream.source_ref])},getAttribute:()=>"false",
+      transcriptMembers:JSON.stringify([context,stream])},getAttribute:()=>"false",
       getBoundingClientRect:()=>({height:20})} as unknown as HTMLElement;
     const scroller = {querySelectorAll:()=>[element]} as unknown as HTMLElement;
     expect(findTranscriptNode(scroller,context)?.element).toBe(element);
@@ -245,10 +246,10 @@ describe("语义节点导航与虚拟列表", () => {
 
   test.each([true,false])("流式正文结算 final 只按唯一真实 producer 和 block 保位，匹配=%s", sameProducer => {
     const item = turn("one",1);
-    const stream = {part_id:"temporary",kind:"text" as const,projection:"detail" as const,source:{message_sequence:1,model_call_id:"model-1",content_block_index:0}};
-    item.conversation.responseParts = [stream];
+    const stream = {id:"temporary",kind:"text" as const,projection:"detail" as const,source:{message_sequence:1,model_call_id:"model-1",content_block_index:0}};
+    item.conversation.responseItems = [stream];
     const h = navigationHarness([item,turn("two",2),turn("three",3)]);
-    const streamKey = partNode(stream);
+    const streamKey = responseNode(stream);
     const element = (key: typeof streamKey, parent?: typeof streamKey, top = 30) => ({dataset:{transcriptNode:encodeNode(key),
       ...(parent ? {transcriptParent:encodeNode(parent)} : {})},getAttribute:()=>null,querySelectorAll:()=>[],
       getBoundingClientRect:()=>({top:top-h.scroller.scrollTop,bottom:top+50-h.scroller.scrollTop,height:50})}) as unknown as HTMLElement;
@@ -256,10 +257,10 @@ describe("语义节点导航与虚拟列表", () => {
     h.setNodes([element(process),element(streamKey,process)]);
     h.userScroll(30,"wheel");
     h.toggleTurn("one");
-    const canonical = {...stream,part_id:"canonical",kind:"final_text" as const,
-      source:{...stream.source,item_id:"final-item",part_ordinal:2,model_call_id:sameProducer ? "model-1" : "model-2"}};
-    h.setNodes([element(process),element(partNode(canonical),undefined,70)]);
-    h.update([{...item,conversation:{...item.conversation,responseParts:[canonical]}},turn("two",2),turn("three",3)]);
+    const canonical = {...stream,id:"canonical",kind:"final_text" as const,
+      source:{...stream.source,item_id:"final-item",model_call_id:sameProducer ? "model-1" : "model-2"}};
+    h.setNodes([element(process),element(responseNode(canonical),undefined,70)]);
+    h.update([{...item,conversation:{...item.conversation,responseItems:[canonical]}},turn("two",2),turn("three",3)]);
     h.settle();
     // 对 final 正文后续增高继续保位，无法关联则只落到过程标题并明确告知。
     expect(h.statuses).toHaveLength(sameProducer ? 0 : 1);
@@ -355,7 +356,7 @@ describe("语义节点导航与虚拟列表", () => {
       verified ? JSON.stringify({source:{component:"workspace_backend"}, stage:"history_locate", error_type:"HistoryItemUnavailableError",
         target:{item_id:"missing"}}) : null);
     const h = navigationHarness([turn("current",9)],async()=>{throw error;});
-    h.restore({reading_anchor:{node_key:nodeKey({kind:"item",id:"missing",part:0}),content_position:{block:0,offset_px:0},viewport_offset_px:0},follow_latest:false});
+    h.restore({reading_anchor:{node_key:nodeKey({kind:"item",id:"missing"}),content_position:{block:0,offset_px:0},viewport_offset_px:0},follow_latest:false});
     await act(async()=>{});h.settle();
     expect(h.state().navigation?.phase).toBe(verified ? "unavailable" : "error");
     expect(h.statuses.at(-1)).toContain("req-missing");
@@ -370,11 +371,11 @@ describe("语义节点导航与虚拟列表", () => {
     expect(h.state().navigation?.phase).toBe("located");
   });
   test("工具 Item 定位使用参数正文的真实 Part，不能等待不存在的 body", async () => {
-    const part = {part_id:"tool-part",kind:"tool_call" as const,source:{message_sequence:1,item_id:"tool-item",part_ordinal:3}};
+    const part = {id:"tool-part",kind:"tool_call" as const,source:{message_sequence:1,item_id:"tool-item",}};
     const location: ThreadItemLocationDTO = {item_id:"tool-item",semantic_kind:"tool_call",turn_id:"one",execution_id:"exec",content_hash:"hash",byte_length:20};
     const h = navigationHarness([turn("one",1)],async () => location);
     const animate = mock(() => ({} as Animation));
-    const key = partNode(part,"tool_input");
+    const key = responseNode(part,"tool_input");
     h.setNodes([{dataset:{transcriptNode:encodeNode(key)},getAttribute:()=>null,querySelectorAll:()=>[],animate,
       getBoundingClientRect:()=>({top:20,bottom:60,height:40})} as unknown as HTMLElement]);
     act(() => h.state().navigateToTurn("one",false,undefined,undefined,location));
@@ -386,7 +387,7 @@ describe("语义节点导航与虚拟列表", () => {
   test("无 Turn 的独立回报定位使用真实 notice 部位", async () => {
     const location: ThreadItemLocationDTO = {item_id:"notice-item",semantic_kind:"runtime_notice",execution_id:"exec",content_hash:"hash",byte_length:20};
     const h = navigationHarness([turn("one",1)],async () => location);
-    const key = nodeKey({kind:"item",id:"notice-item",part:0},"notice");
+    const key = nodeKey({kind:"item",id:"notice-item"},"notice");
     h.setNodes([{dataset:{transcriptNode:encodeNode(key)},getAttribute:()=>null,querySelectorAll:()=>[],
       getBoundingClientRect:()=>({top:20,bottom:60,height:40})} as unknown as HTMLElement]);
     act(() => h.state().navigateToTurn("",false,undefined,undefined,location));
@@ -397,8 +398,8 @@ describe("语义节点导航与虚拟列表", () => {
   test.each(["tail", "notice", "header"] as const)("同 execution 的 %s 不替代早期分段，按真实段首 Item 恢复", async initialKind => {
     const segment = (id: string): Extract<ChatTranscriptItem, {kind: "execution_response"}> => ({
       kind: "execution_response", key: `response:${id}`, executionId: "exec", itemId: id, bodyEvicted: false,
-      parts: [{part_id:`part:${id}`,kind:"reasoning",projection:"detail",text:id,
-        source:{message_sequence:1,item_id:id,part_ordinal:0,execution_id:"exec"}}],
+      parts: [{id:`part:${id}`,kind:"reasoning",projection:"detail",text:id,
+        source:{message_sequence:1,item_id:id,execution_id:"exec"}}],
     });
     const tail = segment("tail-item");
     const notice: ChatTranscriptItem = {kind:"internal_execution",key:"notice",executionId:"exec",displayPart:{
@@ -428,12 +429,12 @@ describe("语义节点导航与虚拟列表", () => {
     expect(h.statuses).toEqual([]);
     expect(loader).toHaveBeenCalledTimes(1);
   });
-  test("原 owner 补读确认 Part 取消后结束恢复，不再等待 DOM 或覆盖原记录", async () => {
+  test("原 owner 补读确认 Item 的展示 slot 已不存在后结束恢复，不等待 DOM 或覆盖原记录", async () => {
     const item = turn("one",1);
-    item.conversation.responseParts = [{part_id:"current",kind:"final_text",projection:"detail",text:"保留的正文",source:{message_sequence:1,item_id:"item",part_ordinal:0}}];
+    item.conversation.responseItems = [{id:"current",kind:"final_text",projection:"detail",text:"保留的正文",source:{message_sequence:1,item_id:"item",}}];
     const loader = mock(async()=>{});
     const h = navigationHarness([item],loader);
-    h.restore({reading_anchor:{node_key:nodeKey({kind:"item",id:"item",part:9}),content_position:{block:0,offset_px:0},viewport_offset_px:0},follow_latest:false});
+    h.restore({reading_anchor:{node_key:nodeKey({kind:"item",id:"item"},"tool_output"),content_position:{block:0,offset_px:0},viewport_offset_px:0},follow_latest:false});
     await act(async()=>{});h.settle();
     expect(loader).toHaveBeenCalledTimes(1);
     expect(h.state().navigation?.phase).toBe("unavailable");
@@ -457,7 +458,7 @@ describe("语义节点导航与虚拟列表", () => {
     expect(h.statuses).toEqual([]);
   });
   test.each(["turn", "execution"] as const)("%s 的页外上下文标记按消费请求定点恢复，不遍历元数据续页", async kind => {
-    const notice = {part_id:"late-context",kind:"context_notice" as const,projection:"summary" as const,
+    const notice = {id:"late-context",kind:"context_notice" as const,projection:"summary" as const,
       source:{message_sequence:0,...(kind === "turn" ? {turn_id:"one"} : {execution_id:"exec"})},
       context_model_call_id:"late-call",context_anchor:"before_model_call" as const,context_before_item_id:"later-item"};
     const key = contextNode(notice);
@@ -468,7 +469,7 @@ describe("语义节点导航与虚拟列表", () => {
     expect(loader.mock.calls[0]?.[0]).toBe(kind === "turn" ? "one" : "");
     expect(loader.mock.calls[0]?.[5]).toBe(kind === "execution" ? "exec" : undefined);
     expect(loader.mock.calls[0]?.[6]).toEqual({model_call_id:"late-call",anchor:"before_model_call"});
-    const target = turn("one",1); target.conversation.responseParts = [notice];
+    const target = turn("one",1); target.conversation.responseItems = [notice];
     h.update(kind === "turn" ? [target] : [{kind:"context_event",key:"late-notice",notices:[notice]}]);
     h.setNodes([{dataset:{transcriptNode:encodeNode(key)},getAttribute:()=>null,querySelectorAll:()=>[],
       getBoundingClientRect:()=>({top:20,bottom:60,height:40})} as unknown as HTMLElement]);
@@ -478,7 +479,7 @@ describe("语义节点导航与虚拟列表", () => {
     expect(loader).toHaveBeenCalledTimes(1);
   });
   test("上下文输出从占位序号结算成真实 Item 后仍是同一展示节点", () => {
-    const pending = {part_id:"notice",kind:"context_notice" as const,projection:"summary" as const,
+    const pending = {id:"notice",kind:"context_notice" as const,projection:"summary" as const,
       source:{message_sequence:0,execution_id:"exec"},context_model_call_id:"call",context_anchor:"before_model_call" as const,
       context_anchor_ordinal:12};
     expect(contextNode({...pending,context_before_item_id:"committed-output",context_anchor_ordinal:18})).toEqual(contextNode(pending));

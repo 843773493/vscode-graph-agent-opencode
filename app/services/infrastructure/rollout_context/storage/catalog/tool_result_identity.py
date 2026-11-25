@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 
-from app.domain.itemized.identity.item_projection import ItemProjectionManifest
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionManifest,
+)
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import CanonicalItemRecord
 
@@ -38,7 +41,7 @@ def _comparable_tool_result_payload(
     comparable = {
         key: item
         for key, item in value.items()
-        if key not in {"result_id", "tool_invocation_id", "tool_attempt_id"}
+        if key not in {"result_id", "tool_invocation_id", "tool_attempt_id", "tool_execution"}
     }
     tool_call_id = comparable.get("tool_call_id")
     if isinstance(tool_call_id, str) and tool_call_id:
@@ -46,6 +49,56 @@ def _comparable_tool_result_payload(
             item.projection_identity, tool_call_id
         )
     return comparable
+
+
+def read_tool_result_summaries(
+    connection: sqlite3.Connection, view_id: str, item_ids: Sequence[str], *,
+    snapshot_upper: int | None = None,
+) -> dict[str, ItemProjectionManifest]:
+    """本页结果读取自身镜像，调用按同 view 的精确身份批量取得回执摘要。"""
+    if not item_ids:
+        return {}
+    rows = connection.execute(
+        "WITH requested AS MATERIALIZED (SELECT item.item_id,item.semantic_kind,item.execution_id,item.tool_call_id,"
+        "item.projection_manifest_json,"
+        "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id') model_call_id,"
+        "membership.source_kind FROM item_catalog item JOIN context_view_items membership "
+        "ON membership.item_id=item.item_id AND membership.view_id=:view_id AND membership.visible=1 "
+        "WHERE item.item_id IN (SELECT value FROM json_each(:item_ids)) "
+        "AND item.semantic_kind IN ('tool_call','tool_result') "
+        "AND (:snapshot_upper IS NULL OR membership.logical_item_ordinal<=:snapshot_upper)), calls AS ("
+        "SELECT *,CASE WHEN substr(tool_call_id,1,length(model_call_id)+11)=model_call_id||':tool-call:' "
+        "THEN substr(tool_call_id,length(model_call_id)+12) ELSE tool_call_id END raw_id "
+        "FROM requested WHERE semantic_kind='tool_call' AND model_call_id IS NOT NULL) "
+        "SELECT item_id,projection_manifest_json FROM requested WHERE semantic_kind='tool_result' "
+        "UNION ALL SELECT calls.item_id,result.projection_manifest_json "
+        "FROM calls CROSS JOIN item_catalog result INDEXED BY item_catalog_model_tool_index ON result.tool_call_id IN "
+        "(calls.raw_id,calls.model_call_id||':tool-call:'||calls.raw_id) "
+        "AND result.execution_id=calls.execution_id AND result.semantic_kind='tool_result' "
+        "AND json_extract(result.projection_manifest_json,'$.projection_identity.model_call_id')=calls.model_call_id "
+        "JOIN context_view_items membership ON membership.item_id=result.item_id AND membership.view_id=:view_id "
+        "AND membership.visible=1 AND membership.source_kind=calls.source_kind "
+        "WHERE (:snapshot_upper IS NULL OR membership.logical_item_ordinal<=:snapshot_upper)",
+        {"view_id": view_id, "item_ids": json.dumps(tuple(item_ids)), "snapshot_upper": snapshot_upper},
+    )
+    result: dict[str, ItemProjectionManifest] = {}
+    for item_id, value in rows:
+        manifest = ItemProjectionManifest.from_dict(json.loads(value))
+        previous = result.get(item_id)
+        if previous is None:
+            result[item_id] = manifest
+            continue
+        # request／runtime 是同一结果的合法载体，分别保留内容身份；
+        # 调用摘要只合并两者已有的安全事实，不按载体落盘先后丢失执行证据。
+        for field in ("tool_outcome", "tool_execution"):
+            known, incoming = getattr(previous, field), getattr(manifest, field)
+            if known is not None and incoming is not None and known != incoming:
+                raise RuntimeError(f"同一工具调用的结果载体{field}冲突: {item_id}")
+        result[item_id] = replace(
+            previous, tool_outcome=previous.tool_outcome or manifest.tool_outcome,
+            tool_execution=previous.tool_execution or manifest.tool_execution,
+        )
+    return result
 
 
 def _same_tool_result_payload(first: CanonicalItemRecord, second: CanonicalItemRecord) -> bool:

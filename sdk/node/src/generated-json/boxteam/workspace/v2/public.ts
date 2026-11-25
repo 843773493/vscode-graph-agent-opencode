@@ -189,6 +189,8 @@ export interface ConfigSourceDocumentDTO {
   active_origins: ConfigSourceOriginDTO[];
   source_inherited: { [key: string]: any } | undefined;
   nodes: ConfigNodeInspectionDTO[];
+  /** 选定来源实际父节点中的实体定义归属；不根据文件层级重算。 */
+  source_inherited_origins: ConfigSourceOriginDTO[];
 }
 
 export interface ConfigSourceDocumentDTO_SourceBaselineEntry {
@@ -1685,6 +1687,8 @@ export interface SessionCompactResultDTO {
   summary?: string | undefined;
   strategy?: string | undefined;
   compacted_at?: string | undefined;
+  thread_id: string;
+  task_id?: string | undefined;
 }
 
 /** 仅标识封存来源，不是当前资源定位器或访问凭据。 */
@@ -2881,7 +2885,7 @@ export interface TraceEventDTO {
 }
 
 export interface TurnActivityStatsDTO {
-  /** 历史值取 Turn projection.created_at 到 updated_at 的整数毫秒差；已有投影的起止时刻必须合法、带时区且不倒退；无统计投影时为空。 */
+  /** 由历史 owner 按 Turn acceptance 到 terminal 计算整数毫秒；进行中或无统计投影时为空。不使用消息投影时间或累计工具耗时，生命周期时刻必须合法、带时区且不倒退。 */
   duration_ms?: number | undefined;
   item_count?:
     | number
@@ -2996,7 +3000,7 @@ export interface TurnDetailDTO {
   assistant_text: string[];
   thinking_blocks: TurnThinkingBlockDTO[];
   tool_summary: TurnToolSummaryDTO[];
-  response_parts: TurnResponsePartDTO[];
+  response_items: TurnResponseItemDTO[];
   final_response?: string | undefined;
   items: TraceEventDTO[];
   detail_truncated?: boolean | undefined;
@@ -3134,7 +3138,7 @@ export interface TurnHistoryLoadRequest {
 export interface ContextNoticeBatchDTO {
   owner_id: string;
   owner_kind: string;
-  parts: TurnResponsePartDTO[];
+  items: TurnResponseItemDTO[];
 }
 
 export interface TurnHistoryPageDTO {
@@ -3164,8 +3168,8 @@ export interface InternalExecutionHistoryDTO {
   status: string;
   /** 对应 executions 持久记录不可变的 UTC 创建时刻，接口按 ISO8601 表达，复制保留源值。 */
   created_at: string | undefined;
-  display_parts: InternalExecutionDisplayPartDTO[];
-  response_parts: TurnResponsePartDTO[];
+  display_items: InternalExecutionDisplayItemDTO[];
+  response_items: TurnResponseItemDTO[];
   /** 持久 execution/admission 的历史 Session scope；fork 保留原值，可不同于请求目标，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。 */
   session_id: string;
   /** 持久 execution/admission 的历史 thread scope；fork 保留原值，可不同于本页请求 thread，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。 */
@@ -3179,7 +3183,7 @@ export interface InternalExecutionHistoryDTO {
   terminal_commit_id?: number | undefined;
 }
 
-export interface InternalExecutionDisplayPartDTO {
+export interface InternalExecutionDisplayItemDTO {
   kind: string;
   text: string;
   item_id: string;
@@ -3217,9 +3221,24 @@ export interface TurnProjectionCorruptedErrorDTO {
   message: string;
 }
 
-export interface TurnResponsePartDTO {
-  /** 历史部件由 canonical item_id 与 part_ordinal 生成唯一引用；streaming 为临时部件 ID，不代表 canonical item 身份。 */
-  part_id: string;
+/** 单个真实 attempt 的安全摘要，不包含工具参数、结果或原始事件。 */
+export interface ToolExecutionSummaryDTO {
+  session_id: string;
+  thread_id: string;
+  turn_stream_id: string;
+  tool_invocation_id: string;
+  tool_attempt_id: string;
+  tool_execution_id: string;
+  started_seq: number;
+  started_at?: string | undefined;
+  execution_completed_at: string | undefined;
+  status: string;
+  outcome?: string | undefined;
+}
+
+export interface TurnResponseItemDTO {
+  /** 已提交内容等于 source.item_id；未提交和上下文标记沿原来源使用临时／标记 ID。 */
+  id: string;
   kind: string;
   projection: string;
   /** 响应部件的归一化状态；历史值由 canonical/消息投影映射，streaming 值随部件更新。completed 仅表示该部件完成，可与工具拒绝、Job 或 Execution 失败并存，不证明工具执行成功。 */
@@ -3229,7 +3248,7 @@ export interface TurnResponsePartDTO {
   carrier_type?:
     | string
     | undefined;
-  /** 保留 canonical payload 中合法的工具调用 ID 表示，可为 Provider 原始 ID 或已有 ModelCall 限定 ID；不等同于历史工具 Trace/摘要的聚合引用，也不等同于 part_id。 */
+  /** 保留 canonical payload 中合法的工具调用 ID 表示，可为 Provider 原始 ID 或已有 ModelCall 限定 ID；不等同于历史工具 Trace/摘要的聚合引用，也不等同于 Item ID。 */
   tool_call_id?: string | undefined;
   tool_name?: string | undefined;
   arguments?: string | undefined;
@@ -3257,6 +3276,21 @@ export interface TurnResponsePartDTO {
   context_anchor_ordinal?: number | undefined;
   context_plan_ordinal?: number | undefined;
   context_cursor?: string | undefined;
+  tool_execution:
+    | ToolExecutionSummaryDTO
+    | undefined;
+  /** 原回执的结果 marker；与声明完成和执行起止分开，缺失不表示成功。 */
+  tool_outcome?:
+    | string
+    | undefined;
+  /** 单个非文本输出块的按需正文；摘要只交付 carrier_type，不携带媒体数据。 */
+  content?: { [key: string]: any } | undefined;
+}
+
+export interface TurnMessageGroupSourceDTO {
+  message_group_id: string;
+  ordinal: number;
+  size: number;
 }
 
 export interface TurnResponseSourceDTO {
@@ -3267,8 +3301,7 @@ export interface TurnResponseSourceDTO {
   call_index?: number | undefined;
   result_message_sequence?: number | undefined;
   item_id?: string | undefined;
-  item_sequence?: number | undefined;
-  part_ordinal?:
+  item_sequence?:
     | number
     | undefined;
   /** 历史 activity 沿 canonical item 创建时刻；final 沿 final_item_created_at；standalone internal 沿原 item 创建时刻。streaming 可缺省。 */
@@ -3280,10 +3313,13 @@ export interface TurnResponseSourceDTO {
   logical_item_ordinal?: number | undefined;
   model_call_id?: string | undefined;
   activity_group_item_id?: string | undefined;
-  activity_group_part_ordinal?: number | undefined;
   turn_id?: string | undefined;
   execution_id?: string | undefined;
-  process_segment_item_id?: string | undefined;
+  process_segment_item_id?:
+    | string
+    | undefined;
+  /** 原消息的全部语义成员位置；size不是工具总数，也不是活动组大小。 */
+  message_group?: TurnMessageGroupSourceDTO | undefined;
 }
 
 export interface TurnSummaryDTO {
@@ -3318,7 +3354,7 @@ export interface TurnSummaryDTO {
   item_count?: number | undefined;
   thinking_blocks: TurnThinkingBlockDTO[];
   tool_summary: TurnToolSummaryDTO[];
-  response_parts: TurnResponsePartDTO[];
+  response_items: TurnResponseItemDTO[];
   activity_stats?: TurnActivityStatsDTO | undefined;
   root_logical_item_ordinal: number;
   source_view_id: string;
@@ -4044,9 +4080,9 @@ export interface LLMRequestLogSummaryDTO {
   size_bytes: number;
 }
 
-/** 卡片操作只在用户接受后读取；稳定 Item 引用不冻结正文版本。 */
+/** 卡片操作只在用户接受后读取；execution_output 精确绑定完整执行的最终结果。 */
 export interface ContextContentReferenceDTO {
-  /** item 或 sealed_contribution；引用分支由运行时业务模型校验。 */
+  /** item、sealed_contribution 或 execution_output；引用分支由运行时业务模型校验。 */
   kind: string;
   item_id?:
     | string
@@ -4056,6 +4092,8 @@ export interface ContextContentReferenceDTO {
   thread_id?: string | undefined;
   assembly_id?: string | undefined;
   contribution_id?: string | undefined;
+  execution_id?: string | undefined;
+  content_hash?: string | undefined;
 }
 
 export interface ThreadItemInspectionRequest {
@@ -5152,6 +5190,7 @@ function createBaseConfigSourceDocumentDTO(): ConfigSourceDocumentDTO {
     active_origins: [],
     source_inherited: undefined,
     nodes: [],
+    source_inherited_origins: [],
   };
 }
 
@@ -5203,6 +5242,9 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
       source_inherited: isObject(object.source_inherited) ? object.source_inherited : undefined,
       nodes: globalThis.Array.isArray(object?.nodes)
         ? object.nodes.map((e: any) => ConfigNodeInspectionDTO.fromJSON(e))
+        : [],
+      source_inherited_origins: globalThis.Array.isArray(object?.source_inherited_origins)
+        ? object.source_inherited_origins.map((e: any) => ConfigSourceOriginDTO.fromJSON(e))
         : [],
     };
   },
@@ -5290,6 +5332,9 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
     if (message.nodes?.length) {
       obj.nodes = message.nodes.map((e) => ConfigNodeInspectionDTO.toJSON(e));
     }
+    if (message.source_inherited_origins?.length) {
+      obj.source_inherited_origins = message.source_inherited_origins.map((e) => ConfigSourceOriginDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -5338,6 +5383,8 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
     message.active_origins = object.active_origins?.map((e) => ConfigSourceOriginDTO.fromPartial(e)) || [];
     message.source_inherited = object.source_inherited ?? undefined;
     message.nodes = object.nodes?.map((e) => ConfigNodeInspectionDTO.fromPartial(e)) || [];
+    message.source_inherited_origins =
+      object.source_inherited_origins?.map((e) => ConfigSourceOriginDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -15350,6 +15397,8 @@ function createBaseSessionCompactResultDTO(): SessionCompactResultDTO {
     summary: undefined,
     strategy: undefined,
     compacted_at: undefined,
+    thread_id: "",
+    task_id: undefined,
   };
 }
 
@@ -15375,6 +15424,8 @@ export const SessionCompactResultDTO: MessageFns<SessionCompactResultDTO> = {
       summary: isSet(object.summary) ? globalThis.String(object.summary) : undefined,
       strategy: isSet(object.strategy) ? globalThis.String(object.strategy) : undefined,
       compacted_at: isSet(object.compacted_at) ? globalThis.String(object.compacted_at) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      task_id: isSet(object.task_id) ? globalThis.String(object.task_id) : undefined,
     };
   },
 
@@ -15413,6 +15464,12 @@ export const SessionCompactResultDTO: MessageFns<SessionCompactResultDTO> = {
     if (message.compacted_at !== undefined) {
       obj.compacted_at = message.compacted_at;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.task_id !== undefined) {
+      obj.task_id = message.task_id;
+    }
     return obj;
   },
 
@@ -15432,6 +15489,8 @@ export const SessionCompactResultDTO: MessageFns<SessionCompactResultDTO> = {
     message.summary = object.summary ?? undefined;
     message.strategy = object.strategy ?? undefined;
     message.compacted_at = object.compacted_at ?? undefined;
+    message.thread_id = object.thread_id ?? "";
+    message.task_id = object.task_id ?? undefined;
     return message;
   },
 };
@@ -23076,7 +23135,7 @@ function createBaseTurnDetailDTO(): TurnDetailDTO {
     assistant_text: [],
     thinking_blocks: [],
     tool_summary: [],
-    response_parts: [],
+    response_items: [],
     final_response: undefined,
     items: [],
     detail_truncated: undefined,
@@ -23123,8 +23182,8 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
       tool_summary: globalThis.Array.isArray(object?.tool_summary)
         ? object.tool_summary.map((e: any) => TurnToolSummaryDTO.fromJSON(e))
         : [],
-      response_parts: globalThis.Array.isArray(object?.response_parts)
-        ? object.response_parts.map((e: any) => TurnResponsePartDTO.fromJSON(e))
+      response_items: globalThis.Array.isArray(object?.response_items)
+        ? object.response_items.map((e: any) => TurnResponseItemDTO.fromJSON(e))
         : [],
       final_response: isSet(object.final_response) ? globalThis.String(object.final_response) : undefined,
       items: globalThis.Array.isArray(object?.items)
@@ -23201,8 +23260,8 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
     if (message.tool_summary?.length) {
       obj.tool_summary = message.tool_summary.map((e) => TurnToolSummaryDTO.toJSON(e));
     }
-    if (message.response_parts?.length) {
-      obj.response_parts = message.response_parts.map((e) => TurnResponsePartDTO.toJSON(e));
+    if (message.response_items?.length) {
+      obj.response_items = message.response_items.map((e) => TurnResponseItemDTO.toJSON(e));
     }
     if (message.final_response !== undefined) {
       obj.final_response = message.final_response;
@@ -23260,7 +23319,7 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
     message.assistant_text = object.assistant_text?.map((e) => e) || [];
     message.thinking_blocks = object.thinking_blocks?.map((e) => TurnThinkingBlockDTO.fromPartial(e)) || [];
     message.tool_summary = object.tool_summary?.map((e) => TurnToolSummaryDTO.fromPartial(e)) || [];
-    message.response_parts = object.response_parts?.map((e) => TurnResponsePartDTO.fromPartial(e)) || [];
+    message.response_items = object.response_items?.map((e) => TurnResponseItemDTO.fromPartial(e)) || [];
     message.final_response = object.final_response ?? undefined;
     message.items = object.items?.map((e) => TraceEventDTO.fromPartial(e)) || [];
     message.detail_truncated = object.detail_truncated ?? undefined;
@@ -24008,7 +24067,7 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
 };
 
 function createBaseContextNoticeBatchDTO(): ContextNoticeBatchDTO {
-  return { owner_id: "", owner_kind: "", parts: [] };
+  return { owner_id: "", owner_kind: "", items: [] };
 }
 
 export const ContextNoticeBatchDTO: MessageFns<ContextNoticeBatchDTO> = {
@@ -24016,8 +24075,8 @@ export const ContextNoticeBatchDTO: MessageFns<ContextNoticeBatchDTO> = {
     return {
       owner_id: isSet(object.owner_id) ? globalThis.String(object.owner_id) : "",
       owner_kind: isSet(object.owner_kind) ? globalThis.String(object.owner_kind) : "",
-      parts: globalThis.Array.isArray(object?.parts)
-        ? object.parts.map((e: any) => TurnResponsePartDTO.fromJSON(e))
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => TurnResponseItemDTO.fromJSON(e))
         : [],
     };
   },
@@ -24030,8 +24089,8 @@ export const ContextNoticeBatchDTO: MessageFns<ContextNoticeBatchDTO> = {
     if (message.owner_kind !== "") {
       obj.owner_kind = message.owner_kind;
     }
-    if (message.parts?.length) {
-      obj.parts = message.parts.map((e) => TurnResponsePartDTO.toJSON(e));
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => TurnResponseItemDTO.toJSON(e));
     }
     return obj;
   },
@@ -24043,7 +24102,7 @@ export const ContextNoticeBatchDTO: MessageFns<ContextNoticeBatchDTO> = {
     const message = createBaseContextNoticeBatchDTO();
     message.owner_id = object.owner_id ?? "";
     message.owner_kind = object.owner_kind ?? "";
-    message.parts = object.parts?.map((e) => TurnResponsePartDTO.fromPartial(e)) || [];
+    message.items = object.items?.map((e) => TurnResponseItemDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -24200,8 +24259,8 @@ function createBaseInternalExecutionHistoryDTO(): InternalExecutionHistoryDTO {
     job_id: "",
     status: "",
     created_at: undefined,
-    display_parts: [],
-    response_parts: [],
+    display_items: [],
+    response_items: [],
     session_id: "",
     thread_id: "",
     updated_at: undefined,
@@ -24217,11 +24276,11 @@ export const InternalExecutionHistoryDTO: MessageFns<InternalExecutionHistoryDTO
       job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
-      display_parts: globalThis.Array.isArray(object?.display_parts)
-        ? object.display_parts.map((e: any) => InternalExecutionDisplayPartDTO.fromJSON(e))
+      display_items: globalThis.Array.isArray(object?.display_items)
+        ? object.display_items.map((e: any) => InternalExecutionDisplayItemDTO.fromJSON(e))
         : [],
-      response_parts: globalThis.Array.isArray(object?.response_parts)
-        ? object.response_parts.map((e: any) => TurnResponsePartDTO.fromJSON(e))
+      response_items: globalThis.Array.isArray(object?.response_items)
+        ? object.response_items.map((e: any) => TurnResponseItemDTO.fromJSON(e))
         : [],
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
@@ -24245,11 +24304,11 @@ export const InternalExecutionHistoryDTO: MessageFns<InternalExecutionHistoryDTO
     if (message.created_at !== undefined) {
       obj.created_at = message.created_at;
     }
-    if (message.display_parts?.length) {
-      obj.display_parts = message.display_parts.map((e) => InternalExecutionDisplayPartDTO.toJSON(e));
+    if (message.display_items?.length) {
+      obj.display_items = message.display_items.map((e) => InternalExecutionDisplayItemDTO.toJSON(e));
     }
-    if (message.response_parts?.length) {
-      obj.response_parts = message.response_parts.map((e) => TurnResponsePartDTO.toJSON(e));
+    if (message.response_items?.length) {
+      obj.response_items = message.response_items.map((e) => TurnResponseItemDTO.toJSON(e));
     }
     if (message.session_id !== "") {
       obj.session_id = message.session_id;
@@ -24278,8 +24337,8 @@ export const InternalExecutionHistoryDTO: MessageFns<InternalExecutionHistoryDTO
     message.job_id = object.job_id ?? "";
     message.status = object.status ?? "";
     message.created_at = object.created_at ?? undefined;
-    message.display_parts = object.display_parts?.map((e) => InternalExecutionDisplayPartDTO.fromPartial(e)) || [];
-    message.response_parts = object.response_parts?.map((e) => TurnResponsePartDTO.fromPartial(e)) || [];
+    message.display_items = object.display_items?.map((e) => InternalExecutionDisplayItemDTO.fromPartial(e)) || [];
+    message.response_items = object.response_items?.map((e) => TurnResponseItemDTO.fromPartial(e)) || [];
     message.session_id = object.session_id ?? "";
     message.thread_id = object.thread_id ?? "";
     message.updated_at = object.updated_at ?? undefined;
@@ -24291,7 +24350,7 @@ export const InternalExecutionHistoryDTO: MessageFns<InternalExecutionHistoryDTO
   },
 };
 
-function createBaseInternalExecutionDisplayPartDTO(): InternalExecutionDisplayPartDTO {
+function createBaseInternalExecutionDisplayItemDTO(): InternalExecutionDisplayItemDTO {
   return {
     kind: "",
     text: "",
@@ -24303,8 +24362,8 @@ function createBaseInternalExecutionDisplayPartDTO(): InternalExecutionDisplayPa
   };
 }
 
-export const InternalExecutionDisplayPartDTO: MessageFns<InternalExecutionDisplayPartDTO> = {
-  fromJSON(object: any): InternalExecutionDisplayPartDTO {
+export const InternalExecutionDisplayItemDTO: MessageFns<InternalExecutionDisplayItemDTO> = {
+  fromJSON(object: any): InternalExecutionDisplayItemDTO {
     return {
       kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
       text: isSet(object.text) ? globalThis.String(object.text) : "",
@@ -24316,7 +24375,7 @@ export const InternalExecutionDisplayPartDTO: MessageFns<InternalExecutionDispla
     };
   },
 
-  toJSON(message: InternalExecutionDisplayPartDTO): unknown {
+  toJSON(message: InternalExecutionDisplayItemDTO): unknown {
     const obj: any = {};
     if (message.kind !== "") {
       obj.kind = message.kind;
@@ -24342,13 +24401,13 @@ export const InternalExecutionDisplayPartDTO: MessageFns<InternalExecutionDispla
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<InternalExecutionDisplayPartDTO>, I>>(base?: I): InternalExecutionDisplayPartDTO {
-    return InternalExecutionDisplayPartDTO.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<InternalExecutionDisplayItemDTO>, I>>(base?: I): InternalExecutionDisplayItemDTO {
+    return InternalExecutionDisplayItemDTO.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<InternalExecutionDisplayPartDTO>, I>>(
+  fromPartial<I extends Exact<DeepPartial<InternalExecutionDisplayItemDTO>, I>>(
     object: I,
-  ): InternalExecutionDisplayPartDTO {
-    const message = createBaseInternalExecutionDisplayPartDTO();
+  ): InternalExecutionDisplayItemDTO {
+    const message = createBaseInternalExecutionDisplayItemDTO();
     message.kind = object.kind ?? "";
     message.text = object.text ?? "";
     message.item_id = object.item_id ?? "";
@@ -24548,9 +24607,102 @@ export const TurnProjectionCorruptedErrorDTO: MessageFns<TurnProjectionCorrupted
   },
 };
 
-function createBaseTurnResponsePartDTO(): TurnResponsePartDTO {
+function createBaseToolExecutionSummaryDTO(): ToolExecutionSummaryDTO {
   return {
-    part_id: "",
+    session_id: "",
+    thread_id: "",
+    turn_stream_id: "",
+    tool_invocation_id: "",
+    tool_attempt_id: "",
+    tool_execution_id: "",
+    started_seq: 0,
+    started_at: undefined,
+    execution_completed_at: undefined,
+    status: "",
+    outcome: undefined,
+  };
+}
+
+export const ToolExecutionSummaryDTO: MessageFns<ToolExecutionSummaryDTO> = {
+  fromJSON(object: any): ToolExecutionSummaryDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      turn_stream_id: isSet(object.turn_stream_id) ? globalThis.String(object.turn_stream_id) : "",
+      tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : "",
+      tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : "",
+      tool_execution_id: isSet(object.tool_execution_id) ? globalThis.String(object.tool_execution_id) : "",
+      started_seq: isSet(object.started_seq) ? globalThis.Number(object.started_seq) : 0,
+      started_at: isSet(object.started_at) ? globalThis.String(object.started_at) : undefined,
+      execution_completed_at: isSet(object.execution_completed_at)
+        ? globalThis.String(object.execution_completed_at)
+        : undefined,
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      outcome: isSet(object.outcome) ? globalThis.String(object.outcome) : undefined,
+    };
+  },
+
+  toJSON(message: ToolExecutionSummaryDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.turn_stream_id !== "") {
+      obj.turn_stream_id = message.turn_stream_id;
+    }
+    if (message.tool_invocation_id !== "") {
+      obj.tool_invocation_id = message.tool_invocation_id;
+    }
+    if (message.tool_attempt_id !== "") {
+      obj.tool_attempt_id = message.tool_attempt_id;
+    }
+    if (message.tool_execution_id !== "") {
+      obj.tool_execution_id = message.tool_execution_id;
+    }
+    if (message.started_seq !== 0) {
+      obj.started_seq = Math.round(message.started_seq);
+    }
+    if (message.started_at !== undefined) {
+      obj.started_at = message.started_at;
+    }
+    if (message.execution_completed_at !== undefined) {
+      obj.execution_completed_at = message.execution_completed_at;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.outcome !== undefined) {
+      obj.outcome = message.outcome;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ToolExecutionSummaryDTO>, I>>(base?: I): ToolExecutionSummaryDTO {
+    return ToolExecutionSummaryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ToolExecutionSummaryDTO>, I>>(object: I): ToolExecutionSummaryDTO {
+    const message = createBaseToolExecutionSummaryDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.turn_stream_id = object.turn_stream_id ?? "";
+    message.tool_invocation_id = object.tool_invocation_id ?? "";
+    message.tool_attempt_id = object.tool_attempt_id ?? "";
+    message.tool_execution_id = object.tool_execution_id ?? "";
+    message.started_seq = object.started_seq ?? 0;
+    message.started_at = object.started_at ?? undefined;
+    message.execution_completed_at = object.execution_completed_at ?? undefined;
+    message.status = object.status ?? "";
+    message.outcome = object.outcome ?? undefined;
+    return message;
+  },
+};
+
+function createBaseTurnResponseItemDTO(): TurnResponseItemDTO {
+  return {
+    id: "",
     kind: "",
     projection: "",
     status: undefined,
@@ -24578,13 +24730,16 @@ function createBaseTurnResponsePartDTO(): TurnResponsePartDTO {
     context_anchor_ordinal: undefined,
     context_plan_ordinal: undefined,
     context_cursor: undefined,
+    tool_execution: undefined,
+    tool_outcome: undefined,
+    content: undefined,
   };
 }
 
-export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
-  fromJSON(object: any): TurnResponsePartDTO {
+export const TurnResponseItemDTO: MessageFns<TurnResponseItemDTO> = {
+  fromJSON(object: any): TurnResponseItemDTO {
     return {
-      part_id: isSet(object.part_id) ? globalThis.String(object.part_id) : "",
+      id: isSet(object.id) ? globalThis.String(object.id) : "",
       kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
       projection: isSet(object.projection) ? globalThis.String(object.projection) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : undefined,
@@ -24628,13 +24783,18 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
         ? globalThis.Number(object.context_plan_ordinal)
         : undefined,
       context_cursor: isSet(object.context_cursor) ? globalThis.String(object.context_cursor) : undefined,
+      tool_execution: isSet(object.tool_execution)
+        ? ToolExecutionSummaryDTO.fromJSON(object.tool_execution)
+        : undefined,
+      tool_outcome: isSet(object.tool_outcome) ? globalThis.String(object.tool_outcome) : undefined,
+      content: isObject(object.content) ? object.content : undefined,
     };
   },
 
-  toJSON(message: TurnResponsePartDTO): unknown {
+  toJSON(message: TurnResponseItemDTO): unknown {
     const obj: any = {};
-    if (message.part_id !== "") {
-      obj.part_id = message.part_id;
+    if (message.id !== "") {
+      obj.id = message.id;
     }
     if (message.kind !== "") {
       obj.kind = message.kind;
@@ -24717,15 +24877,24 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
     if (message.context_cursor !== undefined) {
       obj.context_cursor = message.context_cursor;
     }
+    if (message.tool_execution !== undefined) {
+      obj.tool_execution = ToolExecutionSummaryDTO.toJSON(message.tool_execution);
+    }
+    if (message.tool_outcome !== undefined) {
+      obj.tool_outcome = message.tool_outcome;
+    }
+    if (message.content !== undefined) {
+      obj.content = message.content;
+    }
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<TurnResponsePartDTO>, I>>(base?: I): TurnResponsePartDTO {
-    return TurnResponsePartDTO.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<TurnResponseItemDTO>, I>>(base?: I): TurnResponseItemDTO {
+    return TurnResponseItemDTO.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<TurnResponsePartDTO>, I>>(object: I): TurnResponsePartDTO {
-    const message = createBaseTurnResponsePartDTO();
-    message.part_id = object.part_id ?? "";
+  fromPartial<I extends Exact<DeepPartial<TurnResponseItemDTO>, I>>(object: I): TurnResponseItemDTO {
+    const message = createBaseTurnResponseItemDTO();
+    message.id = object.id ?? "";
     message.kind = object.kind ?? "";
     message.projection = object.projection ?? "";
     message.status = object.status ?? undefined;
@@ -24757,6 +24926,50 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
     message.context_anchor_ordinal = object.context_anchor_ordinal ?? undefined;
     message.context_plan_ordinal = object.context_plan_ordinal ?? undefined;
     message.context_cursor = object.context_cursor ?? undefined;
+    message.tool_execution = (object.tool_execution !== undefined && object.tool_execution !== null)
+      ? ToolExecutionSummaryDTO.fromPartial(object.tool_execution)
+      : undefined;
+    message.tool_outcome = object.tool_outcome ?? undefined;
+    message.content = object.content ?? undefined;
+    return message;
+  },
+};
+
+function createBaseTurnMessageGroupSourceDTO(): TurnMessageGroupSourceDTO {
+  return { message_group_id: "", ordinal: 0, size: 0 };
+}
+
+export const TurnMessageGroupSourceDTO: MessageFns<TurnMessageGroupSourceDTO> = {
+  fromJSON(object: any): TurnMessageGroupSourceDTO {
+    return {
+      message_group_id: isSet(object.message_group_id) ? globalThis.String(object.message_group_id) : "",
+      ordinal: isSet(object.ordinal) ? globalThis.Number(object.ordinal) : 0,
+      size: isSet(object.size) ? globalThis.Number(object.size) : 0,
+    };
+  },
+
+  toJSON(message: TurnMessageGroupSourceDTO): unknown {
+    const obj: any = {};
+    if (message.message_group_id !== "") {
+      obj.message_group_id = message.message_group_id;
+    }
+    if (message.ordinal !== 0) {
+      obj.ordinal = Math.round(message.ordinal);
+    }
+    if (message.size !== 0) {
+      obj.size = Math.round(message.size);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TurnMessageGroupSourceDTO>, I>>(base?: I): TurnMessageGroupSourceDTO {
+    return TurnMessageGroupSourceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TurnMessageGroupSourceDTO>, I>>(object: I): TurnMessageGroupSourceDTO {
+    const message = createBaseTurnMessageGroupSourceDTO();
+    message.message_group_id = object.message_group_id ?? "";
+    message.ordinal = object.ordinal ?? 0;
+    message.size = object.size ?? 0;
     return message;
   },
 };
@@ -24771,16 +24984,15 @@ function createBaseTurnResponseSourceDTO(): TurnResponseSourceDTO {
     result_message_sequence: undefined,
     item_id: undefined,
     item_sequence: undefined,
-    part_ordinal: undefined,
     created_at: undefined,
     elapsed_ms: undefined,
     logical_item_ordinal: undefined,
     model_call_id: undefined,
     activity_group_item_id: undefined,
-    activity_group_part_ordinal: undefined,
     turn_id: undefined,
     execution_id: undefined,
     process_segment_item_id: undefined,
+    message_group: undefined,
   };
 }
 
@@ -24801,7 +25013,6 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
         : undefined,
       item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : undefined,
       item_sequence: isSet(object.item_sequence) ? globalThis.Number(object.item_sequence) : undefined,
-      part_ordinal: isSet(object.part_ordinal) ? globalThis.Number(object.part_ordinal) : undefined,
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       elapsed_ms: isSet(object.elapsed_ms) ? globalThis.Number(object.elapsed_ms) : undefined,
       logical_item_ordinal: isSet(object.logical_item_ordinal)
@@ -24811,14 +25022,12 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
       activity_group_item_id: isSet(object.activity_group_item_id)
         ? globalThis.String(object.activity_group_item_id)
         : undefined,
-      activity_group_part_ordinal: isSet(object.activity_group_part_ordinal)
-        ? globalThis.Number(object.activity_group_part_ordinal)
-        : undefined,
       turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : undefined,
       execution_id: isSet(object.execution_id) ? globalThis.String(object.execution_id) : undefined,
       process_segment_item_id: isSet(object.process_segment_item_id)
         ? globalThis.String(object.process_segment_item_id)
         : undefined,
+      message_group: isSet(object.message_group) ? TurnMessageGroupSourceDTO.fromJSON(object.message_group) : undefined,
     };
   },
 
@@ -24848,9 +25057,6 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     if (message.item_sequence !== undefined) {
       obj.item_sequence = Math.round(message.item_sequence);
     }
-    if (message.part_ordinal !== undefined) {
-      obj.part_ordinal = Math.round(message.part_ordinal);
-    }
     if (message.created_at !== undefined) {
       obj.created_at = message.created_at;
     }
@@ -24866,9 +25072,6 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     if (message.activity_group_item_id !== undefined) {
       obj.activity_group_item_id = message.activity_group_item_id;
     }
-    if (message.activity_group_part_ordinal !== undefined) {
-      obj.activity_group_part_ordinal = Math.round(message.activity_group_part_ordinal);
-    }
     if (message.turn_id !== undefined) {
       obj.turn_id = message.turn_id;
     }
@@ -24877,6 +25080,9 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     }
     if (message.process_segment_item_id !== undefined) {
       obj.process_segment_item_id = message.process_segment_item_id;
+    }
+    if (message.message_group !== undefined) {
+      obj.message_group = TurnMessageGroupSourceDTO.toJSON(message.message_group);
     }
     return obj;
   },
@@ -24894,16 +25100,17 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     message.result_message_sequence = object.result_message_sequence ?? undefined;
     message.item_id = object.item_id ?? undefined;
     message.item_sequence = object.item_sequence ?? undefined;
-    message.part_ordinal = object.part_ordinal ?? undefined;
     message.created_at = object.created_at ?? undefined;
     message.elapsed_ms = object.elapsed_ms ?? undefined;
     message.logical_item_ordinal = object.logical_item_ordinal ?? undefined;
     message.model_call_id = object.model_call_id ?? undefined;
     message.activity_group_item_id = object.activity_group_item_id ?? undefined;
-    message.activity_group_part_ordinal = object.activity_group_part_ordinal ?? undefined;
     message.turn_id = object.turn_id ?? undefined;
     message.execution_id = object.execution_id ?? undefined;
     message.process_segment_item_id = object.process_segment_item_id ?? undefined;
+    message.message_group = (object.message_group !== undefined && object.message_group !== null)
+      ? TurnMessageGroupSourceDTO.fromPartial(object.message_group)
+      : undefined;
     return message;
   },
 };
@@ -24933,7 +25140,7 @@ function createBaseTurnSummaryDTO(): TurnSummaryDTO {
     item_count: undefined,
     thinking_blocks: [],
     tool_summary: [],
-    response_parts: [],
+    response_items: [],
     activity_stats: undefined,
     root_logical_item_ordinal: 0,
     source_view_id: "",
@@ -24983,8 +25190,8 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
       tool_summary: globalThis.Array.isArray(object?.tool_summary)
         ? object.tool_summary.map((e: any) => TurnToolSummaryDTO.fromJSON(e))
         : [],
-      response_parts: globalThis.Array.isArray(object?.response_parts)
-        ? object.response_parts.map((e: any) => TurnResponsePartDTO.fromJSON(e))
+      response_items: globalThis.Array.isArray(object?.response_items)
+        ? object.response_items.map((e: any) => TurnResponseItemDTO.fromJSON(e))
         : [],
       activity_stats: isSet(object.activity_stats) ? TurnActivityStatsDTO.fromJSON(object.activity_stats) : undefined,
       root_logical_item_ordinal: isSet(object.root_logical_item_ordinal)
@@ -25070,8 +25277,8 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
     if (message.tool_summary?.length) {
       obj.tool_summary = message.tool_summary.map((e) => TurnToolSummaryDTO.toJSON(e));
     }
-    if (message.response_parts?.length) {
-      obj.response_parts = message.response_parts.map((e) => TurnResponsePartDTO.toJSON(e));
+    if (message.response_items?.length) {
+      obj.response_items = message.response_items.map((e) => TurnResponseItemDTO.toJSON(e));
     }
     if (message.activity_stats !== undefined) {
       obj.activity_stats = TurnActivityStatsDTO.toJSON(message.activity_stats);
@@ -25122,7 +25329,7 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
     message.item_count = object.item_count ?? undefined;
     message.thinking_blocks = object.thinking_blocks?.map((e) => TurnThinkingBlockDTO.fromPartial(e)) || [];
     message.tool_summary = object.tool_summary?.map((e) => TurnToolSummaryDTO.fromPartial(e)) || [];
-    message.response_parts = object.response_parts?.map((e) => TurnResponsePartDTO.fromPartial(e)) || [];
+    message.response_items = object.response_items?.map((e) => TurnResponseItemDTO.fromPartial(e)) || [];
     message.activity_stats = (object.activity_stats !== undefined && object.activity_stats !== null)
       ? TurnActivityStatsDTO.fromPartial(object.activity_stats)
       : undefined;
@@ -29963,6 +30170,8 @@ function createBaseContextContentReferenceDTO(): ContextContentReferenceDTO {
     thread_id: undefined,
     assembly_id: undefined,
     contribution_id: undefined,
+    execution_id: undefined,
+    content_hash: undefined,
   };
 }
 
@@ -29975,6 +30184,8 @@ export const ContextContentReferenceDTO: MessageFns<ContextContentReferenceDTO> 
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
       assembly_id: isSet(object.assembly_id) ? globalThis.String(object.assembly_id) : undefined,
       contribution_id: isSet(object.contribution_id) ? globalThis.String(object.contribution_id) : undefined,
+      execution_id: isSet(object.execution_id) ? globalThis.String(object.execution_id) : undefined,
+      content_hash: isSet(object.content_hash) ? globalThis.String(object.content_hash) : undefined,
     };
   },
 
@@ -29998,6 +30209,12 @@ export const ContextContentReferenceDTO: MessageFns<ContextContentReferenceDTO> 
     if (message.contribution_id !== undefined) {
       obj.contribution_id = message.contribution_id;
     }
+    if (message.execution_id !== undefined) {
+      obj.execution_id = message.execution_id;
+    }
+    if (message.content_hash !== undefined) {
+      obj.content_hash = message.content_hash;
+    }
     return obj;
   },
 
@@ -30012,6 +30229,8 @@ export const ContextContentReferenceDTO: MessageFns<ContextContentReferenceDTO> 
     message.thread_id = object.thread_id ?? undefined;
     message.assembly_id = object.assembly_id ?? undefined;
     message.contribution_id = object.contribution_id ?? undefined;
+    message.execution_id = object.execution_id ?? undefined;
+    message.content_hash = object.content_hash ?? undefined;
     return message;
   },
 };

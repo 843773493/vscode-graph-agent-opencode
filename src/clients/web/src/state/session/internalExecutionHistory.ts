@@ -1,11 +1,11 @@
-import type { InternalExecutionHistory, TurnResponsePart } from "../../types/backend";
-import { compareInternalResponseParts } from "../timeline/responseParts";
+import type { InternalExecutionHistory, TurnResponseItem } from "../../types/backend";
+import { compareInternalResponseItems, mergeCanonicalItem } from "../timeline/responseItems";
 
-export type InternalExecutionRecord = Omit<InternalExecutionHistory, "display_parts" | "response_parts"> & {
+export type InternalExecutionRecord = Omit<InternalExecutionHistory, "display_items" | "response_items"> & {
   sourceViewId?: string; sourceViewRevision?: number;
   activityOutline?: {beforeCursor: string | null};
-  display_parts: Array<InternalExecutionHistory["display_parts"][number] & { bodyEvicted?: true }>;
-  response_parts: Array<TurnResponsePart & { bodyEvicted?: true }>;
+  display_items: Array<InternalExecutionHistory["display_items"][number] & { bodyEvicted?: true }>;
+  response_items: Array<TurnResponseItem & { bodyEvicted?: true }>;
 };
 export interface ExecutionItemReference { executionId: string; itemId: string }
 
@@ -16,7 +16,7 @@ export function mergeInternalExecutions(previous: readonly InternalExecutionReco
   );
   const displayItemExecutions = new Map<string, string>();
   for (const execution of previous) {
-    for (const part of execution.display_parts) {
+    for (const part of execution.display_items) {
       const owner = displayItemExecutions.get(part.item_id);
       if (owner !== undefined && owner !== execution.execution_id) {
         throw new Error(
@@ -31,9 +31,9 @@ export function mergeInternalExecutions(previous: readonly InternalExecutionReco
     const sameBinding = previous?.sourceViewId === binding?.source_view_id
       && previous?.sourceViewRevision === binding?.source_view_revision;
     const displayParts = new Map(
-      (sameBinding ? previous?.display_parts ?? [] : []).map((part) => [part.item_id, part]),
+      (sameBinding ? previous?.display_items ?? [] : []).map((part) => [part.item_id, part]),
     );
-    for (const part of execution.display_parts) {
+    for (const part of execution.display_items) {
       const owner = displayItemExecutions.get(part.item_id);
       if (owner !== undefined && owner !== execution.execution_id) {
         throw new Error(
@@ -55,11 +55,11 @@ export function mergeInternalExecutions(previous: readonly InternalExecutionReco
       }
       displayParts.set(part.item_id, part);
     }
-    const responseParts = new Map(
-      (sameBinding ? previous?.response_parts ?? [] : []).map((part) => [part.part_id, part]),
+    const responseItems = new Map(
+      (sameBinding ? previous?.response_items ?? [] : []).map((part) => [part.id, part]),
     );
-    for (const part of execution.response_parts) {
-      const previousPart = responseParts.get(part.part_id);
+    for (const part of execution.response_items) {
+      const previousPart = responseItems.get(part.id);
       if (
         previousPart !== undefined
         && (
@@ -67,26 +67,25 @@ export function mergeInternalExecutions(previous: readonly InternalExecutionReco
           || previousPart.source.item_sequence !== part.source.item_sequence
           || previousPart.source.logical_item_ordinal
             !== part.source.logical_item_ordinal
-          || previousPart.source.part_ordinal !== part.source.part_ordinal
         )
       ) {
         throw new Error(
-          `history projection integrity: 同一 response part 的 canonical 坐标冲突: ${part.part_id}`,
+          `history projection integrity: 同一 response part 的 canonical 坐标冲突: ${part.id}`,
         );
       }
-      responseParts.set(part.part_id, sameBinding && previousPart?.projection === "detail" && part.projection === "summary" ? previousPart : part);
+      responseItems.set(part.id, mergeCanonicalItem(previousPart, part));
     }
-    const orderedResponseParts = [...responseParts.values()];
-    orderedResponseParts.sort(compareInternalResponseParts);
+    const orderedResponseItems = [...responseItems.values()];
+    orderedResponseItems.sort(compareInternalResponseItems);
     internalExecutions.set(execution.execution_id, {
       ...execution,
       sourceViewId: binding?.source_view_id ?? previous?.sourceViewId,
       sourceViewRevision: binding?.source_view_revision ?? previous?.sourceViewRevision,
       ...(previous?.activityOutline && previous.sourceViewId === binding?.source_view_id && previous.sourceViewRevision === binding?.source_view_revision ? {activityOutline: previous.activityOutline} : {}),
-      display_parts: [...displayParts.values()].sort((left, right) =>
+      display_items: [...displayParts.values()].sort((left, right) =>
         left.logical_item_ordinal - right.logical_item_ordinal,
       ),
-      response_parts: orderedResponseParts,
+      response_items: orderedResponseItems,
     });
   }
   return [...internalExecutions.values()];

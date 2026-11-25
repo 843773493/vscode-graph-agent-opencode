@@ -13,7 +13,10 @@ import pytest
 
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
-from configs.installer import install_user_configuration
+from configs.installer import (
+    install_user_configuration,
+    install_workspace_configuration,
+)
 from configs.runtime import read_jsonc_object
 from tests.integration.backend.agents.test_debug_prompt_flow import _tool_call
 from tests.integration.backend.sessions.test_mcp_config_recovery import (
@@ -49,44 +52,44 @@ def product_case(request: pytest.FixtureRequest, recovery_case, free_tcp_port_fa
         home = case.context.boxteam_home_for_node(f"mcp-product-gateway:{case.mount.workspace_id}")
         install_user_configuration(config_root=home / "config", profile="default", project_root=case.context.project_root, force=True)
         path = case.mount.workspace_root / ".boxteam/workspace.jsonc"
-        payload = read_jsonc_object(path) if path.exists() else {}
-        payload["mcp"] = {"servers": {
+        payload = read_jsonc_object(install_workspace_configuration(workspace_root=case.mount.workspace_root))
+        workspace_settings = payload["settings"].setdefault("workspace", {})
+        workspace_settings["mcp"] = {"servers": {
             "schema": {"enabled": True, "transport": "streamable_http", "url": sibling.url},
             "secure": secure.configuration(redirect_uri=oauth_redirect_uri or f"http://127.0.0.1:{gateway_port}/mcp-oauth-callback.html") if web else secure.configuration(),
         }}
         if sealed_call_timeout_seconds is not None:
-            payload["mcp"]["supervision"] = {"sealed_call_timeout_seconds": sealed_call_timeout_seconds}
-        payload["context"] = {"resource_activation": {"default_boundary": boundary, "overrides": {"mcp_tool_catalog": boundary}}}
-        payload["llm"] = {
+            workspace_settings["mcp"]["supervision"] = {"sealed_call_timeout_seconds": sealed_call_timeout_seconds}
+        workspace_settings["context"] = {"resource_activation": {"default_boundary": boundary, "overrides": {"mcp_tool_catalog": boundary}}}
+        workspace_settings["llm"] = {
             "providers": {
                 "control-replay": {
-                    "defaults": {
-                        "endpoint": "https://opencode.ai/zen/v1",
-                        "api_key": "",
-                        "custom_llm_provider": "openai",
-                        "api_mode": {
-                            "protocol": "chat_completions",
-                            "model_info": {"supports_function_calling": True},
-                            "supports_reasoning": {"reasoning_content": False},
-                        },
-                    },
-                    "models": {"default": {"model": "control-replay-model"}},
+                    "config_ref": "#/profiles/provider.control-replay",
+                    "models": {"default": {"model": "control-replay-model", "config_ref": "context:provider/control-replay"}},
                 }
             }
         }
-        default = payload.setdefault("agents", {}).setdefault("default", {})
+        payload.setdefault("profiles", {})["provider.control-replay"] = {
+            "extends": "context:workspace", "settings": {"model_options": {
+                "endpoint": "https://opencode.ai/zen/v1", "api_key": "", "custom_llm_provider": "openai",
+                "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True},
+                             "supports_reasoning": {"reasoning_content": False}},
+            }},
+        }
+        default = workspace_settings.setdefault("agents", {}).setdefault("default", {})
         default["model"] = {'primary': {'provider_id': 'control-replay', 'model_id': 'default'}, 'fallbacks': []}
         if web:
             # 完整页面会读取全部 Agent；每个继承的模型引用都必须指向真实回放 Provider。
-            for agent_id in read_jsonc_object(case.context.project_root / "configs/workspace_inline.jsonc")["agents"]:
-                payload["agents"].setdefault(agent_id, {})["model"] = {'primary': {'provider_id': 'control-replay', 'model_id': 'default'}, 'fallbacks': []}
+            inline_agents = read_jsonc_object(case.context.project_root / "configs/workspace_inline.jsonc")["settings"]["workspace"]["agents"]
+            for agent_id in inline_agents:
+                workspace_settings["agents"].setdefault(agent_id, {})["model"] = {'primary': {'provider_id': 'control-replay', 'model_id': 'default'}, 'fallbacks': []}
         default.setdefault("tools", {})["custom"] = [{"tool_id": "connections.manage"}]
         if tool_restrictions is not None:
             default["tools"].setdefault("policy", {})["restrictions"] = tool_restrictions
         if confirmation_required is not None:
             default["tools"]["confirmation_required"] = confirmation_required
         gateway_url = f"http://127.0.0.1:{gateway_port}"
-        payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+        workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
         path.write_text(json.dumps(payload), encoding="utf-8")
         with model_stream_replay(
             case.context.artifacts_dir / "model-replay", runtime_root=case.context.runtime_root_for_node(request.node.nodeid),

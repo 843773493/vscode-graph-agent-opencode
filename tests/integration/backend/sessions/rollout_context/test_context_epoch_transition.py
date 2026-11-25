@@ -1,4 +1,4 @@
-"""真实 checkpoint/rewind/compaction → published source → prepare/seal 的同 owner 合同。"""
+"""真实 checkpoint/rewind 与 published source 的同 owner 合同。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from boxteam_plugin_sdk.lifecycle import LifetimeScope
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -29,8 +30,8 @@ from app.agents.skill_context import (
 )
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
-from app.core.model_request_context import SummaryCandidateScope
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.compaction import ApplyCompactionCandidateIntent
 from app.domain.itemized.epoch.prefix_epoch import (
     EpochReason,
     ProviderProfileChangeRequiresRebuildError,
@@ -74,15 +75,13 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogActivationSnapshot,
     SkillCatalogBinding,
 )
-from app.services.mapping.itemized.canonical_langchain import (
-    project_summary_source,
-    summary_source_groups,
-)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     copy_rollout_snapshot,
 )
-from tests.support.messages import compaction_summary_message
+from tests.support.rollout.compaction_application import (
+    generate_compaction_candidate,
+)
 
 RULES_URI = "boxteam://workspace/agent-spec/epoch-test"
 SKILL_URI = "boxteam://workspace/test/resources/skills/debugging/SKILL.md"
@@ -151,7 +150,6 @@ class EpochCase:
     def prepare(
         self, key: str, *, model: str = "epoch-provider", supplier=None,
         request_messages: tuple[BaseMessage, ...] = (),
-        summary_candidate: SummaryCandidateScope | None = None,
     ) -> dict[str, object]:
         selected = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
         with self.scope():
@@ -160,31 +158,67 @@ class EpochCase:
                 turn_id=str(self.accepted["turn_id"]), execution_id=str(self.accepted["initial_execution_id"]),
                 plan_creation_idempotency_key="epoch-create:" + key, seal_idempotency_key="epoch-seal:" + key,
                 context_source_manager=self.manager, tool_set_supplier=supplier or (lambda: selected),
-                request_messages=request_messages, summary_candidate=summary_candidate,
+                request_messages=request_messages,
                 **self.wire(model, "chat_completions"),
                 **self.activation(
                     self.saver, plan_creation_idempotency_key="epoch-create:" + key,
                 ),
             )
 
-    def checkpoint(self, key: str, *, compaction: bool = False, messages: list[BaseMessage] | None = None) -> None:
+    def checkpoint(self, key: str, *, messages: list[BaseMessage] | None = None) -> None:
         checkpoint = empty_checkpoint()
         checkpoint["id"] = key
         checkpoint["channel_values"] = {"messages": [self.user] if messages is None else messages}
-        if compaction:
-            checkpoint["channel_values"]["_summarization_event"] = {
-                "cutoff_index": len(checkpoint["channel_values"]["messages"]),
-                "cutoff_message_id": checkpoint["channel_values"]["messages"][-1].id,
-                "summary_message": compaction_summary_message(content="已完成的对话摘要", id=f"summary-{key}"),
+        with self.scope():
+            current = self.saver.get_tuple(self.config)
+            current_version = (
+                current.checkpoint["channel_versions"].get("messages")
+                if current is not None else None
+            )
+            checkpoint["channel_versions"] = {
+                "messages": self.saver.get_next_version(current_version, None),
             }
-        checkpoint["channel_versions"] = {name: key for name in checkpoint["channel_values"]}
         checkpoint["updated_channels"] = list(checkpoint["channel_values"])
         with self.scope():
             self.config = self.saver.put(
                 self.config, checkpoint,
-                {"source": "compaction" if compaction else "loop", "step": 1},
+                {"source": "loop", "step": 1},
                 checkpoint["channel_versions"],
             )
+
+    async def prepare_compaction(self, key: str, model: BaseChatModel):
+        admission = self.saver.execution_admission(
+            self.owner.session_id,
+            thread_id=self.owner.thread_id,
+            execution_id=str(self.accepted["initial_execution_id"]),
+        )
+        return await generate_compaction_candidate(
+            self.saver,
+            session_id=self.owner.session_id,
+            thread_id=self.owner.thread_id,
+            admission=admission,
+            model=model,
+            candidate_id=f"epoch-{key}",
+            task_id=f"epoch-task-{key}",
+        )
+
+    def adopt_compaction(self, frozen):
+        with self.scope():
+            with self.saver._context_reader.open_snapshot(
+                self.owner.session_id, self.owner.thread_id, frozen.checkpoint_ns,
+            ) as snapshot:
+                expected_view = self.saver._storage.checkpoints.active_view_id(snapshot)
+            if expected_view is None:
+                raise RuntimeError("epoch-test-active-view-missing: 采用前活动 view 不存在")
+            applied = self.saver.adopt_candidate(
+                self.config,
+                ApplyCompactionCandidateIntent(frozen, expected_view),
+            )
+        self.config = applied.config
+
+    async def compact(self, key: str, model: BaseChatModel) -> None:
+        frozen, _result = await self.prepare_compaction(key, model)
+        self.adopt_compaction(frozen)
 
     def rewind(self, checkpoint: str, *, anchor: str | None = None, anchor_mode: str = "inclusive") -> None:
         with self.scope():
@@ -427,10 +461,9 @@ def test_prepare_pending_reuses_empty_read_but_default_freeze_reads_again(epoch_
     assert case.source_rows() == before
 
 
-@pytest.mark.parametrize("minimal_system", (False, True))
 @pytest.mark.parametrize("with_transition", (False, True))
-def test_summary_reads_rebuild_once_without_applying_sources_or_epoch(
-    epoch_case, rebuild_reads, minimal_system, with_transition,
+def test_summary_does_not_read_rebuild_or_apply_sources_or_epoch(
+    epoch_case, rebuild_reads, frozen_summary_prepare, with_transition,
 ):
     case = epoch_case
     if with_transition:
@@ -440,16 +473,12 @@ def test_summary_reads_rebuild_once_without_applying_sources_or_epoch(
         case.manager.observe("workspace:rules", "待摘要的第二版", revision="rules:2")
     before, pending, view = case.source_rows(), case.pending_rows(), case.active_view()
     items = case.saver._storage.storage.read_items(case.owner.session_id, case.owner.thread_id)
-    messages = tuple(project_summary_source(group) for group in summary_source_groups(items).values())
     rebuild_reads.clear()
-    result = case.prepare(
-        "summary-read", request_messages=messages,
-        summary_candidate=SummaryCandidateScope(0, "initial", False, minimal_system, canonical_messages=messages),
-    )
-    assert len(rebuild_reads) == 1
-    assert (rebuild_reads[0] is not None) is with_transition
+    result = frozen_summary_prepare(case.saver, case.owner.session_id, case.owner.thread_id,
+                                    key="summary-read", items=items)
+    assert rebuild_reads == []
     snapshot = case.snapshot(result)
-    assert snapshot.selection_policy == "summary_candidate"
+    assert snapshot.selection_policy == "derived_request"
     assert snapshot.seal_binding.source_revisions == ()
     assert snapshot.seal_binding.prefix.consumed_transition is None
     assert case.source_rows() == before
@@ -633,10 +662,14 @@ def test_rebuild_rejects_state_header_mismatch_without_committing(epoch_case, mo
 
 
 @pytest.mark.parametrize("boundary", ("rewind", "compaction"))
-def test_real_rebuild_intent_uses_boundary_transaction_and_rolls_back_before_retry(
-    epoch_case, monkeypatch, boundary,
+@pytest.mark.asyncio
+async def test_real_rebuild_intent_uses_boundary_transaction_and_rolls_back_before_retry(
+    epoch_case, monkeypatch, boundary, compaction_summary_model,
 ):
     case = epoch_case
+    candidate = None
+    if boundary == "compaction":
+        candidate, _result = await case.prepare_compaction("typed-compaction", compaction_summary_model)
     before = tuple(case.connection.iterdump())
     jsonl = case.saver._storage.storage.jsonl_path(case.owner.session_id, thread_id=case.owner.thread_id)
     before_jsonl = jsonl.read_bytes()
@@ -670,16 +703,15 @@ def test_real_rebuild_intent_uses_boundary_transaction_and_rolls_back_before_ret
         if fail:
             raise RuntimeError("injected typed rebuild boundary failure")
 
-    def rebuild():
+    async def rebuild():
         if boundary == "rewind":
             case.rewind("checkpoint-first")
         else:
-            case.checkpoint("checkpoint-typed-compaction", compaction=True,
-                            messages=[case.user, AIMessage(content="typed 事务摘要", id="typed-summary")])
+            case.adopt_compaction(candidate)
 
     monkeypatch.setattr(case.saver, "consume_mutation_intent", observe)
     with pytest.raises(RuntimeError, match="injected typed rebuild"):
-        rebuild()
+        await rebuild()
     assert len(receipts) == 1
     assert tuple(case.connection.iterdump()) == before
     assert jsonl.read_bytes() == before_jsonl
@@ -687,7 +719,7 @@ def test_real_rebuild_intent_uses_boundary_transaction_and_rolls_back_before_ret
         (owner, facade.consumed_keys) for owner, facade in case.saver._mutation_intent_facades.items()
     ) == before_facades
     fail = False
-    rebuild()
+    await rebuild()
     assert len(receipts) == 2
     intent = receipts[-1]
     assert case.pending_rows()[0][1:4] == (intent.target_view_id, boundary, "pending")
@@ -1154,7 +1186,10 @@ def test_promoted_snapshot_root_preserves_activation_frontier_through_actual_rew
 
 
 @pytest.mark.parametrize("boundary", ("rewind", "compaction"))
-def test_visible_snapshot_is_carried_from_committed_detail_after_restart(epoch_case, boundary):
+@pytest.mark.asyncio
+async def test_visible_snapshot_is_carried_from_committed_detail_after_restart(
+    epoch_case, boundary, compaction_summary_model,
+):
     case = epoch_case
     binding = case.load_snapshot()
     visible = case.prepare("snapshot-before-cutoff")
@@ -1164,8 +1199,7 @@ def test_visible_snapshot_is_carried_from_committed_detail_after_restart(epoch_c
     if boundary == "rewind":
         case.rewind("checkpoint-snapshot-visible")
     else:
-        case.checkpoint("checkpoint-snapshot-compacted", compaction=True,
-                        messages=[case.user, AIMessage(content="压缩后的摘要", id="snapshot-summary")])
+        await case.compact("snapshot-compacted", compaction_summary_model)
     (pending,) = case.pending_rows()
     assert pending[2:] == (boundary, "pending", None)
     case.publisher.publish(binding.display_uri, "snapshot:wrong", "不得读取的当前正文", available=False)
@@ -1308,21 +1342,41 @@ def test_untrack_before_and_after_checkpoint_changes_actual_rewind_tracking(epoc
     assert case.manager.prepare_pending() is None
 
 
-def test_actual_compaction_checkpoint_defers_epoch_and_materializes_full_sources(
-    epoch_case, rebuild_reads, rebuild_state_scans,
+@pytest.mark.asyncio
+async def test_actual_compaction_candidate_defers_epoch_and_rebuilds_frozen_sources(
+    epoch_case, rebuild_reads, rebuild_state_scans, compaction_summary_model,
 ):
     case = epoch_case
     second = case.advance()
-    old_snapshot = canonical_json_bytes(case.snapshot(second).to_dict())
-    before_assemblies = case.connection.execute("SELECT count(*) FROM context_assemblies").fetchone()
-    case.checkpoint("checkpoint-compacted", compaction=True, messages=[case.user, AIMessage(content="压缩摘要", id="summary-epoch")])
+    second_bytes = canonical_json_bytes(case.snapshot(second).to_dict())
+    before_assemblies = case.saver.list_context_assemblies(
+        case.owner.session_id, case.owner.thread_id,
+    )
+    await case.compact("source-epoch-compaction", compaction_summary_model)
     (pending,) = case.pending_rows()
     assert pending[2:] == ("compaction", "pending", None)
-    assert case.connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == before_assemblies
+    after_assemblies = case.saver.list_context_assemblies(
+        case.owner.session_id, case.owner.thread_id,
+    )
+    before_main_assemblies = tuple(
+        assembly.assembly_id for assembly in before_assemblies
+        if assembly.selection_policy == "active_view"
+    )
+    after_main_assemblies = tuple(
+        assembly.assembly_id for assembly in after_assemblies
+        if assembly.selection_policy == "active_view"
+    )
+    assert after_main_assemblies == before_main_assemblies
+    new_assemblies = tuple(
+        assembly for assembly in after_assemblies
+        if assembly.assembly_id not in {existing.assembly_id for existing in before_assemblies}
+    )
+    assert new_assemblies
+    assert all(assembly.selection_policy == "derived_request" for assembly in new_assemblies)
     assert case.snapshot(second).seal_binding.prefix.state.epoch.ordinal == 1
     rebuild_reads.clear()
     rebuild_state_scans.clear()
-    rebuilt = case.prepare("compaction")
+    rebuilt = case.prepare("source-epoch-compaction")
     assert len(rebuild_state_scans) == 1
     assert len(rebuild_reads) == 1
     assert rebuild_reads[0] is not None
@@ -1334,7 +1388,7 @@ def test_actual_compaction_checkpoint_defers_epoch_and_materializes_full_sources
     assert parse_root_section(rebuilt["messages"][0].content, tag="context_sources")["sources"][0]["body"] == "基础规则第二版"
     assert parse_root_section(rebuilt["messages"][-1].content, tag="context_sources")["sources"][0]["body"] == "v2\n"
     assert case.pending_rows()[0][3] == "consumed"
-    assert canonical_json_bytes(case.snapshot(second).to_dict()) == old_snapshot
+    assert canonical_json_bytes(case.snapshot(second).to_dict()) == second_bytes
 
 
 def test_history_replay_never_replays_csm_or_opens_pending_epoch(epoch_case):
@@ -1351,14 +1405,16 @@ def test_history_replay_never_replays_csm_or_opens_pending_epoch(epoch_case):
 
 
 @pytest.mark.parametrize("boundary", ("rewind", "compaction"))
-def test_history_replay_preserves_existing_pending_transition(epoch_case, boundary):
+@pytest.mark.asyncio
+async def test_history_replay_preserves_existing_pending_transition(
+    epoch_case, boundary, compaction_summary_model,
+):
     case = epoch_case
     second = case.advance()
     if boundary == "rewind":
         case.rewind("checkpoint-first")
     else:
-        case.checkpoint("checkpoint-history-compacted", compaction=True,
-                        messages=[case.user, AIMessage(content="历史回放前的摘要", id="history-summary")])
+        await case.compact("history-compacted", compaction_summary_model)
     pending, states = case.pending_rows(), case.source_rows()
     selected, dispatch = case.selected_rows(), case.dispatch_rows()
     snapshots = tuple(canonical_json_bytes(case.snapshot(prepared).to_dict())

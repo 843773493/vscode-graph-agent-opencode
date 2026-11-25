@@ -50,11 +50,11 @@ test("消息流投影随增量和补齐的用户时间更新，保留此前展�
     return getConversationsForSession(sessionId, state)[0]!;
   };
   const first = append("甲", 2);
-  expect(first.responseParts?.[0]?.text).toBe("甲");
+  expect(first.responseItems?.[0]?.text).toBe("甲");
   expect(first.activityStats?.duration_ms).toBeNull();
   const second = append("乙", 3);
-  expect(second.responseParts?.[0]?.text).toBe("甲乙");
-  expect(first.responseParts?.[0]?.text).toBe("甲");
+  expect(second.responseItems?.[0]?.text).toBe("甲乙");
+  expect(first.responseItems?.[0]?.text).toBe("甲");
   state.pendingConversations.set(sessionId, [{
     ...conversation,
     userMessage: {
@@ -65,7 +65,7 @@ test("消息流投影随增量和补齐的用户时间更新，保留此前展�
   }]);
   const timed = getConversationsForSession(sessionId, state)[0]!;
   expect(timed.activityStats?.duration_ms).toBe(2000);
-  expect(timed.responseParts).toEqual(second.responseParts);
+  expect(timed.responseItems).toEqual(second.responseItems);
   expect(second.activityStats?.duration_ms).toBeNull();
 });
 
@@ -678,7 +678,7 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
       updated_at: "2026-10-09T00:00:01Z",
     }],
     thinkingBlocks: [{ kind: "reasoning", text: "已收到的实时思考" }],
-    responseParts: [],
+    responseItems: [],
     events: [{
       event_id: "evt_active_identity", session_id: sessionId, thread_id: "thr_018f0000000070008000000000000001", job_id: jobId,
       type: "text_delta", phase: "text", title: "文本增量", content: "实时事件正文",
@@ -736,7 +736,7 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
       expect(projected.assistantMessages).toBe(live.assistantMessages);
       expect(projected.events).toBe(live.events);
       expect(projected.thinkingBlocks).toBe(live.thinkingBlocks);
-      expect(projected.responseParts).toBe(live.responseParts);
+      expect(projected.responseItems).toBe(live.responseItems);
       expect(state.pendingConversations.get(mapKey)?.[0]?.rootLogicalItemOrdinal).toBeUndefined();
     }
     state.turnTimelinesBySession.set(mapKey, upsertTurn({ ...createSessionTurnTimeline(mapKey), threadId: "thr_018f0000000070008000000000000001" },
@@ -876,8 +876,8 @@ test("terminal 历史投影替换 live 镜像并保留权威 Item 统计", () =>
           created_at: "2026-09-08T00:00:00Z",
         }],
         response_preview: "OK",
-        response_parts: [{
-          part_id: "final-history",
+        response_items: [{
+          id: "final-history",
           kind: "final_text" as const,
           projection: "summary" as const,
           status: "completed" as const,
@@ -904,8 +904,8 @@ test("terminal 历史投影替换 live 镜像并保留权威 Item 统计", () =>
       created_at: "2026-09-08T00:00:00Z",
       updated_at: "2026-09-08T00:00:00Z",
     },
-    responseParts: [{
-      part_id: "reasoning-live",
+    responseItems: [{
+      id: "reasoning-live",
       kind: "reasoning",
       projection: "streaming",
       status: "completed",
@@ -930,7 +930,7 @@ test("terminal 历史投影替换 live 镜像并保留权威 Item 统计", () =>
   expect(conversation?.displayMode).toBe("history");
   expect(conversation?.source).toBe("turn");
   expect(conversation?.activityStats).toEqual({ duration_ms: 7100, item_count: 5 });
-  expect(conversation?.responseParts?.map((part) => part.text)).toEqual(["OK"]);
+  expect(conversation?.responseItems?.map((part) => part.text)).toEqual(["OK"]);
 });
 
 test("terminal live 与 history Item 数不一致时显式报告协议错误", () => {
@@ -1058,7 +1058,7 @@ test("同一 terminal Turn 保留历史正文并选择最高序号消息流作�
 
   expect(conversation?.messageStream?.streamStatus).toBe("completed");
   expect(conversation?.assistantMessages?.[0]?.content).toBe("历史正文");
-  expect(conversation?.responseParts).toEqual([]);
+  expect(conversation?.responseItems).toEqual([]);
 });
 
 test("Job failed 镜像优先于迟到的 open message stream", () => {

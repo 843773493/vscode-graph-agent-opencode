@@ -29,7 +29,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 from tests.support.trace_storage import trace_bytes
 
 
-@pytest.mark.parametrize("operation", ["cancel", "shutdown", "shutdown-write-failure", "retry"])
+@pytest.mark.parametrize("operation", ["cancel", "shutdown", "shutdown-write-failure", "redispatch_needs_attention"])
 async def test_accepted_job_survives_projection_failure(
     source_case: RuntimeSourceCase, monkeypatch: pytest.MonkeyPatch, operation: str,
 ) -> None:
@@ -49,7 +49,7 @@ async def test_accepted_job_survives_projection_failure(
     await case.plan(session_id, [{"content": "原接受项经唯一队列重试完成。"}])
     try:
         with monkeypatch.context() as fault:
-            fault.setattr(jobs._input_owner, "accepted_job_outcome", fail_projection)
+            fault.setattr(jobs._pending_requests, "load", fail_projection)
             run = await _check(case, task)
             failed = await _run(case, task, run, "failed")
         wakeup = dispatcher.submitted(session_id, thread_id, idempotency_key=run["run_id"])
@@ -92,29 +92,28 @@ async def test_accepted_job_survives_projection_failure(
             assert response.status == JobStatus.cancelled
         else:
             await dispatcher.dispatch(wakeup)
-            await _job(case, wakeup.job_id)
+            # 准入后的业务 ValueError 已使原任务进入 needs_attention；重派不能绕过控制 owner。
+            result = await _job(case, wakeup.job_id, expected="cancelled")
+            assert result["error_message"] == "持久任务已变化或停止，取消尚未执行的请求"
             assert jobs._jobs[wakeup.job_id] is job
-            assert len(case.requests()) == 1 and case.call_count(session_id, thread_id) == 1
-            assert case.sql(session_id, thread_id,
-                "SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash FROM executions") == identity
+            assert job.status == JobStatus.cancelled
 
-        if operation != "retry":
-            assert job.status == JobStatus.cancelled and job.ended_at is not None
-            assert jobs._pending_queue.queued_job_ids(session_id) == ()
-            assert await jobs.drain_blockers() == [] and jobs._thread_current_job == {}
-            assert jobs._pending_queue.snapshot_version(session_id) > 0
-            assert case.call_count(session_id, thread_id) == 0 and case.requests() == []
-            if operation.startswith("shutdown"):
-                events = [json.loads(line) for line in trace_bytes(trace_path).splitlines()]
-                job_events = [event for event in events if event["job_id"] == wakeup.job_id]
-                assert [event["type"] for event in job_events].count("job_cancelled") == 1
-                assert all(event["type"] != "session_interrupted" for event in job_events)
-            with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as cold:
-                assert cold.execute("SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash,outcome FROM executions").fetchall() == [(*identity[0], "cancelled")]
-            if operation == "cancel":
-                await dispatcher.dispatch(wakeup)
-                assert jobs._jobs[wakeup.job_id] is job and job.task is None
-                assert case.call_count(session_id, thread_id) == 0
+        assert job.status == JobStatus.cancelled and job.ended_at is not None
+        assert jobs._pending_queue.queued_job_ids(session_id) == ()
+        assert await jobs.drain_blockers() == [] and jobs._thread_current_job == {}
+        assert jobs._pending_queue.snapshot_version(session_id) > 0
+        assert case.call_count(session_id, thread_id) == 0 and case.requests() == []
+        if operation.startswith("shutdown"):
+            events = [json.loads(line) for line in trace_bytes(trace_path).splitlines()]
+            job_events = [event for event in events if event["job_id"] == wakeup.job_id]
+            assert [event["type"] for event in job_events].count("job_cancelled") == 1
+            assert all(event["type"] != "session_interrupted" for event in job_events)
+        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as cold:
+            assert cold.execute("SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash,outcome FROM executions").fetchall() == [(*identity[0], "cancelled")]
+        if operation == "cancel":
+            await dispatcher.dispatch(wakeup)
+            assert jobs._jobs[wakeup.job_id] is job and job.task is None
+            assert case.call_count(session_id, thread_id) == 0
         case.write_actual(f"accepted-{operation}", {"identity": identity, "failed_run": failed, "status": job.status.value})
     finally:
         # 红测也沿原装载/关闭入口结清，避免残留 Backend 污染后续用例。

@@ -191,6 +191,8 @@ describe("Composer /compact 命令", () => {
     let notice = "";
     const result: SessionCompactResult = {
       session_id: "session",
+      thread_id: "thread",
+      task_id: "compaction-test",
       status: "scheduled",
       message: "将在下一次完整模型请求前执行",
       before_message_count: 12,

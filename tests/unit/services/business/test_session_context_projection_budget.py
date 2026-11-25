@@ -9,6 +9,9 @@ from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
 )
 from app.services.business.session_context_query.pagination import paginate_read_items
+from app.services.business.session_context_query.projection import (
+    SessionContextReadSnapshot,
+)
 from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,
@@ -52,3 +55,34 @@ def test_complete_items_keep_exact_budget_across_decimal_boundaries(
         assert result.items == items
     assert result.items and all(item.kind == "message" for item in result.items)
     assert result.items[0].text == items[0].text
+
+
+def test_unavailable_original_count_keeps_records_and_diagnostic_inside_each_page_budget(context_request):
+    item = SessionContextItemDTO(
+        kind="record", resource_identity=context_request.resource_identity,
+        uri=context_request.uri, scope=context_request.scope,
+        text='历史摘要"与保留尾部\\\n' * 400, record_index=0,
+    )
+    snapshot = SessionContextReadSnapshot.model_validate_json(SessionContextReadSnapshot(
+        revision="summary-only-fork", items=[item], compacted=True,
+        raw_message_count=None, effective_record_count=1,
+    ).model_dump_json())
+    request = context_request.model_copy(update={"max_chars": 2048})
+    chunks = []
+    for _ in range(100):
+        page = snapshot.page(request)
+        assert page.raw_message_count is None and page.compacted
+        assert page.effective_record_count == 1
+        assert len(page.partial_errors) == 1
+        assert page.partial_errors[0].resource_identity == request.resource_identity
+        assert page.partial_errors[0].error.startswith("detail-unavailable:")
+        assert page.returned_chars == len(page.model_dump_json()) <= request.max_chars
+        assert len(page.items) == 1 and page.items[0].kind == "record_chunk"
+        chunks.append(page.items[0].text)
+        if not page.has_more:
+            break
+        assert page.next_cursor is not None
+        request = request.model_copy(update={"cursor": page.next_cursor})
+    else:
+        pytest.fail("带计数诊断的上下文分页未收敛")
+    assert "".join(chunks) == item.model_dump_json()

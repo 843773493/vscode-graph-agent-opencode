@@ -327,7 +327,7 @@ class RolloutSchemaIntrospectionMixin:
         validate_schema_journal(connection, schema_version)
 
     @staticmethod
-    def _validate_v2_commit_offsets(
+    def _validate_commit_offsets(
         connection: sqlite3.Connection,
         jsonl_path: Path,
         *,

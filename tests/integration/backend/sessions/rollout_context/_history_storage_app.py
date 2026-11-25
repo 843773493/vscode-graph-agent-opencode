@@ -11,7 +11,6 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from app.services.infrastructure import rollout_checkpoint_runtime as runtime
 from app.services.infrastructure.rollout_context.checkpoint.durable import (
     operations,
-    persistence,
 )
 from app.services.infrastructure.rollout_context.fork import snapshot_copy
 from app.services.infrastructure.rollout_context.storage.catalog.unreferenced_content import (
@@ -80,7 +79,7 @@ def measured_collect(connection):
     return removed
 
 
-for owner in (operations, persistence, snapshot_copy):
+for owner in (operations, snapshot_copy):
     owner.collect_unreferenced_content = measured_collect
 
 

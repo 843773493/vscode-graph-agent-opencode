@@ -135,17 +135,32 @@ async def test_fork_keeps_generic_delta_parent_writes_and_excludes_seed_pending(
         restored = await cold_graph.aget_state(target_config) if asynchronous else cold_graph.get_state(target_config)
         if generic_delta:
             assert restored.values["events"] == actual["events"] == ["原输入", "第一步", "第二步"]
-        expected_messages = [(message.id, message.content) for message in actual["messages"]]
-        if mode == "full_rollout_copy":
-            # full 保留已接受的 canonical 历史，但不复制其调度权或自动执行。
-            expected_messages.append((pending.message_id, pending.content))
-        assert [(message.id, message.content) for message in restored.values["messages"]] == expected_messages
+        # 未领取输入不进入执行上下文；full 复制历史也不能绕过首次领取边界。
+        assert [(message.id, message.content) for message in restored.values["messages"]] == [
+            (message.id, message.content) for message in actual["messages"]
+        ]
         target_head = cold.get_tuple(target_config)
         if generic_delta:
             assert target_head.metadata["counters_since_delta_snapshot"]["events"] == frozen.metadata["counters_since_delta_snapshot"]["events"]
         assert "messages" not in target_head.metadata["counters_since_delta_snapshot"]
         index = cold._storage.storage.root(target.session.session_id, thread_id=target.thread_id) / "index.sqlite"
         with sqlite3.connect(index) as connection:
+            pending_item_id = f"item-{pending.message_id}"
+            pending_item = connection.execute(
+                "SELECT item_id FROM item_catalog WHERE item_id=?", (pending_item_id,),
+            ).fetchone()
+            if mode == "full_rollout_copy":
+                # 来源已删除后仍从目标原件读取，分别核验历史保留和活动上下文隔离。
+                assert pending_item == (pending_item_id,)
+                retained = cold._storage.storage._read_canonical_item_from_catalog(
+                    connection, session_id=target.session.session_id, thread_id=target.thread_id,
+                    checkpoint_ns="", item_id=pending_item_id,
+                )
+                assert retained.payload == pending.content
+                assert retained.turn_id == identity.turn_id
+                assert retained.producer_ref["producer_id"] == pending.message_id
+            else:
+                assert pending_item is None
             parent, = connection.execute("SELECT parent_checkpoint_id FROM checkpoints WHERE checkpoint_id=?", (target_head.config["configurable"]["checkpoint_id"],)).fetchone()
             assert parent == (frozen.parent_config["configurable"]["checkpoint_id"] if generic_delta else None)
             if not generic_delta:

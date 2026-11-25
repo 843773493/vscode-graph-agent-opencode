@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { t } from "../../../../shared/core/i18n/index.js";
 import type {
@@ -435,8 +436,8 @@ export default function WorkspaceFilePreviewArea({
           <div className="workspace-preview-status">{t("workspace.preview.readingFile", loadingPath)}</div>
         ) : null}
         {error ? (
-          <div className="workspace-preview-error" role="alert">
-            {error}
+          <div className="workspace-preview-error failure-summary" role="alert">
+            {failureSummary(error)}
           </div>
         ) : null}
       </div>

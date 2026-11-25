@@ -74,9 +74,14 @@ async def test_default_agent_source_command_preserves_owner_and_source(
     text = (workspace / ".boxteam/workspace.jsonc").read_text()
     assert text.startswith("// 原来源注释：经来源 API 保存\n")
     config = commentjson.loads(text)
-    assert config["default_agent"] == "reviewer", "Agent 表单改动经原来源保存"
-    assert all(item["api_key"] == "e2e-local-model-key" for item in config["llm"]["providers"]), "脱敏投影不能覆盖原秘密"
-    assert commentjson.loads((other / ".boxteam/workspace.jsonc").read_text())["default_agent"] == "default"
+    other_config = commentjson.loads((other / ".boxteam/workspace.jsonc").read_text())
+    assert config["settings"]["workspace"]["default_agent"] == "reviewer", "Agent 表单改动经原来源保存"
+    assert {
+        name: profile["settings"]["model_options"].get("api_key") for name, profile in config["profiles"].items()
+    } == {
+        name: profile["settings"]["model_options"].get("api_key") for name, profile in other_config["profiles"].items()
+    }, "脱敏投影不能覆盖原秘密"
+    assert other_config["settings"]["workspace"]["default_agent"] == "default"
     with provider.control._condition:
         calls = {key: count for key, count in provider.control._counters.items() if key.startswith("model_call/")}
     assert calls == {}, "设置来源管理不能触发 Agent 模型请求"

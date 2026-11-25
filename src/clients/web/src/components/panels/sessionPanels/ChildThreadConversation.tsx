@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import { memo, useCallback, useMemo } from "react";
 import { Virtuoso } from "react-virtuoso";
@@ -15,7 +16,7 @@ import MarkdownContent from "../../chat/MarkdownContent";
 import { TurnActivitySummary } from "../../chat/turn/TurnActivitySummary";
 import { ProcessActivity } from "../../chat/turn/TurnActivitySummary";
 import { TranscriptViewContext, useTranscriptView } from "../../chat/TranscriptViewContext";
-import { responsePartsToTimelineItems } from "../../../state/timeline/responseParts";
+import { responseItemsToTimelineItems } from "../../../state/timeline/responseItems";
 import type { LoadTurnDetails } from "../../chat/turn/types";
 import { ChatItemOwnerContext, copyItemAction, useChatItemMenu } from "../../chat/itemContextMenu";
 import MessageSubmissionRecovery from "../../composer/MessageSubmissionRecovery";
@@ -101,7 +102,7 @@ const ChildConversationTimeline = memo(function ChildConversationTimeline({
       if (!execution) throw new Error("子 Thread 展示段缺少 execution");
       return <ProcessActivity process={{kind:"execution",id:item.executionId}} settled
         segment={item.kind === "execution_response" ? item.itemId : undefined}
-        groups={item.kind === "execution_response" ? buildRenderGroups(responsePartsToTimelineItems(item.parts)) : []}
+        groups={item.kind === "execution_response" ? buildRenderGroups(responseItemsToTimelineItems(item.parts)) : []}
         status={{title:childExecutionStatusLabel(execution.status),icon:execution.failure ? "codicon-error" : "codicon-check",detail:execution.failure?.message}}
         outline={execution.activityOutline} loadDetails={loadDetails} showRawDetails={false}
         binding={page?.source_view_id && page.source_view_revision !== undefined ? {sourceViewId:page.source_view_id,sourceViewRevision:page.source_view_revision}:undefined} />;
@@ -124,7 +125,7 @@ export default function ChildThreadConversation({ thread, conversation, onFork }
         {onFork ? <button type="button" onClick={() => onFork({})}>{t("child.fork")}</button> : null}
         {page?.has_before ? <button type="button" onClick={() => void conversation.loadEarlier()} disabled={snapshot.loading}>{t("child.earlier")}</button> : null}
       </div>
-      {snapshot.error ? <p className="panel-feedback" role="alert">{snapshot.error}</p> : null}
+      {snapshot.error ? <p className="panel-feedback failure-summary" role="alert">{failureSummary(snapshot.error)}</p> : null}
 
 
       <ChatItemOwnerContext.Provider value={conversation.owner}>

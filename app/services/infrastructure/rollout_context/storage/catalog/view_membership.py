@@ -282,6 +282,8 @@ class RolloutViewMembershipMixin:
             next_ordinal,
             field="context_view_items.logical_item_ordinal",
         )
+        # display_only 区分展示来源，不取消上下文资格；pending notice 仍须由
+        # execution fence 和 acceptance 消费选集决定是否进入本次请求。
         append_members(connection, view_id, (
             (item_id, next_ordinal + offset, 1, source_kind, 1, next_context + offset)
             for offset, item_id in enumerate(pending)
@@ -391,6 +393,21 @@ class RolloutViewMembershipMixin:
         }
         rows: list[tuple[str, int, int, int | None, str | None]] = []
         sequence_set = set(materialized_sequences)
+        parent_turn_sequences: dict[str, set[int]] = {}
+        if parent_view_id is not None:
+            # 只按冻结父 view 读一次；不能逐 Turn 扫 view，也不能从全物理 Turn
+            # 读完所有已被 rewind 排除的消息后才回头核 membership。
+            for turn, sequence in connection.execute(
+                "SELECT message.turn_id,message.message_sequence FROM context_view_items member "
+                "CROSS JOIN item_catalog item ON item.item_id=member.item_id "
+                "CROSS JOIN messages message ON message.jsonl_offset=item.jsonl_offset "
+                "AND message.jsonl_length=item.jsonl_length "
+                "WHERE member.view_id=? AND member.visible=1 AND message.turn_id IS NOT NULL",
+                (parent_view_id,),
+            ):
+                parent_turn_sequences.setdefault(strict_text(turn, field="messages.turn_id"), set()).add(
+                    strict_non_negative_int(sequence, field="messages.message_sequence"),
+                )
         last_turn_ordinal = strict_non_negative_int(
             connection.execute(
                 "SELECT COALESCE(MAX(logical_turn_ordinal), 0) FROM context_view_turns WHERE view_id=?",
@@ -440,23 +457,15 @@ class RolloutViewMembershipMixin:
             # 被替换版本及 fork 的增量恢复 backing，不能要求它们全部可见。
             # 新出现的 Turn 才使用当前已提交消息；并发序号仍不能按连续范围推断。
             inherited_turn = row[6] is not None
-            turn_sequences = {
-                strict_non_negative_int(
-                    message_row[0], field=f"messages.message_sequence: {value}"
-                )
-                for message_row in connection.execute(
-                    # 固定先按 Turn 定位消息再核 membership；SQLite 若先扫父 view，
-                    # 每个 Turn 都会重扫全部父成员，使 checkpoint 创建退化为 O(Turn 数 × 成员数)。
-                    "SELECT m.message_sequence FROM messages m "
-                    "CROSS JOIN item_catalog i ON i.jsonl_offset=m.jsonl_offset AND i.jsonl_length=m.jsonl_length "
-                    "CROSS JOIN context_view_items member ON member.item_id=i.item_id "
-                    "WHERE member.view_id=? AND member.visible=1 AND m.turn_id=?"
-                    if inherited_turn else
-                    "SELECT message_sequence FROM messages WHERE turn_id=?",
-                    (parent_view_id, value) if inherited_turn else (value,),
-                ).fetchall()
-            }
-            if not turn_sequences or not turn_sequences.issubset(sequence_set):
+            turn_sequences = iter(parent_turn_sequences.get(value, ())) if inherited_turn else (
+                strict_non_negative_int(message_row[0], field=f"messages.message_sequence: {value}")
+                for message_row in connection.execute("SELECT message_sequence FROM messages WHERE turn_id=?", (value,))
+            )
+            # 只需一个未选序号就能证明不完整，不物化被排除的整个物理 Turn。
+            first_selected_sequence = next(turn_sequences, None)
+            if first_selected_sequence is None or first_selected_sequence not in sequence_set or any(
+                sequence not in sequence_set for sequence in turn_sequences
+            ):
                 continue
             # 复用同一查询中已校验的 Turn 坐标与 root，不再逐 Turn 回读、重复解码。
             # 前缀 fork 的隐藏 final 仍按父 view 判断；本来没有 final 时无需查父指针。

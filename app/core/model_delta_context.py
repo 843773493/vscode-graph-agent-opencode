@@ -11,10 +11,14 @@ from typing import Protocol
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
-from app.core.model_request_context import current_summary_candidate
-
 
 class ModelDeltaSink(Protocol):
+    def register_tool_start(
+        self, model_call_id: str, tool_call_id: str, callback_run_id: str,
+    ) -> None: ...
+
+    def observe_tool_completion(self, callback_run_id: str) -> None: ...
+
     async def complete_tool_approval(self, message: ToolMessage, *, model_call_id: str) -> None: ...
 
     async def prepare_tool_execution(self, model_call_id: str) -> None: ...
@@ -66,7 +70,7 @@ def model_tool_invocation_scope(model_call_id: str, tool_call_id: str) -> Iterat
         _CURRENT_TOOL_INVOCATION.reset(token)
 
 
-def set_current_model_delta_sink(sink: ModelDeltaSink) -> Token[ModelDeltaSink | None]:
+def set_current_model_delta_sink(sink: ModelDeltaSink | None) -> Token[ModelDeltaSink | None]:
     return _CURRENT_MODEL_DELTA_SINK.set(sink)
 
 
@@ -140,6 +144,37 @@ def resolve_model_run_id(
     return str(raw_run_id) if raw_run_id is not None else None
 
 
+class AgentToolExecutionCallbackHandler(BaseCallbackHandler):
+    """在通知入队前冻结工具边界；不等待消费者或执行持久化。"""
+
+    run_inline = True
+    raise_error = True
+
+    def __init__(self, sink: ModelDeltaSink | None = None) -> None:
+        super().__init__()
+        self._sink = sink
+
+    def on_tool_start(self, *_args: object, **kwargs: object) -> None:
+        if self._sink is None or kwargs.get("tool_call_id") is None:
+            return
+        invocation = _CURRENT_TOOL_INVOCATION.get()
+        if invocation is None or kwargs["tool_call_id"] != invocation.tool_call_id:
+            raise RuntimeError("LangChain tool start 回调缺少一致的 emitting tool invocation")
+        run_id = kwargs.get("run_id")
+        if run_id is None:
+            raise RuntimeError("LangChain tool start 回调缺少 run_id")
+        self._sink.register_tool_start(
+            invocation.model_call_id, invocation.tool_call_id, callback_run_id=str(run_id),
+        )
+
+    def on_tool_end(self, *_args: object, **kwargs: object) -> None:
+        if self._sink is not None:
+            self._sink.observe_tool_completion(callback_run_id=str(kwargs["run_id"]))
+
+    def on_tool_error(self, *_args: object, **kwargs: object) -> None:
+        self.on_tool_end(**kwargs)
+
+
 class AgentRunLifecycleCallbackHandler(BaseCallbackHandler):
     """转交真实 LangChain run 身份，并等待 sink 确认工具可以开始。"""
 
@@ -156,12 +191,6 @@ class AgentRunLifecycleCallbackHandler(BaseCallbackHandler):
         if run_id is None:
             raise RuntimeError("LangChain model start 回调缺少 run_id")
         if self._sink is not None:
-            candidate = current_summary_candidate()
-            if candidate is not None:
-                register_candidate = getattr(self._sink, "register_summary_candidate", None)
-                if not callable(register_candidate):
-                    raise TypeError("摘要调用需要支持隐藏候选正文的 ModelDeltaSink")
-                register_candidate(str(run_id))
             register_model_run_id(self._sink, run_id)
 
     async def on_tool_start(self, *_args: object, **kwargs: object) -> None:

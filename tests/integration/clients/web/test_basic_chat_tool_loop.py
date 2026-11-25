@@ -63,8 +63,9 @@ def chat_backend(
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = config["llm"]["providers"]["primary"]
-    provider["defaults"].update(
+    workspace = config["settings"]["workspace"]
+    provider = workspace["llm"]["providers"]["primary"]
+    config["profiles"]["provider.primary"]["settings"]["model_options"].update(
         {
             "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
             "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
@@ -72,9 +73,9 @@ def chat_backend(
         }
     )
     provider["models"]["default"]["model"] = "browser-chat-tool-loop-stub"
-    for agent in config["agents"].values():
+    for agent in workspace["agents"].values():
         agent["model"]["fallbacks"] = []
-    gateway_connection = config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})
+    gateway_connection = workspace.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})
     if gateway_connection.get("url") in {None, "http://127.0.0.1:8014"}:
         gateway_connection["url"] = f"http://127.0.0.1:{port_block.port(20)}"
     config_path.write_text(

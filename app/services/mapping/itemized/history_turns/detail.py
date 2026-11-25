@@ -13,7 +13,7 @@ from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.turn import (
     TurnActivityStatsDTO,
     TurnDetailDTO,
-    TurnResponsePartDTO,
+    TurnResponseItemDTO,
     TurnThinkingBlockDTO,
     TurnToolSummaryDTO,
 )
@@ -22,7 +22,6 @@ from app.services.mapping.itemized.history_turns.content import (
     is_internal,
     message_id,
     message_time,
-    nonnegative_int,
     projection_time,
     thinking_blocks,
     user_message,
@@ -49,7 +48,7 @@ def build_detail(
     source_view_revision: int,
     message_sequences: list[int] | None = None,
     projection: Mapping[str, object] | None = None,
-    response_parts: list[TurnResponsePartDTO] | None = None,
+    response_items: list[TurnResponseItemDTO] | None = None,
     tool_call_ids: frozenset[str] | None = None,
     include_final: bool = True,
 ) -> TurnDetailDTO:
@@ -198,22 +197,10 @@ def build_detail(
     activity_stats = TurnActivityStatsDTO()
     raw_activity_stats = projection.get("activity_stats") if projection else None
     if projection is not None and isinstance(raw_activity_stats, Mapping):
-        # 历史统计沿这份 Turn 消息投影的起止时间，不改用 acceptance/终态控制时间。
-        projection_seconds = (updated_at - projection_time(projection, "created_at")).total_seconds()
-        if projection_seconds < 0:
+        # 消息投影仍校验自身时间顺序；耗时只消费原 owner 的生命周期计量。
+        if updated_at < projection_time(projection, "created_at"):
             raise ValueError("历史 Turn projection 结束时间早于创建时间")
-        activity_stats = TurnActivityStatsDTO(
-            duration_ms=int(projection_seconds * 1000),
-            item_count=nonnegative_int(raw_activity_stats.get("item_count")),
-            first_item_sequence=(
-                nonnegative_int(raw_activity_stats.get("first_item_sequence"))
-                or None
-            ),
-            last_item_sequence=(
-                nonnegative_int(raw_activity_stats.get("last_item_sequence"))
-                or None
-            ),
-        )
+        activity_stats = TurnActivityStatsDTO.model_validate(raw_activity_stats)
     tool_summary, tool_summary_truncated = bounded_tool_summary(
         projected_tool_summary
         or [
@@ -259,7 +246,7 @@ def build_detail(
         tool_summary=tool_summary,
         tool_summary_truncated=tool_summary_truncated,
         final_response=final_text,
-        response_parts=response_parts or [],
+        response_items=response_items or [],
         items=selected_tool_items,
         detail_truncated=tool_summary_truncated or final_text_truncated,
         activity_stats=activity_stats,

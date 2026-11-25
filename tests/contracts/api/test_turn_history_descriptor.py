@@ -9,16 +9,46 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from boxteam.workspace.v2 import public_pb2
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
+from google.protobuf.json_format import ParseDict
 from pydantic import ValidationError
 from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.openapi import HTTP_JSON_DESCRIPTORS, assert_public_http_schemas
-from app.protocol.schema import descriptor_pool_from_set
-from app.schemas.internal_v2.turn import TurnHistoryLoadRequest, TurnResponsePartDTO
+from app.protocol.schema import assert_public_schema, descriptor_pool_from_set
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest, TurnResponseItemDTO
+from app.schemas.internal_v2.turn_search import ThreadItemInspectionRequest
 from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
 
 _ROOTS = ("SessionTurnBootstrapDTO", "TurnHistoryLoadRequest", "TurnHistoryPageDTO")
+
+
+def test_execution_output_reference_uses_existing_content_protocol() -> None:
+    request = ThreadItemInspectionRequest.model_validate({"operation": "content", "content_ref": {
+        "kind": "execution_output", "session_id": "ses_019b99f62ca97699a68eacac2b7dda6e",
+        "thread_id": "thr_019b99f62ca97699a68eacac2b7dda6f",
+        "execution_id": "derived-execution", "item_id": "output-item", "content_hash": "sha256:actual",
+    }})
+    wire = ParseDict(request.model_dump(mode="json", exclude_none=True), public_pb2.ThreadItemInspectionRequest())
+    assert wire.content_ref.execution_id == "derived-execution"
+    assert wire.content_ref.content_hash == "sha256:actual"
+    with pytest.raises(ValidationError, match="仅用于读取结果正文或格式"):
+        ThreadItemInspectionRequest.model_validate({**request.model_dump(), "operation": "trace"})
+
+
+def test_tool_result_marker_survives_public_schema_and_proto_without_execution_timing() -> None:
+    """真实运行时JSON与生成协议均区分结果marker、声明完成和可空时序。"""
+    assert_public_schema(TurnResponseItemDTO.model_json_schema(), public_pb2.TurnResponseItemDTO.DESCRIPTOR)
+    item = TurnResponseItemDTO(id="result-item", kind="tool_result", projection="summary",
+        status="completed", source={"message_sequence": 1, "item_id": "result-item", "item_sequence": 1,
+                                    "created_at": "2026-11-23T00:00:00Z"},
+        tool_call_id="call", tool_outcome="failure")
+    encoded = ParseDict(item.model_dump(mode="json"), public_pb2.TurnResponseItemDTO())
+    assert encoded.HasField("tool_outcome") and encoded.tool_outcome == "failure"
+    assert encoded.status == "completed" and not encoded.HasField("tool_execution")
+    without_marker = item.model_copy(update={"tool_outcome": None})
+    assert not ParseDict(without_marker.model_dump(mode="json"), public_pb2.TurnResponseItemDTO()).HasField("tool_outcome")
 
 
 @pytest.mark.parametrize(("path", "method", "request_model", "response_model"), [
@@ -54,7 +84,7 @@ def test_history_contract_requires_roots(http_openapi: JsonSchemaValue, model: s
     ("TurnHistoryLoadRequest", "tool_call_ids", {"type": "array", "items": {"type": "integer"}}),
     ("TurnHistoryPageDTO", "internal_executions", {"type": "object"}),
     ("TurnResponseSourceDTO", "logical_item_ordinal", {"type": "string"}),
-    ("InternalExecutionDisplayPartDTO", "item_sequence", {"type": "string"}),
+    ("InternalExecutionDisplayItemDTO", "item_sequence", {"type": "string"}),
     ("InternalDisplayProvenanceDTO", "source_thread_id", {"type": "integer"}),
 ])
 def test_history_contract_rejects_nested_shape_drift(
@@ -66,7 +96,7 @@ def test_history_contract_rejects_nested_shape_drift(
     assert "/" + field in str(caught.value)
 
 
-@pytest.mark.parametrize("model", (*_ROOTS, "TurnResponseSourceDTO", "InternalExecutionDisplayPartDTO", "InternalDisplayProvenanceDTO"))
+@pytest.mark.parametrize("model", (*_ROOTS, "TurnResponseSourceDTO", "InternalExecutionDisplayItemDTO", "InternalDisplayProvenanceDTO"))
 def test_history_contract_checks_candidate_descriptor(
     http_openapi: JsonSchemaValue, http_descriptor_bundle: FileDescriptorSet, model: str,
 ) -> None:
@@ -118,11 +148,11 @@ def test_history_business_selection_still_rejects_invalid_combinations(payload: 
 
 
 def test_history_canonical_identity_remains_a_business_constraint() -> None:
-    payload = {"part_id": "part", "kind": "text", "projection": "streaming", "source": {"message_sequence": 0}}
-    assert TurnResponsePartDTO.model_validate(payload).projection == "streaming"
+    payload = {"id": "part", "kind": "text", "projection": "streaming", "source": {"message_sequence": 0}}
+    assert TurnResponseItemDTO.model_validate(payload).projection == "streaming"
     with pytest.raises(ValidationError, match="缺少 canonical item identity"):
-        TurnResponsePartDTO.model_validate({**payload, "projection": "detail"})
+        TurnResponseItemDTO.model_validate({**payload, "projection": "detail"})
     canonical = {"message_sequence": 0, "item_id": "item", "item_sequence": 1, "created_at": "2026-11-01T00:00:00Z"}
-    assert TurnResponsePartDTO.model_validate({**payload, "projection": "detail", "source": canonical}).source.item_id == "item"
-    with pytest.raises(ValidationError, match="live streaming part 不得伪造"):
-        TurnResponsePartDTO.model_validate({**payload, "source": canonical})
+    assert TurnResponseItemDTO.model_validate({**payload, "id": "item", "projection": "detail", "source": canonical}).source.item_id == "item"
+    with pytest.raises(ValidationError, match="live streaming Item 不得伪造"):
+        TurnResponseItemDTO.model_validate({**payload, "source": canonical})

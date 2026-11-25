@@ -3,7 +3,7 @@ import {
   applyMessageStreamEvent as reduceMessageStreamEvent,
   applyMessageStreamSnapshot,
   createMessageStreamState,
-  messageStreamToResponseParts,
+  messageStreamToResponseItems,
   type MessageStreamEvent,
   type MessageStreamState,
   type MessageStreamToolExecution,
@@ -70,6 +70,40 @@ function event(
 }
 
 describe("message stream reducer", () => {
+  test("执行事件缺少真实身份时明确失败，不伪造调用或执行ID", () => {
+    const initial = createMessageStreamState("ses_1", "turn_1", "strm_1", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
+    for (const payload of [{ tool_call_id: "call" }, { tool_execution_id: "exec" }]) {
+      expect(() => applyMessageStreamEvent(initial, event(1, "tool.started", payload))).toThrow("工具执行事件缺少");
+      expect(initial.toolExecutions).toEqual([]);
+    }
+  });
+
+  test("工具执行起止来自源端观察，缺来源不使用事件镜像时间补齐", () => {
+    for (const startedAt of ["2026-11-23T01:00:00Z", undefined]) {
+      const initial = createMessageStreamState("ses_1", "turn_1", "strm_1", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
+      const started = applyMessageStreamEvent(initial, {
+        ...event(1, "tool.started", { tool_execution_id: "exec", tool_call_id: "call", tool_name: "read", started_at: startedAt }),
+        emitted_at: "2026-11-23T01:00:05Z",
+      });
+      const finished = applyMessageStreamEvent(started, {
+        ...event(2, "tool.completed", {
+          tool_execution_id: "exec", tool_call_id: "call", tool_name: "read", status: "completed", outcome: "success",
+          execution_completed_at: "2026-11-23T01:00:10Z",
+        }),
+        emitted_at: "2026-11-23T01:00:20Z",
+      });
+      expect(finished.toolExecutions[0]?.started_at).toBe(startedAt);
+      expect(finished.toolExecutions[0]?.execution_completed_at).toBe("2026-11-23T01:00:10Z");
+      expect(finished.toolExecutions[0]?.completed_at).toBe("2026-11-23T01:00:20Z");
+      const refreshed = applyMessageStreamEvent(initial, event(3, "stream.snapshot", {
+        snapshot_seq: 3, stream_status: "open", agent_loop_status: "validating", current_attempt: 1,
+        tool_executions: finished.toolExecutions, resumable: true,
+      }));
+      expect(refreshed.toolExecutions[0]?.started_at).toBe(startedAt);
+      expect(refreshed.toolExecutions[0]?.execution_completed_at).toBe("2026-11-23T01:00:10Z");
+    }
+  });
+
   test("原失联提交允许后续已提交取消修正，旧快照保留失败", () => {
     const initial = createMessageStreamState("ses_1", "turn_1", "strm_1", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     const failed = applyMessageStreamEvent(initial, event(1, "stream.failed", {
@@ -257,7 +291,7 @@ describe("message stream reducer", () => {
     expect(duplicated.lastEventSeq).toBe(6);
     expect(duplicated).toBe(state);
     expect(duplicated.blocks.map((block) => block.text)).toEqual(["先思考", "回答"]);
-    expect(messageStreamToResponseParts(duplicated).map((part) => part.text)).toEqual([
+    expect(messageStreamToResponseItems(duplicated).map((part) => part.text)).toEqual([
       "先思考",
       "回答",
     ]);
@@ -456,10 +490,8 @@ describe("message stream reducer", () => {
     expect(changed.protocolError).toContain("turn_stream_id");
   });
 
-  test("同一 tool_call 的 reconciled 收口 execution 不再渲染第二个工具", () => {
-    // 复现后端竞态契约：请求边界 ToolMessage 先完成 canonical 结果，
-    // 迟到的 on_tool_start/on_tool_end 再写一条 reconciled_tool_message
-    // 收口事件。投影必须折叠成一个逻辑工具。
+  test("事件输入同一调用的第二attempt时明确拒绝，不再挑选其中一个结果", () => {
+    // 当前后端只允许一次scoped调用对应一个attempt；迟到事件不能增加执行。
     let state = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
     state = applyMessageStreamEvent(state, event(1, "model.started", {
       model_call_id: "mc_1",
@@ -505,16 +537,7 @@ describe("message stream reducer", () => {
       completion_reason: "reconciled_tool_message",
       result: "README 内容",
     }));
-    const parts = messageStreamToResponseParts(state);
-    const kinds = parts.map((part) => part.kind);
-    expect(kinds.filter((kind) => kind === "tool_call")).toHaveLength(1);
-    expect(kinds.filter((kind) => kind === "tool_result")).toHaveLength(1);
-    expect(parts.find((part) => part.kind === "tool_call")?.tool_name).toBe("read_file");
-    expect(parts.find((part) => part.kind === "tool_call")?.arguments).toBe(
-      '{"path":"README.md"}',
-    );
-    // 折叠后保留 canonical execution 的时序位置：工具在最终正文之前。
-    expect(kinds).toEqual(["tool_call", "tool_result", "text"]);
+    expect(() => messageStreamToResponseItems(state)).toThrow("同一工具调用存在多个attempt");
   });
 
   test("工具结果未知时保留可展示的未知事实", () => {
@@ -537,7 +560,7 @@ describe("message stream reducer", () => {
     }));
     expect(state.toolExecutions[0]?.status).toBe("completed");
     expect(state.toolExecutions[0]?.outcome).toBe("outcome_unknown");
-    const parts = messageStreamToResponseParts({
+    const parts = messageStreamToResponseItems({
       ...state,
       toolExecutions: [{
         ...state.toolExecutions[0]!,
@@ -582,7 +605,7 @@ describe("message stream reducer", () => {
       expect(state.toolExecutions[0]?.status).toBe("completed");
       expect(state.toolExecutions[0]?.outcome).toBe(item.expected);
 
-      const parts = messageStreamToResponseParts(state);
+      const parts = messageStreamToResponseItems(state);
       const toolPart = parts.find((part) => part.kind === "tool_call");
       expect(toolPart?.status).toBe(item.expectedStatus);
       expect(toolPart?.outcome_unknown).toBe(item.expected === "outcome_unknown");
@@ -681,7 +704,7 @@ describe("message stream reducer", () => {
       tool_name: "unknown_tool",
     }));
 
-    const toolPart = messageStreamToResponseParts(state).find(
+    const toolPart = messageStreamToResponseItems(state).find(
       (part) => part.kind === "tool_call",
     );
     expect(toolPart?.tool_name).toBe("unknown_tool");
@@ -746,7 +769,7 @@ describe("message stream reducer", () => {
     }));
 
     expect(state.blocks[0]?.projection).toBe("intermediate");
-    expect(messageStreamToResponseParts(state)).toEqual([]);
+    expect(messageStreamToResponseItems(state)).toEqual([]);
   });
 
   test("tool_call 未完成且没有执行结果时单独展示为失败调用", () => {
@@ -764,7 +787,7 @@ describe("message stream reducer", () => {
       completion_reason: "user_interrupt",
       arguments_complete: false,
     }));
-    const part = messageStreamToResponseParts(state).find(
+    const part = messageStreamToResponseItems(state).find(
       (item) => item.tool_call_id === "call_incomplete",
     );
     expect(part?.status).toBe("cancelled");
@@ -834,7 +857,7 @@ describe("message stream reducer", () => {
       partial: true,
       completion_reason: "user_interrupt",
     }));
-    const parts = messageStreamToResponseParts(state);
+    const parts = messageStreamToResponseItems(state);
     expect(parts[0]?.final).toBe(false);
     expect(parts[0]?.partial).toBe(true);
     expect(parts[0]?.completion_reason).toBe("user_interrupt");
@@ -1008,13 +1031,13 @@ describe("message stream reducer", () => {
       "compaction_2",
     ]);
     expect(Object.keys(state.modelCalls)).toEqual(["model_2", "model_1"]);
-    const parts = messageStreamToResponseParts(state);
-    expect(parts.map((part) => part.part_id)).toEqual([
+    const parts = messageStreamToResponseItems(state);
+    expect(parts.map((part) => part.id)).toEqual([
       "block_1",
       "call_1",
       "block_2",
-      "exec_2",
-      "exec_2:result",
+      "call_2",
+      "call_2:result",
     ]);
     expect(parts[1]?.arguments).toBe('{"command":"first"}');
     expect(state.blocks[0]?.started_seq).toBe(4);
@@ -1744,8 +1767,8 @@ describe("message stream reducer", () => {
       expect(eventBlock.completion_reason).toBe("stream_completed");
       expect(eventBlock.partial).toBe(false);
     }
-    expect(messageStreamToResponseParts(eventState)).toEqual(
-      messageStreamToResponseParts(snapshotState),
+    expect(messageStreamToResponseItems(eventState)).toEqual(
+      messageStreamToResponseItems(snapshotState),
     );
   });
 
@@ -1978,7 +2001,7 @@ describe("activity completion_reason 与 tool 展示状态", () => {
       // state 层必须与后端 tool.completed 的归一结果一致：completed。
       expect(state.toolExecutions[0]?.status).toBe("completed");
       // 展示层才是"结果未知/提供方出错不能当作成功"的降级语义。
-      const toolPart = messageStreamToResponseParts(state)
+      const toolPart = messageStreamToResponseItems(state)
         .find((part) => part.kind === "tool_call");
       expect(toolPart?.status).toBe(item.displayStatus);
     }
@@ -2609,8 +2632,8 @@ describe("block model_call_id 还原", () => {
     for (const field of blockFields) {
       expect(snapshotBlock?.[field]).toBe(eventBlock?.[field]);
     }
-    expect(messageStreamToResponseParts(snapshotState)).toEqual(
-      messageStreamToResponseParts(eventState),
+    expect(messageStreamToResponseItems(snapshotState)).toEqual(
+      messageStreamToResponseItems(eventState),
     );
   });
 });

@@ -85,4 +85,4 @@ web/
 
 `workbench_build_metadata.test.mjs` 使用真实 esbuild 产物核对流式 metadata 与原对象等价、官方 analyzeMetafile 结果及写入失败传播；这是构建结构检查，不替代正式 Workbench 构建或产品页面。
 
-`test_configuration_entities.py` 经真实 Gateway 和 Workbench 的原 Settings Pane 创建、编辑、保存并移除 Provider／Agent 定义；切换 JSONC 核同一未保存模型，重载后按固定来源重开。关键配置状态由产品表单及原预检／CAS 入口产生，不预写历史或发模型请求；只使用本测试工作区、Home、端口与产物。密码输入、跨工作区共享冲突和完整默认值行为仍由对应场景验收。
+`test_configuration_entities.py` 经真实 Gateway 和 Workbench 的原 Settings Pane 创建、编辑、保存并移除 Provider／Agent 定义；切换 JSONC 核同一未保存模型，重载后按实际单父来源链重开。关键配置状态由产品表单及原预检／CAS 入口产生，不预写历史或发模型请求；只使用本测试工作区、Home、端口与产物。密码输入、跨工作区共享冲突和完整默认值行为仍由对应场景验收。

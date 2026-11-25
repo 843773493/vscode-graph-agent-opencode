@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import { useCallback, useRef, useState } from "react";
 import type { ChildThreadList, ChildThreadSummary } from "../../../types/backend";
@@ -132,7 +133,7 @@ export default function ChildThreadPanel({
                   <strong>{task.title}</strong> · {{ queued: t("child.queued"), in_progress: t("child.inProgress"), blocked: t("child.blocked"), completed: t("child.completed"), failed: t("child.failed"), cancelled: t("child.cancelled") }[task.status as "queued" | "in_progress" | "blocked" | "completed" | "failed" | "cancelled"]}
                   <div>{t("child.execution", task.assignee_thread_id, task.phase, formatNumber(task.cycle))}</div>
                   {task.summary ? <div>{task.summary}</div> : null}
-                  {task.error ? <div role="alert">{task.error}</div> : null}
+                  {task.error ? <div className="failure-summary" role="alert">{failureSummary(task.error)}</div> : null}
                 </div>
               ))}
             </article>

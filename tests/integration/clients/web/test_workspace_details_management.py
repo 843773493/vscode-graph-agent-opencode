@@ -50,7 +50,7 @@ def test_workspace_details_keep_owner_root_and_removed_data(target_gateway_netwo
     # 本机用户修改目标 Gateway 的正式 JSONC，由原 watcher 发布真实拒绝策略。
     before = remote.get("/api/gateway/config/reload-status").raise_for_status().json()["data"]
     configuration = commentjson.loads(network.gateway_config_paths[1].read_text())
-    configuration.setdefault("permissions", {})["federation"] = {
+    configuration["settings"]["gateway"].setdefault("permissions", {})["federation"] = {
         "default_effect": "allow", "rules": [{"capability": "managed_workspace_admin", "effect": "deny"}],
     }
     network.gateway_config_paths[1].write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n")

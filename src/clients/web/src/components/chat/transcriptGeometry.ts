@@ -1,4 +1,4 @@
-import { encodeNode, type ReadingAnchor, type TranscriptNodeKey, type TranscriptSource } from "../../state/timeline/transcriptNodes";
+import { encodeNode, type ReadingAnchor, type TranscriptNodeKey } from "../../state/timeline/transcriptNodes";
 
 /** DOM 只保存测量坐标；业务成员仍由原投影持有。 */
 export function findTranscriptNode(scroller: HTMLElement, key: TranscriptNodeKey): { element: HTMLElement; ancestor: boolean } | undefined {
@@ -6,17 +6,8 @@ export function findTranscriptNode(scroller: HTMLElement, key: TranscriptNodeKey
   const elements = [...scroller.querySelectorAll<HTMLElement>("[data-transcript-node]")];
   const exact = elements.find(element => element.dataset.transcriptNode === encoded && element.getBoundingClientRect().height > 0);
   if (exact) return { element: exact, ancestor: false };
-  const source = key.source_ref;
   const ancestor = elements.reverse().find(element => element.getBoundingClientRect().height > 0 && element.getAttribute("aria-expanded") === "false" && element.dataset.transcriptMembers
-    && (JSON.parse(element.dataset.transcriptMembers) as TranscriptSource[]).some(member => {
-      if (member.kind !== source.kind || member.id !== source.id) return false;
-      if (source.kind === "item") return member.kind === "item" && member.part === source.part;
-      if (source.kind === "stream") return member.kind === "stream" && member.model === source.model
-        && member.block === source.block && member.tool === source.tool && member.part_kind === source.part_kind;
-      if (source.kind === "context") return member.kind === "context" && member.process?.kind === source.process?.kind
-        && member.process?.id === source.process?.id;
-      return true;
-    }));
+    && (JSON.parse(element.dataset.transcriptMembers) as TranscriptNodeKey[]).some(member => encodeNode(member) === encoded));
   return ancestor ? { element: ancestor, ancestor: true } : undefined;
 }
 

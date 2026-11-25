@@ -2,11 +2,12 @@ import { useTranscriptDisclosure, useDisclosureFocus } from "./TranscriptViewCon
 import { contextNode, nodeAttributes } from "../../state/timeline/transcriptNodes";
 import React from "react";
 import { formatNumber, t } from "../../../../shared/core/i18n/index.js";
-import type { TurnResponsePart } from "../../types/backend";
+import type { TurnResponseItem } from "../../types/backend";
 import { ContextNoticeContinuationContext, useChatItemMenu } from "./itemContextMenu";
 import { errorMessage } from "../../utils/errorMessage";
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 
-function noticeLabel(notice: TurnResponsePart): string {
+function noticeLabel(notice: TurnResponseItem): string {
   const kind = notice.context_kind ?? "";
   switch (kind) {
     case "csm_protocol": return t("chat.contextNotice.sourceProtocol");
@@ -34,7 +35,7 @@ function noticeLabel(notice: TurnResponsePart): string {
 }
 
 /** 悬停、菜单及展开仅消费元数据；只有明确复制／查看动作读取冻结正文。 */
-export default function ContextNotice({ notices }: { notices: readonly TurnResponsePart[] }): React.ReactNode {
+export default function ContextNotice({ notices }: { notices: readonly TurnResponseItem[] }): React.ReactNode {
   const first = notices[0];
   const key = contextNode(first);
   const [expanded, setExpanded] = useTranscriptDisclosure(key);
@@ -53,13 +54,13 @@ export default function ContextNotice({ notices }: { notices: readonly TurnRespo
   ], true, () => ({ contextSources: sources }));
   const label = t("chat.contextNotice.hint", [...new Set(sources.map(source => source.name))].join(" · "), formatNumber(sources.length));
   return <section ref={focus.root} className={`chat-context-notice${expanded ? " is-expanded" : ""}`} {...menu}
-    data-context-marker={notices.map(notice => notice.part_id).join(" ")}>
+    data-context-marker={notices.map(notice => notice.id).join(" ")}>
     <button ref={focus.header} type="button" className="chat-context-marker" {...menu} {...nodeAttributes(key)} aria-label={label} title={label}
       aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
       <span className="chat-context-rule" aria-hidden="true" />
     </button>
     {expanded ? <div className="chat-context-details" role="region" aria-label={t("chat.contextNotice.title")}>
-      {notices.map((notice, index) => <div className="chat-context-source" key={notice.part_id}>
+      {notices.map((notice, index) => <div className="chat-context-source" key={notice.id}>
         <span className="chat-context-heading">{t("chat.contextNotice.sourceTitle", index + 1, sources[index].name)}</span>
       </div>)}
     </div> : null}
@@ -70,6 +71,6 @@ export default function ContextNotice({ notices }: { notices: readonly TurnRespo
       catch (cause) { setError(errorMessage(cause)); }
       finally { setLoading(false); }
     }}>{t(loading ? "chat.contextNotice.loadingMore" : "chat.contextNotice.loadMore")}</button> : null}
-    {error ? <div role="alert">{error}</div> : null}
+    {error ? <div className="failure-summary" role="alert">{failureSummary(error)}</div> : null}
   </section>;
 }

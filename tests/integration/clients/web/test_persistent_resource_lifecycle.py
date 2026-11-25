@@ -58,7 +58,7 @@ async def test_persistent_resources_through_real_workbench(
     ports = integration_ports_for_file(Path(request.node.path))
     workspace_config_path = workspace / ".boxteam" / "workspace.jsonc"
     workspace_config = commentjson.loads(workspace_config_path.read_text(encoding="utf-8"))
-    workspace_config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+    workspace_config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
         "url"
     ] = f"http://127.0.0.1:{ports.port(21)}"
     workspace_config_path.write_text(

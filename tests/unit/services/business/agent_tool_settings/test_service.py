@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
 from threading import Event
@@ -22,18 +23,19 @@ from app.services.business.agent_tool_settings.service import (
     ToolNotFoundError,
     ToolSelectionError,
 )
-from app.services.infrastructure.config import ConfigSnapshot, build_config_snapshot
+from app.services.infrastructure.config import ConfigSnapshot
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 
 
 class _ToolCatalogStub:
-    def __init__(self) -> None:
+    def __init__(self, snapshot: ConfigSnapshot) -> None:
         self.agent_ids: list[str | None] = []
+        self._snapshot = snapshot
 
     def list_tool_definitions(self, agent_id: str | None = None) -> tuple[ConfigSnapshot, list[dict]]:
         self.agent_ids.append(agent_id)
-        return build_config_snapshot({}, source_paths=()), [
+        return self._snapshot, [
             {
                 "id": "read_file",
                 "name": "read_file",
@@ -88,11 +90,12 @@ class _DebuggingToolCatalogStub(_ToolCatalogStub):
 def _service(
     tmp_path: Path,
     *,
+    workspace_config_snapshots,
     tool_catalog: _ToolCatalogStub | None = None,
     default_agent_id: str = "default",
 ) -> AgentToolSettingsService:
     config_service = MagicMock()
-    config_service.get_active_snapshot.return_value = build_config_snapshot({}, source_paths=())
+    config_service.get_active_snapshot.return_value = workspace_config_snapshots.base
     config_service.validate_agent_id.side_effect = (
         lambda agent_id: default_agent_id if agent_id is None else agent_id
     )
@@ -111,7 +114,7 @@ def _service(
         restrictions={},
     )
     return AgentToolSettingsService(
-        tool_catalog=tool_catalog or _ToolCatalogStub(),
+        tool_catalog=tool_catalog or _ToolCatalogStub(workspace_config_snapshots.base),
         selection_store=ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
         config_service=config_service,
         test_supported_tools={"read_file"},
@@ -119,13 +122,13 @@ def _service(
 
 
 @pytest.fixture
-def published_tools_case(tmp_path: Path, empty_workspace_scope):
+def published_tools_case(tmp_path: Path, empty_workspace_scope, workspace_config_snapshots):
     config = ConfigService(config_dir=Path.cwd() / "configs", config_path=tmp_path / "workspace.jsonc")
     payload = config.get_snapshot().to_dict()
     payload["agents"]["coder"] = deepcopy(payload["agents"]["default"])
-    old = build_config_snapshot(payload, source_paths=())
+    old = workspace_config_snapshots.build(payload, graph=config.get_snapshot().graph)
     payload["default_agent"] = "coder"
-    current = build_config_snapshot(payload, source_paths=())
+    current = workspace_config_snapshots.build(payload, graph=config.get_snapshot().graph)
     with config.publication_lock:
         config._snapshot_store.initialize(current)
 
@@ -134,7 +137,7 @@ def published_tools_case(tmp_path: Path, empty_workspace_scope):
             _, definitions = super().list_tool_definitions(agent_id)
             return config.get_active_snapshot(), definitions
 
-    catalog = PublishedCatalog()
+    catalog = PublishedCatalog(workspace_config_snapshots.base)
     store = ToolSelectionStore(boxteam_root=empty_workspace_scope[1] / ".boxteam")
     service = AgentToolSettingsService(tool_catalog=catalog, config_service=config,
         selection_store=store, test_supported_tools=set())
@@ -158,11 +161,50 @@ async def test_selection_resolves_default_from_catalog_snapshot(published_tools_
     assert case.store.snapshot("default").execution_overrides == {}
 
 
-async def test_selection_rejects_config_change_before_commit_without_writing(published_tools_case, monkeypatch):
+@pytest.fixture
+def derived_tools_policy_case(tmp_path):
+    state = SimpleNamespace(confirmation=False)
+    store = ToolSelectionStore(boxteam_root=tmp_path / ".boxteam")
+    definitions = [{"id": "read_file", "name": "read_file", "origin": "builtin",
+                    "description": "读取文件", "parameters": {"type": "object"}}]
+    config = SimpleNamespace(use_snapshot=lambda _: nullcontext(), validate_agent_id=lambda name: name,
+        get_tool_policy_resolver=lambda _: ToolPolicyResolver(
+            policy_defaults={"model_visible": False}, policy_rules={},
+            restrictions={"confirmation_required": ["read_file"] if state.confirmation else []}))
+    service = AgentToolSettingsService(
+        tool_catalog=SimpleNamespace(list_tool_definitions=lambda _: ("paired-snapshot", definitions)),
+        selection_store=store, config_service=config, test_supported_tools=set(),
+    )
+    return service, store, state
+
+
+def test_derived_tools_resolve_current_policy_and_selection_from_original_catalog(derived_tools_policy_case):
+    service, store, state = derived_tools_policy_case
+    policies, initial_tools = service.derived_tools("coder", ("read_file",))
+    policy = policies["read_file"]
+    assert policy.execution_enabled and not policy.model_visible
+    assert initial_tools.tools == ()
+    store.apply_changes(agent_id="coder", changes={"read_file": (True, True)})
+    _, visible = service.derived_tools("coder", ("read_file",))
+    assert visible.tool_names == ("read_file",)
+    assert visible.tools[0]["function"]["parameters"] == {"type": "object"}
+    store.apply_changes(agent_id="coder", changes={"read_file": (False, False)})
+    assert not service.derived_tools("coder", ("read_file",))[0]["read_file"].execution_enabled
+    state.confirmation = True
+    assert service.derived_tools("coder", ("read_file",))[0]["read_file"].confirmation_required
+    with pytest.raises(ValueError, match="context-unsupported"):
+        service.derived_tools("coder", ("write_file",))
+    with pytest.raises(ValueError, match="原内置目录不存在"):
+        service.derived_tools("coder", ("grep",))
+
+
+async def test_selection_rejects_config_change_before_commit_without_writing(
+    published_tools_case, monkeypatch, workspace_config_snapshots,
+):
     case = published_tools_case
     payload = case.current.to_dict()
     payload["tooling"]["restrictions"]["execution_disabled"] = ["write_file"]
-    newer = build_config_snapshot(payload, source_paths=())
+    newer = workspace_config_snapshots.build(payload, graph=case.current.graph)
     original = case.store.snapshot
 
     def read_and_publish(agent_id):
@@ -179,8 +221,9 @@ async def test_selection_rejects_config_change_before_commit_without_writing(pub
     assert original("coder").execution_overrides == {}
 
 
-async def test_source_debugging_is_model_hidden_by_default(tmp_path: Path) -> None:
-    service = _service(tmp_path, tool_catalog=_DebuggingToolCatalogStub())
+async def test_source_debugging_is_model_hidden_by_default(tmp_path: Path, workspace_config_snapshots) -> None:
+    service = _service(tmp_path, workspace_config_snapshots=workspace_config_snapshots,
+                       tool_catalog=_DebuggingToolCatalogStub(workspace_config_snapshots.base))
 
     debugging_tool = await service.get("start_debugging")
 
@@ -204,22 +247,22 @@ async def test_source_debugging_is_model_hidden_by_default(tmp_path: Path) -> No
     ]
 
 
-async def test_get_unknown_tool_raises_domain_error(tmp_path: Path) -> None:
+async def test_get_unknown_tool_raises_domain_error(tmp_path: Path, workspace_config_snapshots) -> None:
     with pytest.raises(
         ToolNotFoundError,
         match="Agent 'default' 不存在工具 'missing'",
     ):
-        await _service(tmp_path).get("missing")
+        await _service(tmp_path, workspace_config_snapshots=workspace_config_snapshots).get("missing")
 
 
-async def test_get_unknown_tool_maps_to_http_404(tmp_path: Path) -> None:
+async def test_get_unknown_tool_maps_to_http_404(tmp_path: Path, workspace_config_snapshots) -> None:
     with pytest.raises(HTTPException) as error:
         await get_tool(
             tool_id="missing",
             agent_id="default",
             _="local-dev-token",
             request_id="req_get_missing",
-            agent_tool_settings_service=_service(tmp_path),
+            agent_tool_settings_service=_service(tmp_path, workspace_config_snapshots=workspace_config_snapshots),
         )
 
     assert error.value.status_code == 404
@@ -227,9 +270,9 @@ async def test_get_unknown_tool_maps_to_http_404(tmp_path: Path) -> None:
 
 
 async def test_update_selection_rejects_unknown_tool_without_writing(
-    tmp_path: Path,
+    tmp_path: Path, workspace_config_snapshots,
 ) -> None:
-    service = _service(tmp_path)
+    service = _service(tmp_path, workspace_config_snapshots=workspace_config_snapshots)
 
     with pytest.raises(ToolSelectionError, match="后端不支持的工具: missing"):
         await service.update_selection(
@@ -247,7 +290,7 @@ async def test_update_selection_rejects_unknown_tool_without_writing(
     assert not (tmp_path / ".boxteam" / "settings" / "tool_selection.json").exists()
 
 
-async def test_unknown_tool_selection_maps_to_http_400(tmp_path: Path) -> None:
+async def test_unknown_tool_selection_maps_to_http_400(tmp_path: Path, workspace_config_snapshots) -> None:
     request = ToolSelectionPatchRequest(
         changes=[
             ToolSelectionChange(
@@ -263,7 +306,7 @@ async def test_unknown_tool_selection_maps_to_http_400(tmp_path: Path) -> None:
             payload=request,
             _="local-dev-token",
             request_id="req_select_missing",
-            agent_tool_settings_service=_service(tmp_path),
+            agent_tool_settings_service=_service(tmp_path, workspace_config_snapshots=workspace_config_snapshots),
         )
 
     assert error.value.status_code == 400
@@ -271,9 +314,9 @@ async def test_unknown_tool_selection_maps_to_http_400(tmp_path: Path) -> None:
 
 
 async def test_update_selection_persists_and_reports_changed_tool(
-    tmp_path: Path,
+    tmp_path: Path, workspace_config_snapshots,
 ) -> None:
-    service = _service(tmp_path)
+    service = _service(tmp_path, workspace_config_snapshots=workspace_config_snapshots)
 
     changed = await service.update_selection(
         ToolSelectionPatchRequest(
@@ -303,11 +346,12 @@ async def test_update_selection_persists_and_reports_changed_tool(
 
 
 async def test_omitted_agent_id_uses_catalog_default_for_selection(
-    tmp_path: Path,
+    tmp_path: Path, workspace_config_snapshots,
 ) -> None:
-    catalog = _ToolCatalogStub()
+    catalog = _ToolCatalogStub(workspace_config_snapshots.base)
     service = _service(
         tmp_path,
+        workspace_config_snapshots=workspace_config_snapshots,
         tool_catalog=catalog,
         default_agent_id="coder",
     )
@@ -336,11 +380,12 @@ async def test_omitted_agent_id_uses_catalog_default_for_selection(
 
 
 async def test_tool_list_api_passes_omitted_agent_to_default_resolution(
-    tmp_path: Path,
+    tmp_path: Path, workspace_config_snapshots,
 ) -> None:
-    catalog = _ToolCatalogStub()
+    catalog = _ToolCatalogStub(workspace_config_snapshots.base)
     service = _service(
         tmp_path,
+        workspace_config_snapshots=workspace_config_snapshots,
         tool_catalog=catalog,
         default_agent_id="coder",
     )
@@ -356,9 +401,9 @@ async def test_tool_list_api_passes_omitted_agent_to_default_resolution(
 
 
 async def test_update_selection_maps_unknown_agent_to_http_400(
-    tmp_path: Path,
+    tmp_path: Path, workspace_config_snapshots,
 ) -> None:
-    service = _service(tmp_path)
+    service = _service(tmp_path, workspace_config_snapshots=workspace_config_snapshots)
 
     def validate_agent_id(agent_id: str | None) -> str:
         if agent_id == "missing":
@@ -393,11 +438,12 @@ async def test_update_selection_maps_unknown_agent_to_http_400(
 
 
 async def test_update_selection_rejects_dependency_conflict_atomically(
-    tmp_path: Path,
+    tmp_path: Path, workspace_config_snapshots,
 ) -> None:
     service = _service(
         tmp_path,
-        tool_catalog=_DependencyToolCatalogStub(),
+        workspace_config_snapshots=workspace_config_snapshots,
+        tool_catalog=_DependencyToolCatalogStub(workspace_config_snapshots.base),
     )
 
     with pytest.raises(
@@ -420,11 +466,12 @@ async def test_update_selection_rejects_dependency_conflict_atomically(
 
 
 async def test_update_selection_accepts_consistent_dependency_changes(
-    tmp_path: Path,
+    tmp_path: Path, workspace_config_snapshots,
 ) -> None:
     service = _service(
         tmp_path,
-        tool_catalog=_DependencyToolCatalogStub(),
+        workspace_config_snapshots=workspace_config_snapshots,
+        tool_catalog=_DependencyToolCatalogStub(workspace_config_snapshots.base),
     )
 
     changed = await service.update_selection(
@@ -474,7 +521,7 @@ def test_public_api_does_not_expose_context_free_tool_invoke() -> None:
 
 @pytest.mark.parametrize("cancel_first", [False, True])
 async def test_cold_list_does_not_block_or_overlap_catalog_builds(
-    tmp_path: Path, cancel_first: bool,
+    tmp_path: Path, cancel_first: bool, workspace_config_snapshots,
 ) -> None:
     started, release = Event(), Event()
     calls: list[str] = []
@@ -487,7 +534,8 @@ async def test_cold_list_does_not_block_or_overlap_catalog_builds(
                 assert release.wait(5), "事件循环应能继续运行并释放构建"
             return super().list_tool_definitions(agent_id)
 
-    service = _service(tmp_path, tool_catalog=BlockingCatalog())
+    service = _service(tmp_path, workspace_config_snapshots=workspace_config_snapshots,
+                       tool_catalog=BlockingCatalog(workspace_config_snapshots.base))
     first = asyncio.create_task(service.list("default"))
     second = None
     try:

@@ -54,6 +54,7 @@ from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.infrastructure.message_stream_store import (
     RECOVERED_TOOL_RESULT_UNKNOWN,
+    MessageStreamNotFoundError,
     MessageStreamStore,
     MessageStreamWriter,
 )
@@ -80,6 +81,7 @@ from tests.integration.backend.sessions.rollout_test_workspace import (
     prepare_rollout_workspace,
 )
 from tests.support.api_helpers import running_job_dispatch_snapshot
+from tests.support.workspaces import install_test_workspace_config
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,11 @@ def runner_case(
     monkeypatch: pytest.MonkeyPatch,
 ) -> RunnerCase:
     workspace = prepare_rollout_workspace(request)
+    install_test_workspace_config(
+        workspace_root=workspace,
+        config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
+        schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
+    )
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
@@ -205,7 +212,7 @@ def _facts(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin", ["user", "internal"])
-@pytest.mark.parametrize("window", ["input_consumption", "admission_readback"])
+@pytest.mark.parametrize("window", ["input_consumption", "admission_read"])
 async def test_job_cancel_waits_for_execution_input_and_admission_reads(
     runner_case: RunnerCase,
     monkeypatch: pytest.MonkeyPatch,
@@ -230,32 +237,35 @@ async def test_job_cancel_waits_for_execution_input_and_admission_reads(
     else:
         from app.services.orchestration.execution_step import runner
 
-        input_checkpointed = threading.Event()
+        input_consumption = threading.local()
         original_write = runner.checkpoint_accepted_execution_input
 
-        def mark_input_checkpointed(*args, **kwargs):
-            result = original_write(*args, **kwargs)
-            input_checkpointed.set()
-            return result
+        def mark_input_consumption(*args, **kwargs):
+            input_consumption.active = True
+            try:
+                return original_write(*args, **kwargs)
+            finally:
+                input_consumption.active = False
 
         monkeypatch.setattr(
-            runner, "checkpoint_accepted_execution_input", mark_input_checkpointed
+            runner, "checkpoint_accepted_execution_input", mark_input_consumption
         )
-        original = runner_case.saver.execution_admission_for_job
+        reader_name = "accepted_user_message" if origin == "user" else "accepted_internal_message"
+        original = getattr(runner_case.saver, reader_name)
 
         def blocked_read(*args, **kwargs):
             if (
-                input_checkpointed.is_set()
+                getattr(input_consumption, "active", False)
                 and threading.current_thread() is not threading.main_thread()
                 and not entered.is_set()
             ):
                 entered.set()
                 if not release.wait(10):
-                    raise TimeoutError("测试 admission 读回屏障未释放")
+                    raise TimeoutError("测试 admission 读取屏障未释放")
             return original(*args, **kwargs)
 
         monkeypatch.setattr(
-            runner_case.saver, "execution_admission_for_job", blocked_read
+            runner_case.saver, reader_name, blocked_read
         )
     job = await _start_job(runner_case, origin, session_id, thread_id)
     try:
@@ -375,9 +385,6 @@ def _admit(
             created_at=queued_message.created_at.isoformat(),
         ),
         )
-        human = case.saver.accepted_user_message(
-            session_id, thread_id=thread_id, job_id=job_id, message_id=message_id,
-        )
     else:
         human = HumanMessage(
             id=message_id, content=content,
@@ -394,20 +401,6 @@ def _admit(
                 created_at=created_at.isoformat(),
             ),
         )
-        human = case.saver.accepted_internal_message(session_id, thread_id=thread_id, job_id=job_id, message_id=message_id, intent=binding)
-    with session_thread_owner_scope(
-        MutationIntentOwner(session_id=session_id, thread_id=thread_id),
-        langgraph_thread_id=thread_id,
-    ):
-        checkpoint_accepted_execution_input(
-            checkpointer=case.saver,
-            session_id=session_id,
-            thread_id=thread_id,
-            job_id=job_id,
-            admission_idempotency_key=binding.admission_idempotency_key,
-            execution_intent=intent,
-            message=human,
-        )
     return case.saver.execution_admission_for_job(
         session_id, thread_id=thread_id, job_id=job_id
     )
@@ -421,6 +414,15 @@ async def _settle_local_recovery_claim(case: RunnerCase, admission: ExecutionAdm
     assert claim is not None
     try:
         await claim.start()
+        with session_thread_owner_scope(
+            MutationIntentOwner(admission.session_id, admission.thread_id),
+            langgraph_thread_id=admission.thread_id,
+        ):
+            checkpoint_accepted_execution_input(
+                checkpointer=case.saver, session_id=admission.session_id,
+                thread_id=admission.thread_id, job_id=admission.job_id,
+                message_id=record.input.message_id, execution_binding=record.input.execution_binding,
+            )
     finally:
         await claim.close()
 
@@ -438,6 +440,7 @@ async def test_control_corrects_execution_lost_and_failed_preserves_recovery(fro
 ) -> None:
     session_id, thread_id = await _session(runner_case)
     admission = _admit(runner_case, session_id, thread_id, origin)
+    await _settle_local_recovery_claim(runner_case, admission)
     model_call_id = str(uuid4())
     manager = ContextSourceManager(
         owner=ContextSourceOwnerKey(session_id, thread_id),
@@ -518,6 +521,7 @@ async def test_completed_execution_absorbs_late_job_control(
 ) -> None:
     session_id, thread_id = await _session(runner_case)
     admission = _admit(runner_case, session_id, thread_id, origin)
+    await _settle_local_recovery_claim(runner_case, admission)
     model_call_id = str(uuid4())
     plan_creation_idempotency_key = f"cancellation-terminal:{model_call_id}"
     manager = ContextSourceManager(
@@ -635,12 +639,12 @@ async def test_cancelled_runtime_input_failure_preserves_only_accepted_facts(
         assert turns == [(job.execution_binding.turn_id, "cancelled")]
         assert runner_case.saver.accepted_user_message(
             session_id, thread_id=thread_id, job_id=job.job_id, message_id=job.message_id,
-        ).content == "真实准入输入"
+        )[1].content == "真实准入输入"
     else:
         assert turns == []
         assert runner_case.saver.accepted_internal_message(
             session_id, thread_id=thread_id, job_id=job.job_id, message_id=job.message_id, intent=job.execution_binding,
-        ).content == job.message
+        )[1].content == job.message
 
 
 @pytest.mark.asyncio
@@ -911,7 +915,10 @@ async def started_tool_attempt(
         call_id = stream.claim_tool_call_id(snapshot.model_call_id, provider_id)
         assert call_id == f"{snapshot.model_call_id}:tool-call:{provider_id}"
         attempt_id = str(uuid4())
-        await stream.start_tool(tool_execution_id=attempt_id, tool_call_id=call_id, tool_name="task")
+        await stream.start_tool(
+            tool_execution_id=attempt_id, tool_call_id=call_id, tool_name="task",
+            started_at=datetime.now(UTC).isoformat(),
+        )
     await runner_case.container.trace_event_store.append(session_id, JobStartedEvent(
         event_id=create_prefixed_id("evt"), job_id=admission.job_id, timestamp=datetime.now(UTC),
         payload=JobStartedPayload(
@@ -945,6 +952,11 @@ async def test_restart_closes_original_tool_attempt_before_internal_prepare(
     """冷恢复不重放工具、不覆盖真终态，后继 internal 的真实 prepare 配对闭合。"""
     admission, completion, stream_id, fixed, frozen, selected, provider_parameters, _stream = started_tool_attempt
     session_id, thread_id = admission.session_id, admission.thread_id
+    started_events = await runner_case.container.message_stream_store.list_events(
+        session_id=session_id, turn_stream_id=stream_id,
+    )
+    started_event, = [event for event in started_events if event["type"] == "tool.started"]
+    assert started_event["tool_attempt_id"] == completion.tool_attempt_id
     sessions_root = runner_case.workspace / ".boxteam" / "sessions"
     request_first = committed_outcome is not None and committed_outcome.startswith("request_")
     outcome = committed_outcome.removeprefix("request_") if request_first else committed_outcome or "unknown"
@@ -1000,6 +1012,8 @@ async def test_restart_closes_original_tool_attempt_before_internal_prepare(
         path_resolver=get_session_path_resolver(sessions_root),
         workspace_id=runner_case.container.workspace_service.workspace_id,
     )
+    with pytest.raises(MessageStreamNotFoundError, match="消息流不存在"):
+        await cold_streams.list_events(session_id=session_id, turn_stream_id=create_prefixed_id("strm"))
     runtime = WorkspaceRuntimeLifecycleService(
         workspace_id=runner_case.container.workspace_service.workspace_id,
         job_service=runner_case.container.job_service,
@@ -1024,14 +1038,23 @@ async def test_restart_closes_original_tool_attempt_before_internal_prepare(
         "producer_kind": "tool", "producer_id": completion.tool_attempt_id,
         "invocation_id": completion.model_call_id,
     }
-    assert terminal.payload == {
+    expected_payload = {
         "tool_call_id": completion.tool_call_id,
         "tool_invocation_id": completion.tool_invocation_id,
         "tool_attempt_id": completion.tool_attempt_id,
         "result_id": completion.tool_attempt_id, "name": "invoke_extension_tool",
-        "content": content, "tool_outcome": outcome,
+        "content": projected_content, "tool_outcome": outcome,
         "execution_confirmed": outcome != "unknown",
     }
+    if committed is None:
+        expected_payload["tool_execution"] = {
+            "session_id": session_id, "thread_id": thread_id, "turn_stream_id": stream_id,
+            "tool_invocation_id": completion.tool_invocation_id,
+            "tool_attempt_id": completion.tool_attempt_id, "tool_execution_id": completion.tool_attempt_id,
+            "started_seq": started_event["event_seq"], "started_at": started_event["payload"]["started_at"],
+            "execution_completed_at": None, "status": "failed", "outcome": "outcome_unknown",
+        }
+    assert terminal.payload == expected_payload
     if committed is not None:
         assert terminal.to_dict() == committed.to_dict()
         assert jsonl_path.read_bytes() == original_bytes
@@ -1051,7 +1074,7 @@ async def test_restart_closes_original_tool_attempt_before_internal_prepare(
     event, = completed
     assert event["event_id"] == f"tool-terminal:{terminal.item_id}"
     assert event["tool_attempt_id"] == completion.tool_attempt_id
-    assert event["payload"]["result"] == content
+    assert event["payload"]["result"] == projected_content
     assert event["payload"]["outcome"] == (
         "outcome_unknown" if outcome == "unknown" else "success" if outcome == "success" else "provider_error"
     )
@@ -1072,6 +1095,7 @@ async def test_restart_closes_original_tool_attempt_before_internal_prepare(
 
     following = _admit(runner_case, session_id, thread_id, "internal")
     assert following.turn_id is None and following.execution_id != admission.execution_id
+    await _settle_local_recovery_claim(runner_case, following)
     cold = RolloutCheckpointSaver(sessions_root)
     with (
         session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id),
@@ -1101,7 +1125,7 @@ async def test_restart_closes_original_tool_attempt_before_internal_prepare(
                 message_id=message_id, execution_id=following.execution_id,
                 admission_idempotency_key=following.admission_idempotency_key,
             ),
-        )
+        )[1]
         # 与 graph 的消息 reducer 一致：先恢复 checkpoint，再合入本次已接受输入。
         request_messages = tuple(add_messages(restored_messages, [internal_input]))
         frozen_request_messages = [message.model_dump(mode="json") for message in request_messages]

@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import asdict
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage
@@ -17,7 +18,7 @@ from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.enums import SemanticKind, TurnScope
 from app.domain.itemized.execution_admission import (
-    CompactionExecutionReference,
+    DerivedExecutionReference,
     ExecutionAdmission,
     ExecutionTerminalResult,
     InternalExecutionIntent,
@@ -93,8 +94,8 @@ class RuntimeExecutionOwnerMixin:
         )
 
     def accepted_user_input(self, session_id: str, *, thread_id: str, job_id: str) -> CanonicalItemRecord:
-        admission = self._storage.executions.execution_admission_for_job(session_id, thread_id=thread_id, job_id=job_id)
-        return self._storage.executions.accepted_user_input(admission)
+        _admission, item = self._storage.executions.accepted_user_input(session_id, thread_id=thread_id, job_id=job_id)
+        return item
 
     def execution_completions(self, session_id: str, thread_id: str, *,
                               after_commit_id: int | None) -> ExecutionCompletionPage:
@@ -110,11 +111,8 @@ class RuntimeExecutionOwnerMixin:
     def execution_queue_owners(self, *, session_id: str | None) -> tuple[MutationIntentOwner, ...]:
         return self._storage.checkpoints.list_checkpoint_owners(session_id=session_id)
 
-    def validate_execution_queue(self, session_id: str, thread_id: str) -> None:
-        self._storage.executions.validate_execution_queue(session_id, thread_id)
-
-    def execution_queue_snapshot(self, session_id: str, thread_id: str) -> ExecutionQueueSnapshot:
-        return self._storage.executions.execution_queue_snapshot(session_id, thread_id)
+    def execution_queue_snapshot(self, session_id: str, thread_id: str, *, validate_inputs: bool = False) -> ExecutionQueueSnapshot:
+        return self._storage.executions.execution_queue_snapshot(session_id, thread_id, validate_inputs=validate_inputs)
 
     def execution_queue_record(self, session_id: str, thread_id: str, job_id: str) -> ExecutionQueueRecord:
         return self._storage.executions.execution_queue_record(session_id, thread_id, job_id)
@@ -217,19 +215,18 @@ class RuntimeExecutionOwnerMixin:
     def accepted_user_message(
         self, session_id: str, *, thread_id: str, job_id: str, message_id: str,
         checkpoint_ns: str = "",
-    ) -> HumanMessage:
+    ) -> tuple[ExecutionAdmission, HumanMessage]:
         """Runtime 消费已冻结的用户正文与附件，不重新读取或生成附件预览。"""
-        admission = self._storage.executions.execution_admission_for_job(
+        admission, item = self._storage.executions.accepted_user_input(
             session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns,
         )
-        item = self._storage.executions.accepted_user_input(admission, checkpoint_ns=checkpoint_ns)
         if item.producer_ref["producer_id"] != message_id:
             raise ValueError("Job 消息身份与已接受的用户根输入不一致")
         codec = self._storage.storage._codec()
         message = codec.from_dict(codec.project_message((item,)))
         if not isinstance(message, HumanMessage) or message.id != message_id:
             raise TypeError("已接受用户根输入未投影为同 ID 的 HumanMessage")
-        return message.model_copy(update={"response_metadata": {
+        return admission, message.model_copy(update={"response_metadata": {
             **message.response_metadata,
             "message_id": message_id, "created_at": item.created_at, "updated_at": item.created_at,
             "message_metadata": {**message.response_metadata.get("message_metadata", {}),
@@ -254,9 +251,9 @@ class RuntimeExecutionOwnerMixin:
         self, session_id: str, *, thread_id: str, job_id: str, message_id: str,
         intent: InternalExecutionIntent,
         checkpoint_ns: str = "",
-    ) -> HumanMessage:
+    ) -> tuple[ExecutionAdmission, HumanMessage]:
         """聊天输入只从 notice 或 seed 准入投影；摘要不伪造 HumanMessage。"""
-        if intent.compaction_reference is not None:
+        if intent.derived_reference is not None:
             raise ValueError("摘要派生 execution 不是普通 Agent 聊天输入")
         admission = self._storage.executions.execution_admission_for_job(
             session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns,
@@ -268,7 +265,7 @@ class RuntimeExecutionOwnerMixin:
         request_input = self._storage.executions.internal_execution_request_input(
             session_id, thread_id, admission.execution_id,
         )
-        if request_input["kind"] == "compaction_reference":
+        if request_input["kind"] == "derived_reference":
             raise ValueError("摘要派生 execution 不是普通 Agent 聊天输入")
         supplied_reference = json.loads(intent.input_reference_json) if intent.input_reference_json is not None else None
         if supplied_reference != request_input.get("reference"):
@@ -294,44 +291,43 @@ class RuntimeExecutionOwnerMixin:
                 human = codec.from_dict(codec.project_message((item,)))
                 if not isinstance(human, HumanMessage) or human.id != message_id:
                     raise TypeError("已接受 notice 未投影为同 ID 的 HumanMessage")
-                return human.model_copy(update={"response_metadata": {
+                return admission, human.model_copy(update={"response_metadata": {
                     **human.response_metadata, "message_id": message_id,
                     "created_at": item.created_at, "updated_at": item.created_at,
                 }})
         source = self.internal_seed_source(session_id, thread_id, admission.execution_id)
         if source is None:
             raise RuntimeError("已接受 seed/reference 缺少冻结输入")
-        return HumanMessage(id=message_id, content=source.content, response_metadata={
+        return admission, HumanMessage(id=message_id, content=source.content, response_metadata={
             "message_id": message_id, "created_at": created_at, "updated_at": created_at,
             "message_metadata": internal_message_factory.metadata_for(
                 kind="delegated_task", display_content=THREAD_SEED_DISPLAY_CONTENT,
             ),
         })
 
-    def compaction_execution_reference(
+    def derived_execution_reference(
         self, session_id: str, *, thread_id: str, execution_id: str,
-    ) -> CompactionExecutionReference:
+    ) -> DerivedExecutionReference:
         """从原 admission commit 冷读摘要输入，不依赖 Graph 或当前任务状态。"""
-        # TODO: 唯一 model-call 准备入口接入冻结 plan 的读取／封存；准入本身不授权发送。
         request = self._storage.executions.internal_execution_request_input(
             session_id, thread_id, execution_id,
         )
-        if request["kind"] != "compaction_reference":
+        if request["kind"] != "derived_reference":
             raise ValueError("execution 未绑定摘要派生输入")
-        return CompactionExecutionReference(**request["reference"])
+        return DerivedExecutionReference(**request["reference"])
 
     def _internal_execution_input(
         self, intent: InternalExecutionIntent, message: HumanMessage | None,
     ) -> tuple[CanonicalItemRecord | None, dict[str, object]]:
         if not isinstance(intent, InternalExecutionIntent):
             raise TypeError("internal execution admission 必须使用 typed intent")
-        if intent.compaction_reference is not None:
+        if intent.derived_reference is not None:
             if message is not None:
                 raise ValueError("摘要派生 admission 不得伪造 runtime notice")
             notice = None
             request_input = {
-                "kind": "compaction_reference",
-                "reference": asdict(intent.compaction_reference),
+                "kind": "derived_reference",
+                "reference": asdict(intent.derived_reference),
             }
         elif intent.input_reference_json is not None:
             if message is not None:
@@ -765,6 +761,7 @@ class RuntimeExecutionOwnerMixin:
         checkpoint_ns: str = "",
         loss_reason: str | None = None,
         failure: Mapping[str, object] | None = None,
+        completion_deadline: datetime | None = None,
     ) -> int:
         """通过 Saver 原子收敛 execution、output item、assembly 与 Turn。"""
         return self._storage.executions.converge_execution(
@@ -780,6 +777,7 @@ class RuntimeExecutionOwnerMixin:
             checkpoint_ns=checkpoint_ns,
             loss_reason=loss_reason,
             failure=failure,
+            completion_deadline=completion_deadline,
         )
 
     def resume_turn(

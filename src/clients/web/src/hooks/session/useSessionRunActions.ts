@@ -391,7 +391,7 @@ export function useSessionRunActions({
         // 但状态栏文案属于当前会话事实，会话已切走时不得写进新会话。
         if (isCurrentSessionOwner(prev, session.session_id, currentSessionGatewayWorkspaceId)) {
           next.status = result.status === "scheduled"
-            ? "已安排上下文压缩，将在下一条消息发送前执行"
+            ? "已安排后台摘要，完整候选通过下一次模型请求的预算核验后采用"
             : result.status === "compacted"
               ? `已压缩上下文: ${result.summarized_message_count} 条`
               : `上下文未压缩: ${result.message}`;
@@ -407,7 +407,8 @@ export function useSessionRunActions({
               : "上下文未压缩",
           {
             session_id: result.session_id,
-            thread_id: threadId,
+            thread_id: result.thread_id,
+            task_id: result.task_id,
             status: result.status,
             before_message_count: result.before_message_count,
             effective_message_count_before: result.effective_message_count_before,

@@ -63,21 +63,28 @@ class PrivateHeaderCase:
 async def private_header_case(request: pytest.FixtureRequest, http_schema_endpoint_factory) -> AsyncIterator[PrivateHeaderCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspaces: dict[str, Path] = {}
-    inline_agents = commentjson.loads((Path.cwd() / "configs/workspace_inline.jsonc").read_text(encoding="utf-8"))["agents"]
+    inline = commentjson.loads((Path.cwd() / "configs/workspace_inline.jsonc").read_text(encoding="utf-8"))
+    inline_agents = inline["settings"]["workspace"]["agents"]
     for label in ("A1", "A2"):
         workspace = prepare_test_workspace(workspace_root=context.workspace_root / label,
             template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", template_items=())
         config_path = install_test_workspace_config(workspace_root=workspace,
             config_path=Path.cwd() / "configs/tests/workspace/default.jsonc", schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
         config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        config["llm"]["providers"] = {"primary": {
-            "defaults": {"endpoint": MODEL_ENDPOINT, "api_key": "", "custom_llm_provider": "openai",
-                "api_mode": config["llm"]["providers"]["primary"]["defaults"]["api_mode"]},
-            "models": {"default": {"model": MODEL}},
+        workspace_settings = config["settings"]["workspace"]
+        api_mode = config["profiles"]["provider.primary"]["settings"]["model_options"]["api_mode"]
+        workspace_settings["llm"]["providers"] = {"primary": {
+            "config_ref": "#/profiles/provider.primary",
+            "models": {"default": {"model": MODEL, "config_ref": "context:provider/primary"}},
         }}
-        for agent_id in set(inline_agents) | set(config["agents"]):
-            config["agents"].setdefault(agent_id, {})["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
-        config["agents"]["default"]["tools"]["custom"] = []
+        config["profiles"]["provider.primary"] = {"extends": "context:workspace", "settings": {
+            "model_options": {"endpoint": MODEL_ENDPOINT, "api_key": "", "custom_llm_provider": "openai",
+                "api_mode": api_mode},
+        }}
+        for agent_id in set(inline_agents) | set(workspace_settings["agents"]):
+            workspace_settings["agents"].setdefault(agent_id, {})["model"] = {
+                "primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
+        workspace_settings["agents"]["default"]["tools"]["custom"] = []
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         workspaces[label] = workspace
     runtime = context.runtime_root_for_node(request.node.nodeid)
@@ -154,7 +161,7 @@ async def test_private_headers_survive_backend_restart_and_reject_cross_workspac
         path = base + "/config/sources/" + SOURCE
         document = (await exchange("GET", path))["data"]
         config = commentjson.loads(document["jsonc"])
-        config["mcp"] = {"servers": {"secure": {"enabled": True, "transport": "streamable_http",
+        config["settings"]["workspace"]["mcp"] = {"servers": {"secure": {"enabled": True, "transport": "streamable_http",
             "url": endpoint, "headers": {HEADER: reference}}}}
         edit = {"gateway_id": document["gateway_id"], "workspace_id": document["workspace_id"], "source_key": SOURCE,
             "jsonc": json.dumps(config, ensure_ascii=False, indent=2) + "\n", "base_file_digest": document["file_digest"],

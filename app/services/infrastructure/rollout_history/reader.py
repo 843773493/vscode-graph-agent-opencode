@@ -75,9 +75,9 @@ from app.services.mapping.itemized.history_turns.projection import (
     summary,
 )
 from app.services.mapping.itemized.history_turns.tools import tool_result_metadata_dto
-from app.services.mapping.turn_response_parts import (
-    enrich_selected_item_parts,
-    response_parts_from_records,
+from app.services.mapping.turn_response_items import (
+    enrich_selected_items,
+    response_items_from_records,
 )
 
 _ASSISTANT_HISTORY_FIELDS = frozenset(
@@ -305,7 +305,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                     source_view_id=indexed.view_id,
                     source_view_revision=indexed.snapshot.manifest.history_view_revision,
                     context_notices=[ContextNoticeBatchDTO(owner_id=owner,
-                        owner_kind="turn" if owner in cursor.turn_ids else "execution", parts=parts)
+                        owner_kind="turn" if owner in cursor.turn_ids else "execution", items=parts)
                         for owner, parts in notices.items()])
             located = (
                 verify_message_reference(self._context_reader, indexed, request.anchor_turn_id, request.anchor_message,
@@ -394,7 +394,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             }
             else "summary"
         )
-        response_parts = response_parts_from_records(
+        response_items = response_items_from_records(
             selected_records,
             projection=projection,
             mode=projection_mode,
@@ -413,7 +413,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             source_view_revision=snapshot.manifest.history_view_revision,
             message_sequences=message_sequences,
             projection=projection,
-            response_parts=response_parts,
+            response_items=response_items,
             tool_call_ids=tool_call_ids,
             include_final=bool(fields & {"final_response", "assistant"}),
         )
@@ -492,7 +492,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         chain: ContextChain,
         tool_call_ids: tuple[str, ...] = (),
         internal_entries: tuple[InternalExecutionHistoryEntry, ...] = (),
-        activity_before: tuple[int, int] | None = None, activity_limit: int | None = None,
+        activity_before: int | None = None, activity_limit: int | None = None,
         item_ids: tuple[str, ...] | None = None,
         projections: dict[str, dict[str, object]] | None = None,
         anchor_context: ContextNoticeAnchorDTO | None = None,
@@ -580,9 +580,12 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             if projections[span.turn_id].get("activity_has_more") is True:
                 detail.detail_truncated = True
             if item_ids is not None:
-                canonical = self._context_reader.read_canonical_items(snapshot, item_ids=list(item_ids))
-                detail.response_parts = enrich_selected_item_parts(detail.response_parts, canonical, include=frozenset(include))
-            detail.response_parts.extend(notices.get(span.turn_id, ()))
+                detail_ids = tuple(dict.fromkeys(part.source.item_id for part in detail.response_items
+                                                if part.projection == "detail" or part.kind == "content"))
+                if detail_ids:
+                    canonical = self._context_reader.read_canonical_items(snapshot, item_ids=detail_ids)
+                    detail.response_items = enrich_selected_items(detail.response_items, canonical, include=frozenset(include))
+            detail.response_items.extend(notices.get(span.turn_id, ()))
             if activity_limit is None and item_ids is None:
                 summaries.append(summary(
                     project_detail(
@@ -595,7 +598,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         summaries.reverse()
         internal_executions = build_internal_execution_history(internal_entries, include=include, budget=budget)
         for execution in internal_executions:
-            execution.response_parts.extend(notices.get(execution.execution_id, ()))
+            execution.response_items.extend(notices.get(execution.execution_id, ()))
         return TurnHistoryPageDTO(
             items=items,
             source_view_id=self._context_reader.context_view_id(chain),

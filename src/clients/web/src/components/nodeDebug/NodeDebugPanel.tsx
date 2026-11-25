@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { t } from "../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -460,13 +461,13 @@ export default function NodeDebugPanel({
         />
       ) : null}
 
-      {state?.error_message ? <div className="debug-error" role="alert">{state.error_message}</div> : null}
+      {state?.error_message ? <div className="debug-error failure-summary" role="alert">{failureSummary(state.error_message)}</div> : null}
       {state?.requires_restart ? (
         <div className="debug-warning" role="status">
             {t("debug.panel.sourceChanged", (state.source_changed_paths ?? []).join(", "))}
         </div>
       ) : null}
-      {error ? <div className="debug-error" role="alert">{error}</div> : null}
+      {error ? <div className="debug-error failure-summary" role="alert">{failureSummary(error)}</div> : null}
     </section>
   );
 }

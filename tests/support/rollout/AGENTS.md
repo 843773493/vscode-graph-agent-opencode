@@ -6,6 +6,7 @@
 rollout/
 ├── context_registry.py    正式 schema 的 Session、执行准入与 registry 数据库 fixture
 ├── fixture_output.py      经真实执行 owner 提交静态历史输出
+├── compaction_application.py  真实冻结、摘要生成和候选采用
 ├── skill_catalog.py       局部合同的冻结 Skill 输入，经正式 load 激活
 ├── view_mutations.py      隔离修改 view 成员并重建私有分块索引
 └── web_boundary_seeding.py 生成 Web 边界场景的 canonical 历史
@@ -16,15 +17,16 @@ rollout/
 - 由测试调用的 canonical 历史 fixture 准备。
 - 只作用于测试连接的 view 成员损坏注入。
 - 显式测试工作区中的 Web 边界历史播种。
+- 经真实摘要生成器采用候选的压缩场景准备。
 
 # 不可修改内容
 
 - 不放 rollout 产品实现或测试用例。
-- 不绕过 admission、checkpoint、canonical item 或执行终态 owner 伪造成功历史。
+- 不绕过 admission、checkpoint、canonical item、摘要生成器或执行终态 owner 伪造成功历史。
 - 不写 fixture 源目录或测试运行产物。
 
 # 规范
 
-- 静态输出必须经过正式执行 owner；view 损坏必须隔离在测试连接内。
+- 静态输出必须经过正式执行 owner；候选压缩必须经真实 freeze/generate/adopt 链路；view 损坏必须隔离在测试连接内。
 - 场景数据使用调用方提供的隔离工作区和稳定身份，不从当前日期或显示名推导路径。
 - 新增文件按历史准备阶段命名，并同步更新 `tests/support/AGENTS.md` 的职责树。

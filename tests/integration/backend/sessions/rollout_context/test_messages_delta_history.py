@@ -20,9 +20,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Overwrite
 
-from app.agents.manual_compaction_checkpoint import ManualCompactionCheckpointAdapter
 from app.core.checkpoint_config import build_checkpoint_config
-from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.compaction import ApplyCompactionCandidateIntent
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     MessagesDeltaChannel,
     acheckpoint_messages,
@@ -37,6 +36,9 @@ from tests.integration.backend.sessions.rollout_context.test_langgraph_channel_c
 )
 from tests.integration.backend.sessions.rollout_context.test_rollout_checkpoint_saver import (
     _execution_scope,
+)
+from tests.support.rollout.compaction_application import (
+    generate_compaction_candidate,
 )
 
 __all__ = ["channel_owner"]
@@ -262,7 +264,10 @@ async def test_unknown_remove_fails_at_graph_entry(channel_owner):
         )
 
 
-async def test_manual_message_baseline_keeps_other_channel_replay_counters(channel_owner):
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_compaction_candidate_message_baseline_keeps_other_channel_replay_counters(
+    channel_owner, compaction_summary_model, asynchronous,
+):
     saver, admission, user, sessions = channel_owner
 
     class State(TypedDict):
@@ -276,20 +281,52 @@ async def test_manual_message_baseline_keeps_other_channel_replay_counters(chann
     config = build_checkpoint_config(admission.thread_id)
     with _execution_scope(admission):
         compiled = graph.compile(checkpointer=saver)
-        actual = await compiled.ainvoke({"messages": [user], "events": ["输入"]}, config)
+        actual = (
+            await compiled.ainvoke({"messages": [user], "events": ["输入"]}, config)
+            if asynchronous else compiled.invoke({"messages": [user], "events": ["输入"]}, config)
+        )
         before = saver.get_tuple(config)
-        adapter = ManualCompactionCheckpointAdapter(checkpointer=saver)
-        snapshot = await adapter.load_snapshot(MutationIntentOwner(admission.session_id, admission.thread_id))
-        await adapter.request_compaction(snapshot=snapshot)
-        after = saver.get_tuple(config)
+        assert before is not None
+        frozen, summary = await generate_compaction_candidate(
+            saver,
+            session_id=admission.session_id,
+            thread_id=admission.thread_id,
+            admission=admission,
+            model=compaction_summary_model,
+            candidate_id="delta-channel-compaction",
+            task_id="delta-channel-compaction-task",
+        )
+        with saver._context_reader.open_snapshot(
+            admission.session_id, admission.thread_id, frozen.checkpoint_ns,
+        ) as snapshot:
+            expected_view = saver._storage.checkpoints.active_view_id(snapshot)
+        assert expected_view is not None
+        intent = ApplyCompactionCandidateIntent(frozen, expected_view)
+        adopted = saver.adopt_candidate(before.config, intent)
+        replayed = saver.adopt_candidate(before.config, intent)
+        assert replayed.config == adopted.config
+        assert replayed.checkpoint["id"] == adopted.checkpoint["id"]
+        after = saver.get_tuple(adopted.config)
+        assert after is not None
         assert after.metadata["counters_since_delta_snapshot"]["events"] == before.metadata["counters_since_delta_snapshot"]["events"]
         assert "messages" not in after.metadata["counters_since_delta_snapshot"]
-        assert after.checkpoint["channel_versions"]["messages"] == before.checkpoint["channel_versions"]["messages"]
+        assert after.checkpoint["channel_versions"]["messages"] != before.checkpoint["channel_versions"]["messages"]
         assert isinstance(saver.get_tuple(after.config).checkpoint["channel_values"]["messages"], _DeltaSnapshot)
+        expected_messages = checkpoint_messages(saver, adopted)
+        assert [message.id for message in expected_messages] == [f"summary-{frozen.candidate_id}"]
+        assert expected_messages[0].response_metadata["compaction_summary"] is True
+        assert summary.text in expected_messages[0].content
+        assert user.id not in {message.id for message in expected_messages}
+        assert "answer" not in {message.id for message in expected_messages}
         cold_graph = graph.compile(checkpointer=RolloutCheckpointSaver(sessions))
-        restored = await cold_graph.aget_state(after.config)
+        restored = (
+            await cold_graph.aget_state(after.config)
+            if asynchronous else cold_graph.get_state(after.config)
+        )
         assert restored.values["events"] == actual["events"]
-        assert [(message.id, message.content) for message in restored.values["messages"]] == [(message.id, message.content) for message in actual["messages"]]
+        assert [(message.id, message.content) for message in restored.values["messages"]] == [
+            (message.id, message.content) for message in expected_messages
+        ]
 
 
 @pytest.mark.parametrize("corruption", ["missing-parent", "versioned-root"])

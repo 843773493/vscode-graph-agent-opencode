@@ -9,11 +9,21 @@ from contextvars import copy_context
 from uuid import UUID
 
 from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
-from app.core.execution_admission_context import require_current_execution_admission
+from app.core.execution_admission_context import (
+    execution_admission_scope,
+    require_current_execution_admission,
+)
 from app.core.identifier import create_uuid_hex
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.execution_admission import (
+    DerivedExecutionReference,
+    InternalExecutionIntent,
+)
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
@@ -29,6 +39,10 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
+)
+from app.services.infrastructure.rollout_context.runtime.summary_compiler import (
+    compile_summary_request,
+    summary_request_contributions,
 )
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from tests.harness.performance.observers import observe_calls
@@ -233,5 +247,45 @@ def create_frozen_provider_prepare(
                     assembly_id=snapshot.assembly_id,
                 )
             return snapshot
+
+    return prepare
+
+
+def create_frozen_summary_prepare(wire, activation):
+    """不调用模型，真实登记独立 execution、来源与 sealed assembly。"""
+    def prepare(saver, session_id, thread_id, *, key, items, wire_arguments=None, checkpoint_ns=""):
+        from dataclasses import replace
+
+        reference = DerivedExecutionReference(f"task:{key}", f"summary-plan:{key}")
+        admission = saver.admit_internal_execution(
+            session_id, thread_id=thread_id, job_id=f"job:{key}",
+            intent=InternalExecutionIntent(
+                message_id=f"message:{key}", execution_id=f"execution:{key}",
+                admission_idempotency_key=f"admission:{key}", derived_reference=reference,
+            ), message=None,
+        )
+        instruction = "Summarize the provided conversation. Return only a factual plain-text summary. Do not call tools."
+        arguments = wire("summary-provider", "chat_completions") if wire_arguments is None else wire_arguments
+        with (
+            session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id),
+            execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        ):
+            sources = tuple(replace(source, source_ordinal=saver._storage.assemblies.register_context_contribution(
+                session_id, thread_id, source, checkpoint_ns=checkpoint_ns,
+            )) for source in summary_request_contributions(instruction=instruction))
+            plan, preparation, bodies = compile_summary_request(
+                session_id=session_id, thread_id=thread_id, plan_id=reference.plan_id,
+                provider_profile=f"{arguments['target_format']}:{arguments['provider_version']}",
+                instruction=instruction, items=items,
+                source_refs=tuple(ContextRef.canonical_item(item, session_id=session_id, thread_id=thread_id) for item in items),
+                contributions=sources,
+            )
+            return saver.prepare_context_for_provider(
+                session_id, thread_id, turn_id=None, execution_id=admission.execution_id,
+                plan_creation_idempotency_key=f"summary-create:{key}", seal_idempotency_key=f"summary-seal:{key}",
+                frozen_plan=plan, context_preparation=preparation, request_only_content=bodies,
+                checkpoint_ns=checkpoint_ns, **arguments,
+                **activation(saver, plan_creation_idempotency_key=f"summary-create:{key}", checkpoint_ns=checkpoint_ns),
+            )
 
     return prepare

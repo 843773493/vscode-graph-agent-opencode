@@ -158,7 +158,7 @@ def test_gateway_skill_metadata_native_and_relay_use_exact_owner(
     workspace_source = f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override"
     source = client_b.get(workspace_source, headers={"X-BoxTeam-Workspace-Id": workspace_id}).raise_for_status().json()["data"]
     document = commentjson.loads(source["jsonc"])
-    document.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = (
+    document["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = (
         f"http://127.0.0.1:{topology['ports'][3]}"
     )
     connection_config = client_b.put(workspace_source, headers={
@@ -189,7 +189,7 @@ def test_gateway_skill_metadata_native_and_relay_use_exact_owner(
     )
     source = client_b.get(workspace_source, headers={"X-BoxTeam-Workspace-Id": workspace_id}).raise_for_status().json()["data"]
     document = commentjson.loads(source["jsonc"])
-    document.setdefault("plugins", {})["runtime"] = {"entries": [{
+    document["settings"]["workspace"].setdefault("plugins", {})["runtime"] = {"entries": [{
         "package_id": "workspace.skill.proof", "plugin_id": "guide",
         "package_version": "1.0.0", "enabled": True,
     }]}

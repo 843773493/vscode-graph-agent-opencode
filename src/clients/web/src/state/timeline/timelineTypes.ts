@@ -1,9 +1,9 @@
-import type { AttachmentRef, Message, TurnResponsePart } from "../../types/backend";
+import type { AttachmentRef, Message, TurnResponseItem } from "../../types/backend";
 
 export type TimelineItem = {
-  responseSources?: Array<{ part_id: string; kind: string; source: TurnResponsePart["source"]; projection?: TurnResponsePart["projection"]; tool_call_id?: string | null }>;
+  responseSources?: Array<{ id: string; kind: string; source: TurnResponseItem["source"]; projection?: TurnResponseItem["projection"]; final?: boolean; tool_call_id?: string | null }>;
 } & (
-  | { kind: "context_event"; id: string; notices: TurnResponsePart[] }
+  | { kind: "context_event"; id: string; notices: TurnResponseItem[] }
   | {
       kind: "message";
       id: string;
@@ -31,7 +31,11 @@ export type TimelineItem = {
       kind: "aggregated_text";
       id: string;
       text: string;
-      partKind: "markdown" | "reasoning" | "compaction";
+      partKind: "markdown" | "reasoning" | "compaction" | "content";
+      content?: TurnResponseItem["content"];
+      carrierType?: string | null;
+      truncated?: boolean;
+      media?: { kind: "image" | "audio" | "video"; source: string };
       /**
        * reasoning 的稳定语义类别；不暴露 Provider carrier，但保留
        * detail、summary 和 encrypted/redacted 的边界供展示与诊断使用。
@@ -55,6 +59,8 @@ export type TimelineItem = {
       rawEnd: Record<string, unknown>;
       active: boolean;
       detailsLoaded?: boolean;
+      /** 只有调用声明；不把声明完整误认为已执行成功。 */
+      declared?: boolean;
       failed?: boolean;
       incomplete?: boolean;
       outcomeUnknown?: boolean;

@@ -273,6 +273,22 @@
   max-width: 100%;
 }
 
+.chat-output-content :is(img, video, audio) {
+  display: block;
+  max-width: 100%;
+}
+
+.chat-output-content :is(img, video) {
+  height: auto;
+  max-height: 70vh;
+  object-fit: contain;
+}
+
+.chat-output-content pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .chat-user-bubble.is-internal {
   max-width: min(90%, 680px);
   border-style: dashed;
@@ -1212,7 +1228,7 @@
   }
 
   .chat-tool-preview,
-  .chat-working-detail {
+  .chat-working-detail:not([role="alert"]) {
     display: none;
   }
 }

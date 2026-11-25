@@ -6,12 +6,36 @@ import OriginalChatTurn from "./ChatTurn";
 import { chatTurnProps, conversation } from "./chatTurnTestFixtures";
 
 describe("ChatTurn response 展示", () => {
+  test("最终媒体按单Item补读并在原定位节点展示，不藏入过程或降为Markdown", async () => {
+    const value = conversation("done");
+    value.responseItems = [{id: "image", kind: "content", projection: "summary", status: "completed",
+      final: true, carrier_type: "image_url", content: null,
+      source: {item_id: "image", message_sequence: 2, item_sequence: 2}}];
+    const calls: Parameters<NonNullable<ReturnType<typeof chatTurnProps>["onLoadTurnDetails"]>>[] = [];
+    const props = () => ({...chatTurnProps(value), onLoadTurnDetails: async (...args: typeof calls[number]) => {calls.push(args);}});
+    const renderer = create(<ChatTurn {...props()} />);
+    const section = renderer.root.findByProps({className: "chat-response-bubble chat-output-content"});
+    const node = section.props["data-transcript-node"];
+    expect(JSON.parse(node)).toEqual({source_ref: {kind: "item", id: "image"}, slot: "body"});
+    await act(async () => section.findByType("button").props.onClick());
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![3]).toContain("final_response");
+    expect(calls[0]![5]).toMatchObject({sourceViewId: "view_fixture", sourceViewRevision: 1, itemIds: ["image"]});
+    value.responseItems = [{...value.responseItems[0]!, projection: "detail",
+      content: {type: "image_url", image_url: {url: "https://example.test/image.png"}}}];
+    await act(async () => renderer.update(<ChatTurn {...props()} />));
+    expect(renderer.root.findByType("img").props.src).toBe("https://example.test/image.png");
+    expect(renderer.root.findByProps({className: "chat-response-bubble chat-output-content"}).props["data-transcript-node"]).toBe(node);
+    expect(renderer.root.findAllByProps({className: "chat-thinking-body"})).toHaveLength(0);
+    renderer.unmount();
+  });
+
   test("只有权威 final 独立展示，长中间消息不会被猜作最终回答", () => {
     const value = conversation("done");
-    value.responseParts = [
-      {part_id:"middle", kind:"text", projection:"detail", status:"completed",
-        source:{item_id:"item_middle", item_sequence:2, message_sequence:2, part_ordinal:0}, text:"长中间消息".repeat(5000)},
-      {...value.responseParts![0], text:"权威最终回答"},
+    value.responseItems = [
+      {id:"middle", kind:"text", projection:"detail", status:"completed",
+        source:{item_id:"item_middle", item_sequence:2, message_sequence:2, }, text:"长中间消息".repeat(5000)},
+      {...value.responseItems![0], text:"权威最终回答"},
     ];
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
     expect(html).toContain("权威最终回答");
@@ -36,7 +60,7 @@ describe("ChatTurn response 展示", () => {
     const value = conversation("done");
   value.displayMode = "live";
   value.source = "pending";
-  value.responseParts = [];
+  value.responseItems = [];
   value.messageStream = {
     connectionStatus: "terminal",
     streamStatus: "completed",
@@ -45,8 +69,8 @@ describe("ChatTurn response 展示", () => {
     resumable: false,
   };
   value.assistantMessages = [];
-  value.responseParts = [{
-    part_id: "part_bounded_end",
+  value.responseItems = [{
+    id: "part_bounded_end",
     kind: "text",
     projection: "streaming",
     status: "completed",
@@ -83,8 +107,8 @@ describe("ChatTurn response 展示", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
-  value.responseParts = [{
-    ...value.responseParts![0],
+  value.responseItems = [{
+    ...value.responseItems![0],
     text: "旧历史正文",
   }];
   value.messageStream = {
@@ -94,8 +118,8 @@ describe("ChatTurn response 展示", () => {
     failure: null,
     resumable: true,
   };
-  value.responseParts = [{
-    part_id: "live_text",
+  value.responseItems = [{
+    id: "live_text",
     kind: "text",
     projection: "streaming",
     status: "running",
@@ -141,8 +165,8 @@ describe("ChatTurn response 展示", () => {
       resumable: true,
     };
     const rawReasoning = "I am checking the repository before answering.";
-    value.responseParts = [{
-      part_id: "reasoning-live",
+    value.responseItems = [{
+      id: "reasoning-live",
       kind: "reasoning",
       projection: "streaming",
       status: "running",
@@ -164,7 +188,7 @@ describe("ChatTurn response 展示", () => {
     const value = conversation("error", "session_interrupted");
   value.displayMode = "live";
   value.source = "pending";
-  value.responseParts = [];
+  value.responseItems = [];
   value.messageStream = {
     connectionStatus: "terminal",
     streamStatus: "interrupted",
@@ -190,7 +214,7 @@ describe("ChatTurn response 展示", () => {
     const value = conversation("done");
     value.displayMode = "live";
     value.source = "pending";
-    value.responseParts = [];
+    value.responseItems = [];
     value.assistantMessages = [];
     value.messageStream = {
       connectionStatus: "terminal",
@@ -249,7 +273,7 @@ describe("ChatTurn response 展示", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
-    value.responseParts = [];
+    value.responseItems = [];
     value.assistantMessages = [];
     value.messageStream = {
       connectionStatus: "connected",
@@ -291,7 +315,7 @@ describe("ChatTurn response 展示", () => {
     const value = conversation("done");
     value.displayMode = "live";
     value.source = "pending";
-    value.responseParts = [];
+    value.responseItems = [];
     value.assistantMessages = [];
     value.messageStream = {
       connectionStatus: "terminal",
@@ -337,7 +361,7 @@ describe("ChatTurn response 展示", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
-    value.responseParts = [];
+    value.responseItems = [];
     value.assistantMessages = [];
     value.messageStream = {
       connectionStatus: "connected",
@@ -359,7 +383,7 @@ describe("ChatTurn response 展示", () => {
     const lost = conversation("error");
     lost.displayMode = "live";
     lost.source = "pending";
-    lost.responseParts = [];
+    lost.responseItems = [];
     lost.assistantMessages = [];
     lost.messageStream = {
       connectionStatus: "terminal",
@@ -382,7 +406,7 @@ describe("ChatTurn response 展示", () => {
     const missing = conversation("error");
     missing.displayMode = "live";
     missing.source = "pending";
-    missing.responseParts = [];
+    missing.responseItems = [];
     missing.assistantMessages = [];
     missing.messageStream = {
       connectionStatus: "terminal",
@@ -400,7 +424,7 @@ describe("ChatTurn response 展示", () => {
     value.turnId = "job_failed_history";
     value.turnStatus = "failed";
     value.assistantMessages = [];
-    value.responseParts = [];
+    value.responseItems = [];
     value.activityStats = { duration_ms: 30, item_count: 2 };
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
@@ -414,7 +438,7 @@ describe("ChatTurn response 展示", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
-    value.responseParts = [];
+    value.responseItems = [];
     value.assistantMessages = [];
     value.messageStream = {
       connectionStatus: "gap",
@@ -435,7 +459,7 @@ describe("ChatTurn response 展示", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
-    value.responseParts = [];
+    value.responseItems = [];
     value.assistantMessages = [];
     value.messageStream = {
       connectionStatus: "disconnected",
@@ -456,7 +480,7 @@ describe("ChatTurn response 展示", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
-    value.responseParts = [];
+    value.responseItems = [];
     value.assistantMessages = [];
     value.messageStream = {
       connectionStatus: "retry_exhausted",
@@ -478,7 +502,7 @@ describe("ChatTurn response 展示", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
-    value.responseParts = [];
+    value.responseItems = [];
     value.assistantMessages = [];
     value.messageStream = {
       connectionStatus: "connected",
@@ -514,8 +538,8 @@ describe("ChatTurn response 展示", () => {
       resumable: false,
     };
     value.turnStatus = "cancelled";
-    value.responseParts![0] = {
-      ...value.responseParts![0],
+    value.responseItems![0] = {
+      ...value.responseItems![0],
       kind: "text",
       text: "已提交的半截回答",
       partial: true,
@@ -543,8 +567,8 @@ describe("ChatTurn response 展示", () => {
       failure: null,
       resumable: true,
     };
-    value.responseParts = [{
-      part_id: "unknown-tool-execution",
+    value.responseItems = [{
+      id: "unknown-tool-execution",
       kind: "tool_call",
       projection: "streaming",
       status: "completed",
@@ -571,9 +595,9 @@ describe("ChatTurn response 展示", () => {
       ...value.assistantMessages![0],
       content: "OK",
     }];
-    value.responseParts = [
+    value.responseItems = [
       {
-        part_id: "reasoning-complete",
+        id: "reasoning-complete",
         kind: "reasoning",
         projection: "streaming",
         status: "completed",
@@ -582,7 +606,7 @@ describe("ChatTurn response 展示", () => {
         final: false,
       },
       {
-        part_id: "final-complete",
+        id: "final-complete",
         kind: "final_text",
         projection: "streaming",
         status: "completed",

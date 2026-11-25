@@ -22,7 +22,6 @@ from app.agents.policy import (
     validate_tool_dependencies,
 )
 from app.agents.policy.tool_capability import ToolMetadata, ToolPolicyResolver
-from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
 from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
@@ -31,7 +30,7 @@ from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tools.tool_discovery import create_search_tools_tool
 from app.core.path_utils import workspace_context
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.domain.context_compaction import CompactionPolicy
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from tests.support.communication.probe import CommunicationProbe
 
 
@@ -193,8 +192,7 @@ def test_policy_default_names_match_actual_agent_graph_tools(
         # D1 后 resolved_skills 合同是 PublishedSkillCatalog | None；
         # 本测试只关注工具名集合，不装配 Skill middleware。
         resolved_skills=None,
-        compaction_preflight=NoDurableOwnerCompactionPreflight(),
-        compaction_policy=CompactionPolicy(), automatic_compaction_enabled=True,
+        compaction_runtime=None, compaction_owner=MutationIntentOwner("session-policy", "thread-policy"), agent_id="default",
         resolved_tool_denylist=set(),
         interrupt_on=None,
         runtime_middleware=[],

@@ -39,14 +39,16 @@ def thread_reference_web_assets(resource_web_assets: Path) -> Path:
 
 def _interaction(workspace: Path) -> dict[str, object]:
     config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-    primary = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
+    primary = config["settings"]["workspace"]["llm"]["providers"]["primary"]
+    model = primary["models"]["default"]["model"]
+    endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
     cassette = build_cassette(
         asset_id="thread-resource-reference",
-        model=primary["model"],
-        url=f"{primary['endpoint'].rstrip('/')}/chat/completions",
+        model=model,
+        url=f"{endpoint.rstrip('/')}/chat/completions",
         frames=chat_completion_frames(
             response_id="thread-resource-reference",
-            model=primary["model"],
+            model=model,
             deltas=[{"role": "assistant", "content": "已创建用于 Thread 引用的产品历史。"}],
             finish_reason="stop",
         ),
@@ -72,7 +74,7 @@ async def _configure_gateway_url(
     loaded.raise_for_status()
     document = loaded.json()["data"]
     config = commentjson.loads(document["jsonc"])
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+    config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     saved = await client.put(source_path, headers=headers, json={
         "gateway_id": gateway_id,
         "workspace_id": workspace_id,

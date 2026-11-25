@@ -333,7 +333,7 @@ async def test_source_point_projects_ingress_attachment_with_frozen_scope(
     def unexpected_body_read(*args, **kwargs):
         raise AssertionError("SourcePoint 展示不能解析 canonical 或附件正文")
 
-    monkeypatch.setattr(attachment_tool_owner.saver._storage.storage, "_read_v2_item_at", unexpected_body_read)
+    monkeypatch.setattr(attachment_tool_owner.saver._storage.storage, "_read_item_at", unexpected_body_read)
     monkeypatch.setattr(attachment_tool_owner.store, "_fork_directory_manifest", unexpected_body_read)
     point = await fork_source_point_service.source_point(
         session_id=owner.session_id, thread_id=owner.thread_id, turn_id=attachment_tool_owner.turn_id,

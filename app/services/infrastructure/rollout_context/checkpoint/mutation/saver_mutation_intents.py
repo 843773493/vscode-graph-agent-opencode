@@ -71,23 +71,14 @@ def _append_intent_for(
 def _tool_call_id_for_intent(item: CanonicalItemRecord) -> str:
     """提取 tool_call/tool_result 与 intent 配对的 tool_call_id。
 
-    - tool_call 接受单 call 形态与单元素 tool_calls 列表（checkpoint
-      shadow 投影形态）；多元素列表无法映射为单个 append intent 的
-      配对身份，显式拒绝。
-    - tool_result 的身份按 v2 合同位于 typed payload；text payload 的
-      身份由 metadata 携带，二者都支持。
+    - tool_call 的唯一调用已由 canonical domain 校验。
+    - tool_result 的身份位于 typed payload；text payload 的身份由
+      ToolResultEvidence 携带。
     """
     payload = item.payload if isinstance(item.payload, Mapping) else {}
     if item.semantic_kind == SemanticKind.TOOL_CALL:
         if isinstance(payload.get("tool_calls"), list):
-            calls = payload["tool_calls"]
-            if len(calls) != 1:
-                raise ValueError(
-                    "多 call 批式 tool_call 不能构造 append intent: "
-                    f"{item.item_id!r} (tool_calls={len(calls)})"
-                )
-            call = calls[0] if isinstance(calls[0], Mapping) else {}
-            raw_tool_call_id = call.get("id")
+            raw_tool_call_id = payload["tool_calls"][0]["id"]
         else:
             raw_tool_call_id = payload.get("tool_call_id")
     else:

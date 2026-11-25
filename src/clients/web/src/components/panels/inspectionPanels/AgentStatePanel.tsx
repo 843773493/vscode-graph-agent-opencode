@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import { useMemo, useState } from "react";
 import { formatDateTime } from "../../../utils/format";
@@ -84,7 +85,7 @@ export default function AgentStatePanel({
       {error ? (
         <div className="panel-feedback" role="alert">
           <div className="error-title">{t("inspection.state.failed")}</div>
-          <div className="error-message">{error}</div>
+          <div className="error-message failure-summary">{failureSummary(error)}</div>
         </div>
       ) : null}
       {displayJsonl ? (

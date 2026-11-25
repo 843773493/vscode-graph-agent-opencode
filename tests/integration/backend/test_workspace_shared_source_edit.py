@@ -329,9 +329,11 @@ def test_shared_user_source_is_observed_applied_and_caught_up_by_independent_bac
         user_config = shared_home / _USER_CONFIG_RELATIVE_PATH
         before_invalid = user_config.read_bytes()
         invalid_payload = commentjson.loads(before_invalid.decode("utf-8"))
-        cast(dict[str, object], cast(dict[str, object], invalid_payload["plugins"])["runtime"])[
-            "entries"
-        ] = [{
+        settings = cast(dict[str, object], invalid_payload["settings"])
+        workspace_settings = cast(dict[str, object], settings["workspace"])
+        plugins = cast(dict[str, object], workspace_settings["plugins"])
+        runtime = cast(dict[str, object], plugins["runtime"])
+        runtime["entries"] = [{
             "package_id": "invalid.shared.user",
             "plugin_id": "invalid-binding",
             "package_version": "1.0.0",

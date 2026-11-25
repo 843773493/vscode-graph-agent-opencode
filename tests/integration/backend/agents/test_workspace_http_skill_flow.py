@@ -72,7 +72,7 @@ async def test_private_http_skill_updates_rebinds_explicitly_and_replays_frozen_
     config = commentjson.loads(config_path.read_text())
     sources = [{"id": "private-one", "name": SKILL_NAME, "fetch": {"protocol": "http", "url": source.url},
                 "updates": {"mode": "manual"}}]
-    config.setdefault("resources", {}).setdefault("skill_sources", {})["sources"] = sources
+    config["settings"]["workspace"].setdefault("resources", {}).setdefault("skill_sources", {})["sources"] = sources
     config_path.write_text(json.dumps(config, ensure_ascii=False))
     home = workspace.parent / "boxteam-home"
     port = integration_ports_for_file(Path(request.node.fspath)).port(13)
@@ -136,7 +136,7 @@ async def test_private_http_skill_updates_rebinds_explicitly_and_replays_frozen_
             assert read.status_code == 200 and "封存后发布的当前正文 Ω" in read.text, read.text
             assert len(source.requests) == 2, "仅初始获取和显式刷新访问来源，导航与 skill_load 只消费快照"
 
-            config["resources"]["skill_sources"]["gateway_updates"] = {"mode": "manual"}
+            config["settings"]["workspace"]["resources"]["skill_sources"]["gateway_updates"] = {"mode": "manual"}
             receipts["unrelated_reload"] = await _reload(client, config_path, config)
             assert len(source.requests) == 2, "无关配置发布不得刷新 manual 来源"
             source.body, source.etag = (FRONTMATTER + "私有来源手动更新 Ω\n").encode(), '"manual-update"'

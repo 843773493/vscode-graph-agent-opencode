@@ -85,15 +85,19 @@ class RolloutViewSequenceMixin:
         """仅按目标 canonical membership 选取消息；历史 range 图留给完整审计。"""
         view_id = strict_text(view_id, field="context_views.view_id")
         # 消息选集已冻结在目标 membership；祖先 range 图只在恢复和完整审计时遍历。
-        if connection.execute("SELECT 1 FROM context_views WHERE view_id = ?", (view_id,)).fetchone() is None:
+        view = connection.execute("SELECT view_kind FROM context_views WHERE view_id = ?", (view_id,)).fetchone()
+        if view is None:
             raise RuntimeError(f"context view 不存在: {view_id}")
+        messages_view = view[0] == "checkpoint_messages"
         rows = connection.execute(
             "SELECT member.item_id, item.semantic_kind, item.projection_manifest_json, "
             "message.message_sequence FROM context_view_items AS member "
             "JOIN item_catalog AS item ON item.item_id = member.item_id "
             "LEFT JOIN messages AS message ON message.jsonl_offset = item.jsonl_offset "
             "AND message.jsonl_length = item.jsonl_length "
-            "WHERE member.view_id = ? AND member.visible = 1 ORDER BY member.logical_item_ordinal",
+            "WHERE member.view_id = ? AND member.visible = 1 "
+            + ("AND member.context_selected=1 ORDER BY member.context_ordinal" if messages_view
+               else "ORDER BY member.logical_item_ordinal"),
             (view_id,),
         ).fetchall()
         sequences: list[int] = []

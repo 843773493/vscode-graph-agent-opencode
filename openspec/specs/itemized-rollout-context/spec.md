@@ -7,9 +7,7 @@
 为会话 rollout 建立独立于 LangChain 和具体 Provider 的不可变语义 item 层，使上下文、历史、恢复和 Provider 请求都能从同一份有序事实重建。
 
 附件目录后继修订见 `add-managed-attachment-directories`：本 change 的 proposal/design、附件存储 requirement 和 fork 验收已同步独立目录、目录级关联、按修改保留／释放与原件重建，旧库仅经显式离线迁移。canonical 原历史身份、冻结输入、请求 hash、fork journal/claim 和 publication 约束继续保留；目录完整验收及未完成边界以该 change 为准，历史任务收据不构成旧 blob writer/owner-ref 生产链的保留依据。
-
 ## Requirements
-
 ### Requirement: 产品 Session、durable Thread 与 LangGraph namespace 必须严格分层
 
 Workspace navigation SQLite MUST是Session/Folder关系的唯一权威，MUST启用foreign key、node/locator唯一约束、schema version和启动完整性检查。切换旧树前 MUST保留可校验的旧索引/目录/SQLite一致性备份；新catalog的受控备份 MUST使用SQLite online backup或等价一致性快照并记录generation/checksum，不得直接复制活动WAL文件。catalog损坏或备份generation落后时 MUST进入维护/人工核对状态，保留未登记目录与原数据供审计，不得扫描日期桶重建父子关系、自动吸收Session、默认标active或把未知目录交给GC删除。
@@ -464,13 +462,15 @@ delegated child 的初始 execution 绑定 MUST 由生产提供真实 thread bin
 
 `CanonicalItemRecord.status` 完整枚举固定为 `completed | partial | incomplete | cancelled | failed | unknown`，六者在 JSONL 中都表示终态；`completed` 表示 semantic item 的声明 payload 已完整收敛并可按 schema 正常投影，`partial` 表示截至中断/停止边界已持久化的完整 payload 快照但尚未达到正常语义完成边界；二者都只能写成一个 immutable JSONL item，不能把已提交的 `partial` 原地改成 `completed`。`open`、`active`、`running`、`draft` 和 `completed_empty` 只允许出现在内存 draft 或 assembly/Turn/control state，不能写入 canonical item。ItemDraft 只能从内部 `draft` 转移到上述六个终态之一；item 写入后不得更新、删除、覆盖、插入重排或改变 status。retry、resume、纠错必须追加新的 item identity，并用 `retry_of`/`resumes`/`supersedes` 关系连接旧 item；没有稳定 payload 的崩溃 draft 只能通过 control outcome 记录 execution lost，不能补造 `status=unknown` item。非 `completed` item 不得作为正常 final response；tool result 的已提交 payload 如果外部执行结果未确认，必须在其 typed payload 内使用 `tool_outcome=unknown` marker，且不可作为成功 replay input。`tool_outcome` 不是 `CanonicalItemRecord.status`，执行/控制记录的 outcome 也不得引入带 outcome 前缀的 unknown 状态别名。
 
-系统 SHALL 将用户输入、assistant 输出、reasoning、tool call、tool result、需要持久化的 runtime notice、压缩摘要和未知 Provider 扩展表达为带 schema version 的 `CanonicalItemRecord`。v2 的必填核心字段必须非空且同时存在：`format_version=2`、`record_type=item`、`item_sequence`、`item_id`、`semantic_kind`、`payload_kind`、`status`、`producer_ref`、`payload`、`content_hash`、`created_at` 和 `extensions`；其中 `extensions` 至少是空 object，`producer_ref` 是单一完整 payload producer，`payload` 必须与 `payload_kind` 匹配。`turn_id`、`turn_scope`、`message_group_id`、`projection_group`、`projection_identity`、`tool_result_evidence`、`source_manifest` 和 `wire_role` 是按语义可空/可省略的 typed 关联或投影字段，不得被 reader 当成隐含默认值；v2 item-line 禁止通用 `metadata` 顶层字段。`semantic_kind` MUST 使用固定枚举 `user_input | assistant_output | reasoning | tool_call | tool_result | runtime_notice | compaction_summary | attachment | extension`，`payload_kind` MUST 使用完整枚举 `text | structured_content | tool_call | tool_result | summary | attachment_ref | opaque | extension`。不得同时使用含义重叠的通用 `kind` 作为 canonical 语义字段。`assistant_text` 和 `final_response` 是 projection，不是 `semantic_kind` 枚举值。只对当前请求生效的静态或动态 system context 不得因为最终使用了 system/developer wire role 就自动成为 canonical item。
+系统 SHALL 将用户输入、assistant 输出、reasoning、tool call、tool result、需要持久化的 runtime notice、压缩摘要和未知 Provider 扩展表达为带 schema version 的 `CanonicalItemRecord`。v3 的必填核心字段必须非空且同时存在：`format_version=3`、`record_type=item`、`item_sequence`、`item_id`、`semantic_kind`、`payload_kind`、`status`、`producer_ref`、`payload`、`content_hash`、`created_at` 和 `extensions`；其中 `extensions` 至少是空 object，`producer_ref` 是单一完整 payload producer，`payload` 必须与 `payload_kind` 匹配。`turn_id`、`turn_scope`、`message_group_id`、`projection_group`、`projection_identity`、`tool_result_evidence`、`source_manifest` 和 `wire_role` 是按语义可空/可省略的 typed 关联或投影字段，不得被 reader 当成隐含默认值；v3 item-line 禁止通用 `metadata` 顶层字段。`semantic_kind` MUST 使用固定枚举 `user_input | assistant_output | reasoning | tool_call | tool_result | runtime_notice | compaction_summary | attachment | extension`，`payload_kind` MUST 使用完整枚举 `text | structured_content | tool_call | tool_result | summary | attachment_ref | opaque | extension`。不得同时使用含义重叠的通用 `kind` 作为 canonical 语义字段。`assistant_text` 和 `final_response` 是 projection，不是 `semantic_kind` 枚举值。只对当前请求生效的静态或动态 system context 不得因为最终使用了 system/developer wire role 就自动成为 canonical item。
 
-`ProjectionGroup(ordinal,size,content_form)` 的 `content_form` 只能为 `str|list`；它只在一个明确 `message_group_id` 下的多 item carrier 出现，要求 `size>=2`、ordinal 从 0 连续覆盖至 `size-1`、最后一个 anchor 为 `tool_call` 且整组 owner/Turn/producer 一致。`ItemProjectionIdentity` 的 message/model-call/part/block identity、`ToolResultEvidence` 的文本 tool result call/result identity与 `execution_confirmed`、`ItemSourceManifest` 的 source revision/visibility/protection必须按 design 的 typed schema 校验；缺少必需 identity 时不得用正文、时间、邻接、item id或可选扩展猜测。`extensions` 仅接受 namespaced key 指向 `{extension_version,value,protection,encoding?}` envelope；合法未知扩展可原样保留，但任何核心选择、归组、去重、结果确认、恢复或安全判断都不得读取扩展 value。需要新的决策能力时必须先增加 typed core contract/version/验证，再由 producer 提交该类型；不得靠新 JSON key 暗中启用。该新字段形态直接替换旧实验 v2，不提供旧 v2 `metadata` reader、双写、别名或自动转换；既有一次性 v1 importer 不因此成为正常运行时兼容路径。
+`ProjectionGroup(ordinal,size,content_form)` 的 `content_form` 只能为 `str|list`；它在明确 `message_group_id` 下记录真实消息，要求 `size>=1`；单成员在自身payload不能表达原 `str|list` 形态时同样用它保留（如一次纯工具调用的空数组正文），避免还原为空字符串；已有独立流式block不强制补成完整消息组。多成员的 ordinal 从0连续覆盖至size-1，整组 owner、Turn／execution、producer 和原消息来源一致。组末 anchor 可以是该真实消息的最后一个 assistant_output、reasoning 或 tool_call 等合法语义成员，不以“末项必须为 tool_call”限制普通 assistant 消息。分组仅为原消息协议还原，不是另一份展示／选择集合；消息级 usage、终止原因和 message identity 按唯一归属保存，不能复制到所有成员重复计量。
+
+`ItemProjectionIdentity` 中确有用途的原消息、ModelCall、Provider block／part 来源、`ToolResultEvidence` 的调用／回执身份和确认状态、`ItemSourceManifest` 的修订与保护状态 MUST 按 typed schema 校验；Provider part 不成为通用历史、操作或阅读锚点。缺身份时不得按正文、时间、邻接、item_id 或扩展猜测。`extensions` 继续只接受 namespaced versioned envelope，核心归属、选择、配对、确认、恢复与安全决策不得读取自由扩展 value；需要新决策时先更新唯一 typed 核心合同。正常 reader 只处理当前格式；已支持来源的转换归原离线 owner，不增加 metadata 双读、Part 别名或自动修复。
 
 `turn_scope=turn_root` 必须有非空 `turn_id`，且只能用于该 Turn 唯一的 `semantic_kind=user_input` root；有非空 `turn_id` 的普通 Turn item 必须使用 `turn_scope=turn_member`。反向地，任何非空 `turn_id` 都必须配合 `turn_root` 或 `turn_member`，不得出现 `turn_id != NULL` 且 `turn_scope=NULL`。`turn_scope=ambient` 或 `turn_scope=pending_next_turn` 必须 `turn_id=NULL`，不得进入普通 Turn member/root 集合；持久化的 pending runtime notice 必须是 `semantic_kind=runtime_notice` 且 `turn_scope=pending_next_turn`，request-only notice 不产生 CanonicalItemRecord。若 `turn_id`、`turn_scope`、`message_group_id` 均为 null，item 不属于任何 Turn，reader 不得从相邻 item、wire role 或 message group 推断归属；`message_group_id` 非空也不能改变 root/member/ambient 约束。
 
-`payload_kind` 的完整枚举固定为 `text`、`structured_content`、`tool_call`、`tool_result`、`summary`、`attachment_ref`、`opaque` 和 `extension`：分别表示精确 Unicode 文本、已知 schema 的 JSON object/array、规范化工具调用、规范化工具结果、摘要结构、稳定附件引用、显式编码的不可解释/受保护值和扩展 envelope。`opaque` 必须带非空 encoding、value、provider 或 wire type、schema version；`extension` 必须带非空字符串 `extension_schema` 与 `extension_version`，其中 schema 是稳定 namespaced identifier、version 是该 schema 的显式版本值，另有 value 和 protection/encoding metadata。`semantic_kind=extension` 只能使用 `extension|opaque`；其它 semantic/payload 组合必须经过固定 compatibility table。v2 reader 遇未知 payload kind、缺 schema/version、非法 shape 或不支持的组合必须返回 format/schema recovery error，不得静默降级为空 payload、普通文本或 opaque；已知 extension 但无 handler 时可以保留 immutable raw/hash/offset 并标记 unsupported，但不能进入普通 context，必要来源则返回 `extension-unsupported`。
+`payload_kind` 的完整枚举固定为 `text`、`structured_content`、`tool_call`、`tool_result`、`summary`、`attachment_ref`、`opaque` 和 `extension`：分别表示精确 Unicode 文本、已知 schema 的 JSON object/array、规范化工具调用、规范化工具结果、摘要结构、稳定附件引用、显式编码的不可解释/受保护值和扩展 envelope。`opaque` 必须带非空 encoding、value、provider 或 wire type、schema version；`extension` 必须带非空字符串 `extension_schema` 与 `extension_version`，其中 schema 是稳定 namespaced identifier、version 是该 schema 的显式版本值，另有 value 和 protection/encoding metadata。`semantic_kind=extension` 只能使用 `extension|opaque`；其它 semantic/payload 组合必须经过固定 compatibility table。v3 reader 遇未知 payload kind、缺 schema/version、非法 shape 或不支持的组合必须返回 format/schema recovery error，不得静默降级为空 payload、普通文本或 opaque；已知 extension 但无 handler 时可以保留 immutable raw/hash/offset 并标记 unsupported，但不能进入普通 context，必要来源则返回 `extension-unsupported`。
 
 下表就是本 change 的唯一 semantic/payload/status compatibility matrix；它不是示意列表。每个 `semantic_kind` 的允许 payload、status 和 marker 规则均以表为准，未列出的组合一律在 JSONL durability barrier 前以 `item-schema-incompatible` 拒绝：
 
@@ -667,14 +667,14 @@ fork imported history SHALL 只读不可恢复，不重写原运行状态、准�
 
 ### Requirement: Rollout JSONL 是不可变 item 事实日志
 
-v2 `rollout.jsonl` MUST be append-only：每行只能保存一个完整且已终态化的 `CanonicalItemRecord`，已提交行的 UTF-8 字节范围、`item_sequence`、payload、status 和 hash 不得更新、删除、覆盖、插入或重排。JSONL 行先完成 durability barrier，再由 SQLite `storage_commits`/`item_catalog` 宣布可见；只有 committed offset 内且有对应 catalog/commit 的行可被 reader 使用。已写但未提交的尾部只能回收或隔离，不能被 reader 推断为事实；修正、retry、resume 或 supersede 只能追加新的 item identity 和显式 relation。`ItemDraft` 的非终态不写 JSONL，provider 空输出也不创建空 item。
+当前格式3的 `rollout.jsonl` MUST be append-only：每行只能保存一个完整且已终态化的 `CanonicalItemRecord`，已提交行的 UTF-8 字节范围、`item_sequence`、payload、status 和 hash 不得更新、删除、覆盖、插入或重排。JSONL 行先完成 durability barrier，再由 SQLite `storage_commits`/`item_catalog` 宣布可见；只有 committed offset 内且有对应 catalog/commit 的行可被 reader 使用。已写但未提交的尾部只能回收或隔离，不能被 reader 推断为事实；修正、retry、resume 或 supersede 只能追加新的 item identity 和显式 relation。`ItemDraft` 的非终态不写 JSONL，不得为了补齐工具组、组大小或显示空层新造空占位 Item；已有真实空消息沿原写入合同保存，completed_empty 仍由控制状态表达，不创建合成 final。
 
 新格式 rollout MUST 以一条 JSONL 记录表达一个已经终态化的语义 item，而不是以 raw provider chunk 或完整 LangChain message 作为唯一持久化单元。每条记录 MUST 包含 `item_id`、`item_sequence`、`semantic_kind`、`payload_kind`、status、payload、`producer_ref`、content hash 和可恢复的 format version；SQLite 只能保存 offset、索引、context view、checkpoint 和派生 projection，不得成为 item 正文的第二事实源。
 
 #### Scenario: 正常 item 提交
 
 - **WHEN** 一个 `assistant_output` 或 `tool_result` item 完成并提交
-- **THEN** rollout.jsonl 追加一条独立 item 记录，reader 可以仅凭该记录恢复其 payload 和 identity；历史需要的 `assistant_text` 从 assistant output content part 派生
+- **THEN** rollout.jsonl 追加一条独立 item 记录，reader 可以仅凭该记录恢复其 payload 和 identity；历史需要的 `assistant_text` 从 assistant_output Item 派生
 
 #### Scenario: partial 与 completed 的终态语义
 
@@ -864,7 +864,7 @@ ContextAssemblySnapshot
 
 `ContextSelectionEntry.contribution_id` 是 request-only/overlay contribution 到 `contribution_manifest` 的唯一显式映射：included且contribution-backed时必须非空，且只能解析同一`(session_id, thread_id, plan_id)`registry的一个`contribution_id`；该manifest必须进一步提供正文或最终`detail_ref`、source revision、logical content length、hash token与assembly-bound`contribution_ordinal`。该 entry 的 `contribution_id` 是 manifest 读取的唯一显式键（included 普通 request-only 上 `ref_id` 与之同值属兼容事实）；restore、LangChain/native Provider/Web history必须按selection entry的`contribution_id`读取对应manifest/body，再校验entry与manifest，不得以detail_ref、hash或ordinal反推contribution，也不得把overlay alias当成contribution_id。canonical_history与tool_set entry（包括omitted）的`contribution_id`、`contribution_ordinal`、`detail_ref`必须为NULL；只有omitted request-only/overlay entry可保留已有`contribution_id`，且必须与同一manifest一致，不得新分配contribution_id/ordinal或触发正文/detail读取，没有既有映射则为NULL。
 
-`ContextContribution` 固有就是 request-only contribution：其持久化字段 `request_only` 必须存在且恒为 `true`，只作为 contribution manifest 的不变量，不能用来判别 ContextRef union；缺失或为 `false` 必须拒绝。`ContextRef` 和 selection 仍禁止该 boolean，必须使用 `ref_type=request_only`。`ContextContribution.contribution_kind` 的闭合集合只有 `prompt | overlay_base | overlay_delta | notice`，不存在合法的 `tool_set` contribution。Provider tool definitions 只能通过同一 plan/assembly 的 ToolSetSnapshot/ToolSetRef manifest 绑定；`ContextContribution`、request-only body、`contribution_ordinal` 和普通 ContextRef 都不得代表 tool definitions。v2 遇到 `contribution_kind=tool_set` 必须返回 `contribution-kind-unsupported`；只有一次性 `legacy_import_v1_to_v2` migration reader 可以原样保留到 migration report/quarantine，但不得转换为 ContextContribution、ToolSetRef 或 Provider tools，也不得被正常 runtime 调用。
+`ContextContribution` 固有就是 request-only contribution：其持久化字段 `request_only` 必须存在且恒为 `true`，只作为 contribution manifest 的不变量，不能用来判别 ContextRef union；缺失或为 `false` 必须拒绝。`ContextRef` 和 selection 仍禁止该 boolean，必须使用 `ref_type=request_only`。`ContextContribution.contribution_kind` 的闭合集合只有 `prompt | overlay_base | overlay_delta | notice`，不存在合法的 `tool_set` contribution。Provider tool definitions 只能通过同一 plan/assembly 的 ToolSetSnapshot/ToolSetRef manifest 绑定；`ContextContribution`、request-only body、`contribution_ordinal` 和普通 ContextRef 都不得代表 tool definitions。遇到 `contribution_kind=tool_set` 必须返回 `contribution-kind-unsupported`，不得转换为 ContextContribution、ToolSetRef 或 Provider tools；未发布旧迁移已退出支持，不保留旧 reader、report／quarantine 或输入例外。
 
 `ContextRequestPlan` 的生命周期和 identity 也属于本结构合同：`create_context_plan`先在owner-thread namespace中创建唯一`plan_id`，状态为`unsealed`；未seal的plan可以登记`refs[]`、`tool_set_refs[]`/`contributions[]`，但必须保持`assembly_id=NULL`、`selection=[]`，因此不产生`ContextSelectionEntry`、`plan_ordinal`或可dispatch的assembly。draft registry的ContextRef约束为`UNIQUE(session_id, thread_id, plan_id, ref_type, ref_id)`；canonical ref可被多个plan查询复用，但request-only ref不得跨plan复用。draft ContextRef不解析assembly/detail physical path，新增detail只留在内存ledger或source typed ref。Saver只有在seal preflight通过ContextRef/ToolSetRef/contribution registry manifest的source、length、hash、visibility/protection和顺序校验后，才在同一提交边界分配thread-local`assembly_id`，生成selection/`plan_ordinal`与assembly-bound`contribution_ordinal`，将required request-only body写入detail store，并保存最终detail_ref与`ContextAssemblySnapshot`。seal失败不得留下可用assembly、selection或detail binding；原plan仍为`unsealed`，可以修正后重试。`(session_id, thread_id, plan_creation_idempotency_key)`负责plan创建幂等，`(session_id, thread_id, plan_id, seal_idempotency_key)`负责seal幂等；相同preimage返回原identity，不同preimage分别返回`plan-idempotency-conflict`或`assembly-idempotency-conflict`，不得把`plan_id`当成`assembly_id`。跨 owner fork 保留历史plan/ref/detail local ID和原封存scope，由目标本地snapshot binding核验；新目标请求创建当前owner的plan/assembly，不重算历史hash。成功后plan与snapshot保留两个identity，逐字段不可变且一对一；新的selection必须创建新的plan/assembly。未选择任何source的plan只有在已分配assembly后才允许以空`selection` seal，空selection仍属于该assembly scope。
 
@@ -1187,34 +1187,37 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 ### Requirement: 操作 anchor 可以细于 message 和 Turn
 
-系统 SHALL 支持以已提交 canonical `item_id` 以及需要时以 item 内的 `content_part_id`/fragment reference 表达 rewind、replay、compaction 和 fork 的 durable 内部边界。interrupt 首先使用当前 stream 的内存 cursor/ItemDraft；只有在终态化需要恢复或审计时，才将停止位置保存为 item/content-part reference。durable anchor MUST 保存 `inclusive` 或 `before` 语义、所属 view/branch、创建来源、可恢复性和目标 item/content part；request-only reference 不能直接作为历史操作 anchor。Turn 仍可作为用户历史分页和默认操作入口，并由 resolver 映射到精确 item anchor。
+系统 SHALL 使用已提交 canonical `item_id` 表达细于 message／Turn 的 rewind、replay、compaction 和 fork 边界，保存 before／inclusive 语义、真实 view／branch、来源与可恢复能力。request-only reference、客户端块号／字符偏移、Provider part ID 或展示 Part MUST NOT 作为通用 durable 操作锚点。Turn 仍是默认入口，由原 resolver 解析真实 Item 边界；操作能力与是否可阅读分开判断。
 
-`content_part` anchor 的最小规范为：已提交的 `item_id`、稳定的 `content_part_id`、part semantic kind、同一 item 内的 ordinal、part content hash 或 prefix hash、`before`/`inclusive` 边界语义、source view/branch 和 durability/recovery capability。`content_part` 的 canonical 正文必须位于父 item JSONL envelope 的 `payload.parts`（或 payload schema 明确指定的等价字段）内，part value 与 payload_kind 一起受父 `content_hash` 覆盖；detail store 不得成为 part 正文来源。SQLite `item_parts` 如果建立，只能是派生稀疏索引，保存 item/part identity、ordinal、JSON Pointer 或 part ordinal locator、可选的父 JSONL line byte offset/length、父 line hash 与 part hash/prefix hash。offset 是 immutable UTF-8 JSONL 行内的加速坐标，不是第二事实源，读取时必须校验父 line/content hash；索引缺失可以回退到解析命中的 item，索引冲突必须返回 integrity error。任意 token、字符 offset 或 raw chunk index 只有在对应 fragment 具有独立稳定 identity、长度/hash 和可恢复布局时才可以作为 anchor；否则必须退回 item 边界或返回不可操作错误。不得为满足 anchor 而把每个流式 delta 写入 canonical history。
+interrupt SHALL 使用当前语义 draft 的内存进度，终态时提交真实 partial／cancelled 等 Item 或原控制结果；不要求逐 delta 落盘。resume／retry 追加新的 Item 并通过原 provenance 关系关联，不能修改原终态 Item。消息组内违反工具因果、保护或 adapter 能力的切分明确拒绝，不静默移动到整消息末尾；不增加 Part 正文、Part hash／prefix hash 或稀疏 Part 索引来支持任意片段操作。
 
 #### Scenario: 在 assistant_output item 中断
-
-- **WHEN** 用户中断发生在一个 `assistant_output` item 的流式 draft 或某个可恢复 content part 之后
-- **THEN** stream/turn finalization 可以将该 item 标记为 partial；如需要跨重启恢复，再保存精确到 item/content part 的停止 reference，不要求为每个 raw chunk 建立 durable anchor，也不必回退到上一条完整 message
+- **WHEN** 用户中断仍在接收 delta 的文本 draft
+- **THEN** 已取得的内容按原状态规则提交一个不可变语义 Item，跨重启操作使用该 Item；不把字符偏移转成通用 content_part_id
 
 #### Scenario: 在 tool call 前 rewind
+- **WHEN** 选定 view 中已有独立 reasoning、文本、tool_call 和 tool_result Item
+- **THEN** resolver 在能力允许时定位 tool_call 之前，保留前序来源；不需要 Item 内 Part 坐标，不修改原 canonical 内容
 
-- **WHEN** 用户从一个包含 reasoning、assistant output 和 tool call 的 Turn 发起 rewind
-- **THEN** resolver 可以把操作边界落在 tool call item 之前，保留前面的 item，不复制或修改原有 message payload
+#### Scenario: 读取位置不是操作能力
+- **WHEN** 前端能显示某个 Item，但它不能作为合法 Provider 请求恢复边界
+- **THEN** 对该操作返回明确不可操作结果，不以可定位为由承诺 replay，也不自动改选其它边界
 
-#### Scenario: 不可操作 item 作为 anchor
-
-- **WHEN** 请求把没有 operation-anchor 能力的内部 item 指定为 rewind/compaction 边界
-- **THEN** 系统返回明确的不可操作 anchor 错误，或按照声明的 resolver 规则选择最近的合法 item anchor，不得静默按 message 末尾猜测
-
-#### Scenario: request-only context 不能作为 rewind 边界
-
-- **WHEN** 调用方把某次请求中的 skill/environment prompt reference 指定为 rewind 或 fork 边界
-- **THEN** 系统返回明确的 request-only/non-durable anchor 错误，要求解析到所属 view 中合法的 canonical item 或 content-part anchor
+#### Scenario: request-only 或局部像素被用作操作锚点
+- **WHEN** 请求仅提供 skill 请求引用、Markdown 段落号、字符／像素偏移或 Provider block ID
+- **THEN** 拒绝非持久／非 Item 操作边界，要求调用方明确使用具有相应能力的真实 Item
 
 #### Scenario: content part anchor 信息不足
+- **WHEN** 操作请求只携带旧 content-part 坐标而没有当前真实 Item
+- **THEN** 原操作 owner 明确拒绝不足或不支持的锚点，不猜最近 Item、补造边界或保留旧解析分支。
 
-- **WHEN** 调用方只提供 assistant 文本的字符 offset 或某个 raw delta index，没有稳定的 content_part_id、hash 和 source view
-- **THEN** 系统拒绝该 fragment anchor 或按照显式 resolver 规则退回合法的 item anchor，不把不稳定 offset 当作可恢复边界
+#### Scenario: request-only context 不能作为 rewind 边界
+- **WHEN** request-only context 或展示像素位置被用作 rewind 边界
+- **THEN** 原操作 owner 明确拒绝，它们不是 canonical Item，也不因可阅读而获得 rewind 能力。
+
+#### Scenario: 不可操作 item 作为 anchor
+- **WHEN** 真实 Item 不满足原 fork/rewind/replay 能力约束
+- **THEN** 明确返回原能力错误，不将阅读可定位当作可操作，不重写或丢弃其它已提交成员。
 
 ### Requirement: Active context view 决定 item 可见范围
 
@@ -1252,7 +1255,7 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 ### Requirement: Canonical item 必须可编译为多种请求投影
 
-系统 SHALL 从 active context view 和 request-only contribution 先形成有序、可审计的 context request plan，再按目标能力编译为 LangChain message 或 Provider 原生 item/request。编译过程 MUST 保留 canonical/request-only reference、`semantic_kind`/`payload_kind`、可表达的顺序、tool-call/result 关联、附件和 reasoning 保护状态。唯一顶层system root只在首次assembly及实际compaction、rewind、Provider可见ToolSet hard rebase或fork目标首次assembly中编译；合法新epoch只可合并source owner typed `root_placement=root_eligible`的有效完整状态。其它同epoch新增source及`tail_only`source均按plan ordinal成为独立user item，不得提升、前插或按相邻role合并；compaction summary和tool事实保留原语义与因果位置。无法表达时必须显式reject，不得静默改role或拼接文本；Anthropic部分官方模型的mid-context system能力仅保留关闭TODO。`assistant_text` 只能作为 `assistant_output` payload/content-part 的 projection，不能在 plan 中作为 canonical item kind。
+系统 SHALL 从 active context view 和 request-only contribution 先形成有序、可审计的 context request plan，再按目标能力编译为 LangChain message 或 Provider 原生 item/request。编译过程 MUST 保留 canonical/request-only reference、`semantic_kind`/`payload_kind`、可表达的顺序、tool-call/result 关联、附件和 reasoning 保护状态。唯一顶层system root只在首次assembly及实际compaction、rewind、Provider可见ToolSet hard rebase或fork目标首次assembly中编译；合法新epoch只可合并source owner typed `root_placement=root_eligible`的有效完整状态。其它同epoch新增source及`tail_only`source均按plan ordinal成为独立user item，不得提升、前插或按相邻role合并；compaction summary和tool事实保留原语义与因果位置。无法表达时必须显式reject，不得静默改role或拼接文本；Anthropic部分官方模型的mid-context system能力仅保留关闭TODO。`assistant_text` 只能作为 `assistant_output` Item payload 的 projection，不能在 plan 中作为 canonical item kind。
 
 #### Scenario: 编译为 LangChain 执行消息
 
@@ -1268,6 +1271,14 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 - **WHEN** ContextRequestPlan 包含静态 system prompt、skill contribution 和 workspace/environment contribution
 - **THEN** 只有initial root中的启用贡献可编译进唯一system/developer/instructions item；第一条真实用户消息后的Skill/workspace/environment full、delta或恢复内容保持独立user item并保留reference/source identity/request-only生命周期，不能从wire role反向创建历史item或为适配Provider合并相邻user item
+
+#### Scenario: 无工具的多模态 assistant 消息往返
+- **WHEN** 一条真实消息包含独立 thinking、text 和 image 块，且不含工具调用
+- **THEN** 写入独立有序 Item，沿同一消息组恢复其原角色、块顺序、str/list 形状、媒体引用、签名与必要 wire 属性；不能因没有工具而保留一个复合 assistant Item，也不能恢复成多条无关 assistant message
+
+#### Scenario: 不可拆协议边界
+- **WHEN** 现有 adapter 无法合法表达所选 Item 边界或保留受保护 carrier
+- **THEN** 返回明确的能力／协议错误，不静默合并无关消息、移除签名、改变角色或补造合法文本
 
 ### Requirement: Context plan 必须绑定精确资源激活快照和安全来源
 
@@ -1391,53 +1402,6 @@ ContextRequestPlan MUST先完成tool协议收敛：assistant同一group声明的
 - **WHEN** provider retry 或 execution resume 对同一个 logical tool invocation 产生新的 call/attempt
 - **THEN** 新 identity 通过 `retry_of`/`resumes` 连接旧 identity，旧 result 不被覆盖；active replay 只选择显式成功且未 superseded 的 result，否则重新执行或返回不可重放错误
 
-### Requirement: 旧 message-line rollout 必须显式识别和迁移
-
-`candidate_key` 与 `candidate_status` 属于 v1 migration report 的候选记录字段，不是 `CanonicalItemRecord.status`、`Turn.status` 或 `ControlOutcome`；candidate_status 闭合集合为 `accepted`、`legacy_missing_turn_id`、`legacy_turn_group_ambiguous`、`legacy_multiple_user_messages`、`legacy_orphan`、`legacy_unsupported_role` 和 `legacy_identity_conflict`。只有 `accepted`/`legacy_missing_turn_id` 才允许继续 identity 补全，其余状态必须拒绝或 quarantine，不能创建可运行 Turn。
-
-v1 root candidate 的生成规则冻结为：`message_sequence` 只提供可审计的 user-root window 边界，不能仅凭非 user 记录的物理邻接猜测 Turn。每个 window 必须恰好包含一个 `role=user` 行；窗口内无非空 `turn_id` 时生成 `candidate_key=legacy-missing-turn:<legacy_message_hash>`、状态 `legacy_missing_turn_id`，窗口内恰有一个非空 `turn_id` 时生成 `candidate_key=legacy-turn:<turn_id>`、状态 `accepted`，并将缺失 ID 的可迁移成员归入该 ID。窗口内多个不同非空 ID 时标记 `legacy_turn_group_ambiguous` 并整体拒绝；同一 ID 跨多个 user window 时标记 `legacy_multiple_user_messages` 并整体拒绝；首个 user 前、没有 root 的记录标记 `legacy_orphan`，重复 source coordinate、message identity 冲突或无法确定窗口边界标记 `legacy_identity_conflict` 并拒绝。
-
-window 内的 legacy role 归属固定为：`assistant`、`tool` 以及明确等价的旧 `function` 是可迁移的 Turn member，缺失 `turn_id` 时继承该 window 的唯一 candidate ID；`system` 和 `developer` 记录为 `legacy_request_context`，保留 source coordinate、payload hash 和受保护 detail/lineage reference，但不进入 Turn root/member、不能创建 Turn，也不得静默丢弃。`system_reminder` 只有在该行已有可信 internal/checkpoint metadata 时才映射为 Turn 外的 `runtime_notice`（`turn_scope=pending_next_turn`、`turn_id=NULL`）；缺少该 metadata 时标记 `legacy_unsupported_role` 并整体拒绝 candidate。未知 role、其它 legacy role 或不能解释的 role/payload 组合一律标记 `legacy_unsupported_role`，原始行保留到 report/quarantine 并整体拒绝 candidate。若 `system`/`developer`/受信任 `system_reminder` 携带非空 `turn_id`，该 ID 必须与 window 唯一 candidate ID 相同，否则标记 `legacy_turn_group_ambiguous`；即使相同也不成为 Turn member。整个 rollout 没有任何 user window 时，所有 system/developer/system_reminder/其它行均标记 `legacy_orphan` 或 `legacy_unsupported_role` 并只进入 report/quarantine，不生成 root 或 synthetic acceptance。
-
-只有 `accepted` 或 `legacy_missing_turn_id` candidate 才能进入 synthetic identity 补全，后续 v2 Turn 仍使用新的 target-local identity；被拒绝 candidate 的每一条 source 行都必须在 migration report 中保留归属、拒绝原因和 source coordinate。
-
-系统 SHALL 通过 SQLite manifest/database metadata 的 `rollout_format_version` 与每个 JSONL envelope 的 `format_version` 区分 v1 message-line 与 v2 item-line。reader MUST 同时校验两处版本；不得只根据 `role`、首行形状或字段存在性猜测格式。v1 与 v2 不得混写，未知版本、manifest/envelope 不一致或结构不完整时 MUST 进入明确 recovery/error。旧格式不得进入正常 context compiler；只有一次性 `legacy_import_v1_to_v2` migration/import operation 的 reader 可以在 staging 中读取并交给转换器。新 writer 不得永久双写，遇到未知或无法无损映射的旧字段不得静默丢弃或回退为空历史。
-
-v1 message-line 顶层字段固定为 `format_version=1`、`record_type=message`、`message_sequence`、`message_id`、`turn_id`、`role`、`message` 和 `metadata`；v2 item-line 顶层字段固定为 `format_version=2`、`record_type=item`、`item_sequence`、`item_id`、`turn_id?`、`turn_scope?`、`message_group_id?`、`projection_group?`、`projection_identity?`、`tool_result_evidence?`、`source_manifest?`、`semantic_kind`、`payload_kind`、`wire_role?`、`status`、`producer_ref`、`payload`、`content_hash`、`created_at` 和 `extensions`。SQLite manifest 的 `rollout_format_version` 必须与 envelope version 一致。v2 中 `assistant_output` 是 canonical semantic kind，`assistant_text` 只能是 projection；v1 的内部 `system_reminder` 只能依据已有 internal/checkpoint metadata 转换为 `runtime_notice`，不能使用当前 middleware 配置补造 provenance 或 Turn root。
-v1 迁移不能从 message role、最后一条 assistant 或物理相邻记录推断 v2 身份。对每个 v1 root candidate，先将精确解码的 `role`/`message` 与 source session、message sequence、message id 组成 legacy message object，按 JCS/SHA-256 得到 `legacy_message_hash`，再对包含 source coordinate 和该 hash 的对象按同一算法得到 `legacy_seed_hash`；固定生成 `accepted_ingress_id=legacy-ingress:<legacy_seed_hash>`、`acceptance_idempotency_key=legacy-migration:<legacy_seed_hash>` 和 `initial_execution_id=legacy-execution:<legacy_seed_hash>`，并标记 `identity_origin=legacy_synthetic`。v1 的 `turn_id`、`message_id`、`message_sequence` 和 offset 只保留为 `legacy_source_ref`/lineage；迁移后的 v2 Turn、root item、item sequence 和 execution 使用新的 target-local identity。seed 冲突或同幂等键 payload 不同必须终止迁移。
-
-只有 v1 manifest/checkpoint 或明确的 legacy final marker 能无歧义指向同一 Turn 的 completed assistant output 时，迁移才设置 v2 `final_item_id`/`Turn.status=completed`；否则 `final_item_id=NULL` 且 status=`unknown`（有明确 failure/interrupted marker 时使用对应状态）。合成的 execution outcome 默认是 `unknown`，不表示实际 provider call 已成功。fork 入口只接受已符合当前 v2 合同的 source，并保留历史原字节和local ID，不在复制过程中执行格式升级或逐项mapping。v1 数据若需使用，必须先独立完成显式的一次性 `legacy_import_v1_to_v2` operation，再将其已发布v2结果选为fork source；该迁移的source v1 message identity/sequence/offset只存映射审计坐标，不能写入v2 identity或committed offset。
-
-v1 root candidate 必须按 source `message_sequence` 升序切分为 user-root window：每个 `role=user` 行开启窗口，直到下一条 user 行之前，因此每个窗口必须恰好一个 user message。窗口内没有非空 `turn_id` 时生成 `legacy_missing_turn_id` candidate；恰好一个非空 `turn_id` 时使用该 ID，并把窗口内缺失 ID 的 assistant/tool/function 行归入该 Turn；system/developer 只记录为 `legacy_request_context`，受信任的 system_reminder 映射为 Turn 外 runtime_notice，未知或其它 role 使 candidate 进入 `legacy_unsupported_role` 并整体拒绝。多个不同非空 ID 时整体拒绝并报告 `legacy_turn_group_ambiguous`。同一 ID 在一个窗口的可迁移非 user 行上重复是正常成员关系，不是重复 Turn。
-
-同一非空 `turn_id` 如果跨多个 user-root window，表示该 legacy Turn 有多个 user message，整个 ID 组拒绝迁移，不得任选第一条或拆分。首个 user 之前的记录、没有 root 的 ID 组保留为 `legacy_orphan`，不得创建 Turn；重复 source coordinate、同一 message identity 对应多个 turn_id、未知/其它 role 或无法确定窗口边界也必须整体拒绝，并把所有原始行保留在 migration report/quarantine。不同窗口不得因 payload 相同而合并。只有恰好一个 root user message 且通过 role、turn_id 和冲突校验的 candidate 才能生成 synthetic ingress/execution identity。
-
-#### Scenario: 正常运行时拒绝读取旧 session
-
-- **WHEN** 正常 history/provider/checkpoint/runtime 或 context compiler 打开仍是旧 message-line 格式的 session
-- **THEN** 系统识别其版本并返回 `v1_migration_required`，不调用 v1 reader、不创建 v2 view、不把旧记录伪装成已经完成 v2 cutover；只有显式的一次性 `legacy_import_v1_to_v2` 命令可以打开 migration staging
-
-#### Scenario: v1 window 的非 user role 归属
-
-- **WHEN** 一个 user-root window 同时包含 assistant/tool/function、system/developer、带可信 internal/checkpoint metadata 的 system_reminder，以及 unknown/其它 legacy role
-- **THEN** assistant/tool/function 按唯一 candidate 的缺失 ID 规则作为 Turn member；system/developer 逐行保留为 `legacy_request_context` 而不进入 Turn；可信 system_reminder 映射为 Turn 外、`turn_id=NULL` 的 `runtime_notice`
-- **AND** unknown/其它 role，以及缺少可信 metadata 的 system_reminder，使整个 candidate 标记 `legacy_unsupported_role` 并拒绝迁移；所有被排除或拒绝的 source 行都保留 source coordinate、payload hash 和拒绝/归属信息，不得静默丢失或依据物理邻接改派
-
-#### Scenario: 旧字段无法无损映射
-
-- **WHEN** 旧 message 包含新的 canonical item 无法表达的 provider 字段
-- **THEN** 系统保留 extension/raw reference 或显式标记 loss/partial，并拒绝声称该 session 已无损迁移
-
-#### Scenario: v1/v2 dispatch 不一致
-
-- **WHEN** SQLite manifest 声明的 rollout format version 与 JSONL envelope version 不一致，或同一文件出现 v1/v2 record
-- **THEN** reader 返回明确的 format mismatch/recovery error，不把记录混合成一个 context view，也不静默选择其中一个版本
-
-#### Scenario: 显式迁移保留 v1 原件
-
-- **WHEN** 用户显式执行 v1 到 v2 migration
-- **THEN** 系统在临时 v2 artifact 中校验 item、Turn root、final item、view、tool identity 和 reasoning protection 后再原子安装 v2；v1 原 artifact 保持可读，迁移失败不删除或覆盖 v1
-
 ### Requirement: 内部 execution 与生成结果回报使用独立 admission，不伪造 Turn
 
 系统 SHALL 用 thread-local `ExecutionAdmission` 显式绑定每次可执行 admission，其字段固定为 `{session_id, thread_id, execution_id, job_id, admission_idempotency_key, execution_origin, turn_id}`；该值不含 `accepted_ingress_id` 或 `payload_hash`。`execution_origin` 仅允许 `user_turn | internal`。`admission_idempotency_key` 是调用方提供的稳定 producer/admission identity，可派生或复用 producer 的业务事件 ID，不得由 `job_id` 或 message ID 推导。普通用户派发由现有 Job 创建入口独立分配该 identity，随 queued 请求持久化并显式传到 execution owner；同 Job 重试与 queued 恢复逐字复用，内部 intent 复用其已冻结 key。checkpoint/runtime 只能消费该 key，不得现场补造；真实 acceptance/admission 必须先于 runtime/Provider 工作提交。本条不新增 active Job 自动恢复或平行 admission journal。`user_turn` admission MUST 在同一 authoritative SQLite owner 中核验 `turn_records`、`executions` 与 `turn_acceptances` 的真实关系：execution、Turn 和 acceptance 必须属于同一 `(session_id, thread_id)`，execution 必须真实存在且指向该 Turn，`accepted_ingress_id` 必须与该 Turn 的真实 acceptance 一致；不得把 ingress ID 复制进内存 admission 或接受 metadata 中的值。`internal` admission MUST 持久化 key、独立 admission `payload_hash`、`execution_id`、`job_id` 和 `execution_origin=internal`，其存储中的 `accepted_ingress_id` 与 `turn_id` MUST 均为 NULL，不得伪造 user ingress；两类 admission 均按 `(session_id, thread_id, admission_idempotency_key)` 幂等，任一绑定字段或 preimage 冲突必须显式失败。
@@ -1456,7 +1420,6 @@ v1 root candidate 必须按 source `message_sequence` 升序切分为 user-root 
 
 - **WHEN** 内部结果回报或隐藏会话通信通过真实消息准备与 Job 准入携带文本或图片附件，随后 checkpoint 消费、关闭重开 Saver 并封存请求
 - **THEN** 原始 XML、附件身份/顺序、生成块及 content hash 保持不变；Chat Completions 与 Responses 分别按自己的普通用户内容协议编码；同 admission 重入不重建预览，正文或附件漂移明确冲突，canonical 使用索引包含该 notice 的精确 item identity；展示只返回安全文案及独立引用，不泄露私有正文或媒体块
-
 
 #### Scenario: 内部生成结果绑定到目标 thread
 
@@ -1494,3 +1457,115 @@ v1 root candidate 必须按 source `message_sequence` 升序切分为 user-root 
 #### Scenario: 历史材料原本缺失
 - **WHEN** 既有记录没有可读的冻结正文
 - **THEN** 返回明确不可用，不自动读取当前文件、回放请求、重建用户数据或从截断日志伪造全文
+
+### Requirement: 当前语义 Item 格式使用唯一版本闸门
+
+系统 SHALL 同时核验SQLite的rollout_format_version与JSONL的format_version，仅接受格式3。格式1／2、未知、混合版本、manifest／envelope不一致或结构不完整均明确拒绝；不得根据角色／字段猜格式，不使用旧reader、不自动改写或回退为空历史。已退出的v1→v2转换、专用staging及历史物化分支 MUST 删除，不冻结旧writer。
+
+#### Scenario: 旧格式保留原件并明确拒绝
+- **WHEN** history、checkpoint、Provider或fork打开格式1／2的来源
+- **THEN** 返回unsupported_rollout_format_version并说明实际与期望版本，原件不被覆盖、转换或清理，不引导用户运行已退出的命令
+
+### Requirement: 语义 Item 拆分不依赖工具调用是否存在
+
+系统 SHALL 在 canonical 写入时将 assistant 顶层具有独立语义来源的思考、文本和媒体内容块分别表达为 Item，并使每次工具调用对应唯一 tool_call Item；同一块的多个流式 delta 不产生多个 Item。同内容是否伴随工具调用 MUST NOT 改变这些内容的语义粒度。payload_kind=structured_content 仍可承载单项富内容属性，不得作为已识别 thinking／text／image 多语义输出的整包容器。
+
+一次 tool_result、唯一 user_input root、runtime notice 和 compaction summary SHALL 保留原业务原子性，内部 rich 属性或附件不因递归拆块而变成多次业务行为。单个 reasoning carrier 的签名、summary、密文与保护元数据属于同一来源的完整表达；不同安全视图不产生不同 Item。未知块沿原显式 extension／opaque 合同处理，不丢弃、stringify 或默认冒充文本。
+
+单个 tool_call Item SHALL 只含一次声明；沿已有 payload 使用 `tool_calls` 时数组必须恰含该调用，不允许多个调用继续包在同一 canonical Item 的 tool_call／structured_content／extension 中。参数本身的批处理数组不递归拆成调用；Provider 原 wire 多调用数组在输入拆分、消息组重建边界保留。调用 Item 的 completed 状态表示声明完整，不代表工具已运行或成功。
+
+#### Scenario: 伴随工具前后粒度相同
+- **WHEN** 两份输入拥有相同的thinking、text、image有序块，其中一份额外携带工具调用
+- **THEN** 两份输入的三个内容块都各有独立 Item，带工具的输入额外产生调用 Item；不在无工具分支退回多 Part 复合 Item
+
+#### Scenario: 同一块持续流式追加
+- **WHEN** 一个文本来源接收上千次 delta 后完成或中断
+- **THEN** 只有对应的语义 draft 和终态 Item，不按 token、chunk、Markdown 段落数量增加 Item
+
+#### Scenario: 复合工具结果和用户附件
+- **WHEN** 一次工具返回文本与图片，或用户一次提交文本与多个附件
+- **THEN** 保留一次真实回执和唯一用户 root，原工具关联、附件引用与顺序不变，不伪造额外调用结果或 Turn root
+
+#### Scenario: 受保护思考
+- **WHEN** 单个真实 reasoning carrier 同时提供可读摘要、签名和加密载荷
+- **THEN** 原完整保护信息可用于协议还原，前端只取得授权安全视图；摘要、签名和密文不被计为三次独立思考
+
+### Requirement: 工具拆分保留原声明批次与真实执行关联
+
+系统 SHALL 复用原 owner、ModelCall、message_group_id 和 ProjectionGroup 显式成员关系表达同批工具声明；单成员沿其原 Item 来源。组 ordinal 计入全部语义成员，调用的原相对顺序由其中 tool_call 成员确定，不另建 batch ID、调用顺序表或第二套 Part 身份。相同 ModelCall 但不同原消息不得仅凭 ModelCall 合批，Provider 重复使用 call ID 时必须保留其原 ModelCall／owner 范围。完整协议重建 SHALL 按原声明顺序还原数组，不能按结果到达次序重排。
+
+原消息组、前端活动组与执行流 MUST 保持各自边界；同一活动组、Turn或执行流不构成同批声明证据。Provider请求中的parallel_tool_calls等选项只保留原协议语义，不表示实际执行重叠，不因拆分Item而变更调度或配置。
+
+流式调用片段 SHALL 沿原adapter提供的Provider调用来源累计到各自draft，以协议明确的原声明顺序冻结组成员；片段到达次序不决定调用顺序。Provider索引只作原协议来源，不能直接用作持久Item身份或组ordinal。来源尚不足以关联时沿原draft合同处理，不猜ID、补占位Item或提前宣布声明完整；独立调用的参数完整性与partial／invalid终态不互相替代。
+
+消息组封存 SHALL 只约束原canonical组发布事务，不成为新的工具启动或结果发布屏障。原调度器已允许启动的调用，不得因本次拆分额外等待其它声明完整、整组持久提交或其它回执；原本要求完整模型响应的调度规则亦不得因此改为提前执行。不新增批次执行事务或第二套流式调度入口。
+
+同批关系与执行重叠 SHALL 独立表达。不同原消息组或ModelCall的调用，在原执行owner确认的同一可比较执行范围内可以实际重叠；这种重叠不得反向改变声明分组、Provider数组还原或Item顺序。跨目标、工作区或不可比较执行流不得仅按时间数值交叠推断并行。
+
+实际执行 SHALL 沿原 invocation／attempt owner 记录与调用 Item 配对，保留当前每个scoped call一个attempt的约束；跨ModelCall的重试不覆盖早先调用及结果，新声明保留自己的Item，不伪装成原调用的第二attempt。同一声明的镜像与重放不复制调用Item。执行起止、排队和状态由原执行事实表达，不能从组 ordinal、声明数量、call completed、ToolCall 声明流时间或 canonical created_at 推断。缺执行证据不补造成功、串行、并行或 queued；不能确认调用或 attempt 时保持原未知／待关联语义，不按工具名或物理邻接猜测。
+
+#### Scenario: 多工具声明往返
+- **WHEN** 原模型消息包含思考、文本和 tool_calls=[A,B]，B先返回结果
+- **THEN** 每次调用为一个独立 Item，原组记录全部成员和A先于B的声明关系；重建仍为[A,B]，两个回执以各自真实调用／attempt配对，不按完成顺序改写声明或原历史坐标
+
+#### Scenario: 拆分保持调用数量和独立参数
+- **WHEN** 一条完整模型消息含reasoning、text和两次同名工具调用A、B，各有真实调用ID及不同参数
+- **THEN** 原组含四个语义成员和两个单调用Item，重建恰好恢复两次调用及各自参数；重复流片段、声明镜像或B的回执不增加调用数，不按工具名合并A、B，也不递归拆分参数中的数组
+
+#### Scenario: canonical边界拒绝未拆分的多调用Item
+- **WHEN** 调用方绕过原codec，试图提交一个含两次有效调用的completed tool_call Item
+- **THEN** 原canonical写入校验明确拒绝且不提交该非法Item；reader和前端不再临时拆解修复，不保留复合调用的第二种合法表达
+
+#### Scenario: 多调用流式片段交错到达
+- **WHEN** 原协议明确调用顺序为[A,B]，B的参数片段先到，后续A、B片段交错，其中A到流结束仍不完整
+- **THEN** adapter沿各自真实来源累计，保留A先于B的声明关系；B的完整声明不补全A，A按原partial／invalid合同收敛，不生成按到达顺序排列的持久Item、虚构ID或额外调用
+
+#### Scenario: 同批声明在不同调度下运行
+- **WHEN** 两份等价[A,B]声明分别被执行为A结束后B启动和A／B运行区间重叠
+- **THEN** 两份声明组与Item粒度一致，区别仅来自原执行owner的attempt证据，canonical拆分不改变调度或将数组顺序编码成依赖链
+- **AND** Provider重建均保持原[A,B]及调用参数；原调度配置保持不变，不因拆成两个Item新增A结果到达后才接受B的限制，也不强制同时执行
+
+#### Scenario: 执行早于声明组封存
+- **WHEN** 原调度器已允许B开始执行，但同消息的A仍在累计参数，消息组尚未封存
+- **THEN** B沿原执行入口继续，不因组size／ordinal尚未冻结而新增等待；A不被补全或强行启动，B的执行证据沿原来源传递，最终声明顺序仍按原协议冻结。若原调度器要求完整模型响应，则仍等待该条件，不以本变更开放提前执行
+
+#### Scenario: 展示分组不合并原声明消息
+- **WHEN** 同一ModelCall中的两条原消息分别声明[A,B]和[C]，且UI将它们放入同一活动组
+- **THEN** 仍保留两个原消息组并分别重建调用数组；不能因活动组或执行流相同而声明A、B、C同批，parallel_tool_calls选项也不能替代真实执行证据
+
+#### Scenario: 不同声明组的执行重叠
+- **WHEN** 两个原消息组分别声明A和B，原执行owner记录的同一可比较范围内真实有限执行区间发生重叠
+- **THEN** 两个调用可被解释为执行重叠，但保留各自原声明组、Item与调用身份；协议重建仍为两条原消息，不合并tool_calls数组
+
+#### Scenario: 调用返回后台任务引用
+- **WHEN** 调用A启动后台任务并返回真实任务引用，后台任务未结束时调用B开始
+- **THEN** A的调用结果和attempt终态按原调用事实保留；后台任务沿自己的owner继续存在，其运行时长与结果不回写为A的调用时长或结果。A、B的声明分组及调用区间不能证明两个后台任务是否并行
+
+#### Scenario: 重试及重复Provider调用ID
+- **WHEN** 重试／回退后的不同ModelCall使用同一Provider call ID，或原call被重复通知第二个attempt
+- **THEN** 跨ModelCall按真实scope和attempt区分，早期失败不被晚到结果覆盖；同call第二attempt保持原明确拒绝，不为展示放宽运行约束或创建重复声明Item
+
+### Requirement: final 输出引用原有语义 Item
+
+Turn finalization SHALL 沿真实最终输出消息组选择已有完成 assistant_output Item，final_item_id 指向该组内最后一个最终输出成员；该组其它最终输出内容沿显式组关系按顺序展示。最终回答可以含多个文本／媒体 Item，但 MUST NOT 为展示另写聚合文本 canonical Item、第二份持久 final 成员集合或 Part 级 final 身份。不同 ModelCall、工具和 reasoning 不因位置或正文相同混入最终回答；原失败、中断、未知和 completed_empty 合同保持。
+
+#### Scenario: 多块最终回答
+- **WHEN** 明确 finalization 的消息含文本A、图片和文本B
+- **THEN** 按三个原 Item 展示同一回答，final_item_id 指向该组真实末输出成员，各内容保留自己的 Item ID；刷新、历史和实时都不漏A／图片或重复B
+
+#### Scenario: 终态引用已提交原输出
+- **WHEN** 原模型结束事件的消息已经由 checkpoint writer 提交，包含文本／媒体输出和可选受保护思考
+- **THEN** 按原 message_id 与 canonical manifest 确认有序成员，终态只引用原输出，JSONL 正文与原 checkpoint 不因 final 展示追加或重写；原签名、密文、来源与请求用量保持
+- **AND** 缺原 message_id、原消息不存在、含工具声明或当前 view 排除目标输出时明确拒绝，不取最近文本、不新建替代消息；重复终态不复制正文
+
+#### Scenario: 摘要候选不覆盖最终来源
+- **WHEN** 模型切换后产生原最终输出，随后只为压缩生成摘要候选
+- **THEN** 最终来源及原输出块仍属于实际输出消息，摘要候选不覆盖它们，也不成为 final；消息、ChatResult 与等价 generations 载体保持相同原消息身份
+
+#### Scenario: 无 Turn 的原输出收敛与中断裁决
+- **WHEN** 无 Turn execution 已提交其可见完成输出，随后完成提交与中断请求竞争
+- **THEN** 沿原 execution owner 事务裁决，完成只收敛已有输出与控制终态，不另写正文或 Turn final 字段；中断先接受则完成不得覆盖它，完成先提交则外层不得再取消原 Job
+
+#### Scenario: 中间文本不是最终答案
+- **WHEN** 较长中间文本之后出现另一明确 final 消息组
+- **THEN** 只将原 finalization 指定的输出组作为最终回答，不按最后一段、长度、角色或 Part ordinal 猜测

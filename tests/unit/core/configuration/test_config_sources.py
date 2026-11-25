@@ -37,7 +37,7 @@ def test_os_failure_preserves_errno_stage_and_cause_without_native_filename(
     original_stat, original_read, original_resolve = Path.stat, Path.read_bytes, Path.resolve
     stat_calls = 0
     resolving = False
-    original_error = OSError(number, f"private-config-message: {config_file}")
+    original_error = OSError(number, f"private-config-message: {config_file}; Authorization: Bearer config-read-secret")
     if fields == "filename":
         original_error.filename = str(config_file)
     elif fields == "filename2":
@@ -85,8 +85,35 @@ def test_os_failure_preserves_errno_stage_and_cause_without_native_filename(
     assert f"errno={number}" in str(raised.value)
     if fields == "winerror":
         assert "winerror=5" in str(raised.value)
-    assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
+    assert caplog.records and all(record.exc_info is None for record in caplog.records)
+    assert f"{type(original_error).__name__}:" in caplog.text
     assert str(config_file) in caplog.text and "private-config-message" in caplog.text
+    assert "config-read-secret" not in caplog.text
+
+
+def test_file_read_error_survives_diagnostic_sink_failure(
+    config_file: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_read = Path.read_bytes
+    original = PermissionError(errno.EACCES, "配置不可读取", str(config_file))
+    sink = OSError(errno.EIO, "诊断写入失败", "/private-config/log-sink")
+
+    def read(path: Path) -> bytes:
+        if path == config_file:
+            raise original
+        return original_read(path)
+
+    def fail_log(*_args: object, **_kwargs: object) -> NoReturn:
+        raise sink
+
+    monkeypatch.setattr(Path, "read_bytes", read)
+    monkeypatch.setattr(config_sources.logger, "error", fail_log)
+    with pytest.raises(PermissionError) as failure:
+        read_stable_config_file(config_file)
+    assert failure.value.__cause__ is original
+    assert failure.value.errno == errno.EACCES and failure.value.filename is None
+    assert "operation=read" in str(failure.value)
+    assert any("诊断日志输出失败" in note and "log-sink" in note for note in original.__notes__)
 
 
 def test_unstable_read_exhausts_bounded_attempts_without_publishing_snapshot(
@@ -181,7 +208,8 @@ def test_source_constructor_and_replace_reject_native_or_wrong_kind_uri(
     assert source.uri is None
     assert len(caplog.records) == 2
     for record, original in zip(caplog.records, (created.value, replaced.value), strict=True):
-        assert record.exc_info and record.exc_info[1] is original
+        assert record.exc_info is None
+        assert f"{type(original).__name__}: {original}" in record.getMessage()
         assert repr(uri) in record.getMessage()
 
 

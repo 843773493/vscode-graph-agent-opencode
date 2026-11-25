@@ -12,7 +12,7 @@ import type { JsonObject } from "@bufbuild/protobuf";
 import { isRecord } from "../../utils/jsonDisplay";
 
 type WireToolExecutionStatus = "running" | "completed" | "failed";
-type WireToolExecutionOutcome = "success" | "provider_error" | "execution_lost" | "outcome_unknown";
+type WireToolExecutionOutcome = "success" | "provider_error" | "execution_lost" | "outcome_unknown" | "cancelled";
 type WireActivityStatus = "running" | "waiting" | "stopping" | "completed" | "failed" | "unknown";
 type WireActivityOutcome = "success" | "user_interrupt" | "provider_error" | "execution_lost" | "outcome_unknown";
 

@@ -11,7 +11,8 @@ app/runtime/
 ├── Agent 装配与调度
 │   ├── agent_runtime.py       模型准备与执行依赖注入
 │   ├── graph_factory.py       注册表到 Agent 装配器的 SDK 懒加载边界
-│   ├── context_compaction.py   按需装配显式上下文压缩预览
+│   ├── context_compaction.py   连接候选 owner 与原后台摘要任务
+│   ├── derived_tools.py        派生只读工具复用原文件、调用身份与输出中间件
 │   └── tool_test_tools.py      按需装配工具能力测试所需工具
 ├── 模型 Provider 运行时
 │   ├── provider_model.py      本地配置校验与按需模型构造
@@ -73,8 +74,8 @@ app/runtime/
 
 - `http_server.py` 是 Gateway 与受管 Backend 共用的 Uvicorn 入口；lifespan 可交付 listener-ready 启动回调与关闭前钩子，不在 runner 构造业务 owner。请求退出只改变原 server 状态，实际排空和 lifespan 仍由 Uvicorn 完成，不能将 ACK 当作进程退出。
 
-- `agent_runtime.py::assemble_agent` 统一读取配置、注入依赖并选择冻结 selector，`graph_factory.py::assemble_deep_agent` 在调用时加载实际装配实现。本入口仅返回真实执行图，工具目录不进入 runtime 装配；`preload_agent_dependencies` 只预加载固定依赖，不构建模型、Thread 或自定义工具。闭集 selector 注册不得触发 SDK 导入。
+- `agent_runtime.py::assemble_agent` 统一读取配置、注入依赖并解析 acquire 从精确 Thread authority 读取的冻结 selector，不再次读取 catalog；代 key 与实际图使用同一 selector。`graph_factory.py::assemble_deep_agent` 在调用时加载实际装配实现。本入口仅返回真实执行图，工具目录不进入 runtime 装配；`preload_agent_dependencies` 只预加载固定依赖，不构建模型、Thread 或自定义工具。闭集 selector 注册不得触发 SDK 导入。
 - `agent_runtime.py::prepare_agent_model` 只准备模型候选、路由和指令来源，返回具名字段的 `AgentModelSetup`，仅供正式执行使用；它不创建 Thread、工具或图。模型实现与路由依赖在该函数内加载，不能为读取声明导入 SDK。
 - 正式 Thread 装配在模型构造成功后、解析候选能力之前，将其 `aclose` 登记到既有 Thread generation 的 `LifetimeScope`，后续绑定失败也能释放；先排空该代 lease 再关闭池。不为模型另建常驻回收器；直接使用低层模型工厂的调用方仍持有并关闭自己创建的模型。
-- 工具管理目录及其缓存归 `business/agent_tool_settings/catalog.py`，纯转换归 `mapping/tool_catalog.py`；runtime 不导出目录 DTO。压缩检查只消费冻结配置中的模型元数据与共用保留范围规划，不构造模型、图、backend，不解析凭据。
-- 压缩预览固定一次配置 snapshot，从原模型解析结果读取所选模型容量与协议；工作线程只接收元数据和待规划消息，不调用 `resolve_llm_model` 或准备任何凭据。
+- 工具管理目录及其缓存归 `business/agent_tool_settings/catalog.py`，纯转换归 `mapping/tool_catalog.py`；runtime 不导出目录 DTO。压缩请求冻结当前选中模型的 recipe 与真实历史范围；后台 handler 独立构造模型，预算模拟不构造额外模型或图。
+- `context_compaction.py` 只编排原候选 owner 与 BackgroundTaskRegistry，不持有第二份任务状态。冻结 detail 后释放 Session gate，再提交原注册器；等待不持写事务。

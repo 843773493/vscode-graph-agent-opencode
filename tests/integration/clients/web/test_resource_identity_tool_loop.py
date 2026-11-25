@@ -116,8 +116,8 @@ async def test_rejected_identity_and_correction_survive_workbench_refresh(
             assert result.returncode == 0, f"Workbench 验收失败：{context.artifacts_dir}\n{result.stdout}\n{result.stderr}"
             actual = json.loads(result_path.read_text())
             assert actual["owner"] == owner and actual["live"] == actual["restored"]
-            assert (actual["live"]["failed"], actual["live"]["completed"]) == (6, 1)
-            assert len(actual["live"]["partIds"]) == len(set(actual["live"]["partIds"])) == 8
+            assert (actual["live"]["failed"], actual["live"]["completed"]) == (3, 1)
+            assert len(actual["live"]["itemIds"]) == len(set(actual["live"]["itemIds"])) == 8
             assert actual["live"]["results"] == [
                 "ResourceIdentity resource_identity 不得携带路径/URI/credential 形态",
             ] * 3

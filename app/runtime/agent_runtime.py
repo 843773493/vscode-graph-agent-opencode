@@ -44,10 +44,11 @@ if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.tools import BaseTool
 
-    from app.agents.graph_binding import GraphBindingStorePort
+    from app.agents.graph_binding import GraphBinding
     from app.agents.instruction_producers import InstructionProducerSpec
     from app.agents.model_capability_routing import CapabilityRoutingMiddleware
     from app.agents.skill_catalog import PublishedSkillCatalog
+    from app.runtime.context_compaction import AgentSummarizationCompactor
     from app.services.business.communication.user_questions import UserQuestionService
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
@@ -71,6 +72,14 @@ class AgentModelSetup:
     model: BaseChatModel
     routing_middleware: CapabilityRoutingMiddleware
     instruction_producers: tuple[InstructionProducerSpec, ...]
+    model_recipes: tuple[tuple[BaseChatModel, Mapping[str, object]], ...]
+
+    def recipe_for(self, model: BaseChatModel) -> Mapping[str, object]:
+        """实际候选复用构造时的配置快照，不回读热更新后的同名模型。"""
+        for candidate, recipe in self.model_recipes:
+            if candidate is model:
+                return recipe
+        raise ValueError("compaction-model-mismatch: 模型不属于本次冻结候选")
 
 
 def prepare_agent_model(
@@ -95,48 +104,55 @@ def prepare_agent_model(
 
     if config_service is None:
         raise RuntimeError("prepare_agent_model 需要显式传入 ConfigService")
-    runtime_config = config_service.get_agent_runtime_config(
-        agent_id,
-        preferred_model=preferred_model,
-    )
-    providers = runtime_config["models"]
-    candidates = []
-    for index, provider in enumerate(providers):
-        try:
-            model = build_model_from_provider(
-                provider,
-                runtime_config,
-                prompt_cache_key=prompt_cache_key,
-                gateway_id=gateway_id,
-            )
-        except Exception as error:
-            provider_id = provider["provider_id"]
-            detail = provider_build_failure(provider, error)
-            if index == 0:
-                raise RuntimeError(
-                    f"当前选择的模型配置不可用: provider_id={provider_id}, model_id={provider['model_id']}; {detail}"
-                ) from error
-            continue
-        if lifetime_scope is not None:
-            lifetime_scope.register(model.aclose, label=f"model:{provider['provider_id']}/{provider['model_id']}")
-        candidates.append(
-            build_provider_model_candidate(provider=provider, model=model)
+    # 模型、容量和后台配方必须来自同一份配置，不能跨过热更新代际。
+    with config_service.use_snapshot(config_service.get_snapshot()):
+        runtime_config = config_service.get_agent_runtime_config(
+            agent_id,
+            preferred_model=preferred_model,
         )
-    if not candidates:
-        raise RuntimeError("未能构建任何模型实例")
-    return AgentModelSetup(
-        model=candidates[0].model,
-        routing_middleware=CapabilityRoutingMiddleware(candidates),
-        instruction_producers=runtime_instruction_producers(
-            agent_id=agent_id, content=runtime_config["system_prompt"],
-            config_revision=config_service.get_revision(),
-            runtime_identity_description=runtime_config["runtime_identity_description"],
-            provider_candidates=[
-                (candidate.provider_id, candidate.model_id)
-                for candidate in candidates
-            ],
-        ),
-    )
+        providers = runtime_config["models"]
+        candidates = []
+        model_recipes = []
+        for index, provider in enumerate(providers):
+            try:
+                model = build_model_from_provider(
+                    provider,
+                    runtime_config,
+                    prompt_cache_key=prompt_cache_key,
+                    gateway_id=gateway_id,
+                )
+            except Exception as error:
+                provider_id = provider["provider_id"]
+                detail = provider_build_failure(provider, error)
+                if index == 0:
+                    raise RuntimeError(
+                        f"当前选择的模型配置不可用: provider_id={provider_id}, model_id={provider['model_id']}; {detail}"
+                    ) from error
+                continue
+            if lifetime_scope is not None:
+                lifetime_scope.register(model.aclose, label=f"model:{provider['provider_id']}/{provider['model_id']}")
+            candidates.append(
+                build_provider_model_candidate(provider=provider, model=model)
+            )
+            model_recipes.append((model, config_service.freeze_model_recipe(
+                ModelReferenceDTO(provider_id=provider["provider_id"], model_id=provider["model_id"]),
+            )))
+        if not candidates:
+            raise RuntimeError("未能构建任何模型实例")
+        return AgentModelSetup(
+            model=candidates[0].model,
+            routing_middleware=CapabilityRoutingMiddleware(candidates),
+            model_recipes=tuple(model_recipes),
+            instruction_producers=runtime_instruction_producers(
+                agent_id=agent_id, content=runtime_config["system_prompt"],
+                config_revision=config_service.get_revision(),
+                runtime_identity_description=runtime_config["runtime_identity_description"],
+                provider_candidates=[
+                    (candidate.provider_id, candidate.model_id)
+                    for candidate in candidates
+                ],
+            ),
+        )
 
 
 class AgentRuntimeDependencyProvider(Protocol):
@@ -156,6 +172,8 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_job_service(self) -> JobServiceProtocol: ...
 
     def get_checkpointer(self) -> RolloutCheckpointSaver: ...
+
+    def get_summarization_compactor(self) -> AgentSummarizationCompactor: ...
 
     def get_resource_navigation(self) -> ResourceNavigation: ...
 
@@ -219,16 +237,12 @@ def assemble_agent(
     workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
     reactor_lifetime_scope: LifetimeScope | None = None,
     skill_catalog: PublishedSkillCatalog | None = None,
-    graph_binding_store: GraphBindingStorePort,
+    graph_binding: GraphBinding,
     workspace_root: Path,
     include_team_tools: bool = False,
 ) -> AgentEventSource:
     """注入真实执行依赖，严格使用 Thread 冻结的图工厂。"""
-    from app.agents.graph_binding import (
-        GRAPH_FACTORY_REGISTRY,
-        GraphBindingOwnerKey,
-        resolve_graph_binding,
-    )
+    from app.agents.graph_binding import GRAPH_FACTORY_REGISTRY
     from app.agents.policy import parse_custom_tool_specs
 
     resolved_agent_id = config_service.resolve_agent_id(agent_id)
@@ -266,11 +280,7 @@ def assemble_agent(
     direct_confirmation_tool_names = confirmation_tool_names - configured_custom_tool_names
     if session_service is None:
         raise RuntimeError("assemble_agent 需要显式传入 SessionService")
-    binding = resolve_graph_binding(
-        store=graph_binding_store,
-        owner=GraphBindingOwnerKey(session_id, thread_id),
-    )
-    builder = cast("Callable[..., AgentEventSource]", GRAPH_FACTORY_REGISTRY.resolve(binding))
+    builder = cast("Callable[..., AgentEventSource]", GRAPH_FACTORY_REGISTRY.resolve(graph_binding))
     return builder(
         model=override_model,
         preferred_model=preferred_model,
@@ -291,6 +301,7 @@ def assemble_agent(
         custom_tool_specs=custom_tool_specs,
         name=name or resolved_agent_id,
         background_task_registry=background_task_registry,
+        compaction_runtime=dependency_provider.get_summarization_compactor(),
         background_mailbox=background_mailbox,
         job_event_bus=job_event_bus,
         job_service=job_service,

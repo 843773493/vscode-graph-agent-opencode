@@ -9,7 +9,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -22,12 +22,16 @@ import pytest
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
 from configs.installer import install_user_configuration
-from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用唯一 HTTP/MCP 夹具
 )
-from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
+from tests.support.ports import integration_ports_for_file
+from tests.support.processes.gateway import (
+    LOCAL_TOKEN_HEADERS,
+    close_gateway_process,
+    start_gateway_process,
+)
 from tests.support.processes.scope import register_test_process
 from tests.support.processes.workspace import terminate_process
 from tests.support.workspaces import prepare_default_test_workspace
@@ -56,7 +60,7 @@ async def run():
 
         def report(name):
             status = service.get_reload_status()
-            configuration = service.get_snapshot().to_dict()["mcp"]["servers"]["schema"]
+            configuration = service.get_active_snapshot().to_dict()["mcp"]["servers"]["schema"]
             temporary = report_dir / (name + ".tmp")
             temporary.write_text(json.dumps({
                 "pid": os.getpid(), "url": configuration.get("url"), "server": configuration,
@@ -143,7 +147,7 @@ class RecoveryCase:
 
 
 @pytest.fixture
-def recovery_case(request: pytest.FixtureRequest) -> RecoveryCase:
+def recovery_case(request: pytest.FixtureRequest) -> Iterator[RecoveryCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     root = prepare_default_test_workspace(
         workspace_root=context.workspace_root,
@@ -153,11 +157,20 @@ def recovery_case(request: pytest.FixtureRequest) -> RecoveryCase:
     home = context.boxteam_home_for_node(request.node.nodeid)
     install_user_configuration(config_root=home / "config", profile="default", project_root=Path.cwd(), force=True)
     mount = MountedWorkspace(load_or_create_workspace_id(root), root)
+    gateway = start_gateway_process(
+        workspace_root=root, default_backend_url=None,
+        port=integration_ports_for_file(Path(request.node.path)).port("mcp-gateway"),
+        boxteam_home=home, artifacts_dir=context.artifacts_dir / "gateway",
+    )
     environment = {**os.environ, "BOXTEAM_HOME": str(home), "PYTHONUNBUFFERED": "1",
                    "BOXTEAM_MOUNTED_WORKSPACES": json.dumps([mount.to_payload()]),
-                   "BOXTEAM_BACKEND_GENERATION": f"test_backend_{uuid4().hex}"}
+                   "BOXTEAM_BACKEND_GENERATION": f"test_backend_{uuid4().hex}",
+                   "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{gateway.port}"}
     environment.pop("WORKSPACE_ROOT", None)
-    return RecoveryCase(context, mount, environment)
+    try:
+        yield RecoveryCase(context, mount, environment)
+    finally:
+        close_gateway_process(gateway)
 
 
 async def ready(process: subprocess.Popen[str], reports: Path) -> dict[str, object]:
@@ -175,12 +188,14 @@ async def test_real_retirement_failure_keeps_committed_config_and_reports_cleanu
     async with http_schema_endpoint_factory("old") as old, http_schema_endpoint_factory("new") as new:
         new.definitions.write_text(json.dumps({"probe": {"type": "object"}, "new_connection": {"type": "object"}}))
         path = case.mount.workspace_root / ".boxteam/workspace.jsonc"
-        payload = read_jsonc_object(path) if path.exists() else {}
-        payload["mcp"] = {"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": old.url}}}
+        payload = {"config_version": 4, "extends": "builtin:workspace", "settings": {"workspace": {
+            "mcp": {"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": old.url}}},
+        }}}
+        servers = payload["settings"]["workspace"]["mcp"]["servers"]
         path.write_text(json.dumps(payload), encoding="utf-8")
         async with case.process("cleanup_failure") as (process, reports, base_url):
             original = await ready(process, reports)
-            payload["mcp"]["servers"]["schema"]["url"] = new.url
+            servers["schema"]["url"] = new.url
             path.write_text(json.dumps(payload), encoding="utf-8")
             prefix = f"/api/v1/workspaces/{case.mount.workspace_id}"
             async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=10) as client:
@@ -200,9 +215,9 @@ async def test_real_retirement_failure_keeps_committed_config_and_reports_cleanu
                 assert cleanup == {"server_id": "schema", "connection_ref": original["connection_ref"],
                                    "phase": "cleanup_failed", "release_verified": False, "error_type": "ExceptionGroup"}
                 assert "private" not in response.text and "must-never-leak" not in response.text
-                servers = await client.get(prefix + "/mcp/servers")
-                assert servers.status_code == 200, servers.text
-                assert {tool["tool_id"] for server in servers.json()["data"] for tool in server["tools"]} == {
+                server_response = await client.get(prefix + "/mcp/servers")
+                assert server_response.status_code == 200, server_response.text
+                assert {tool["tool_id"] for server in server_response.json()["data"] for tool in server["tools"]} == {
                     "mcp__schema__probe", "mcp__schema__new_connection",
                 }
                 event = json.loads((reports / "cleanup-event.json").read_text())
@@ -212,7 +227,7 @@ async def test_real_retirement_failure_keeps_committed_config_and_reports_cleanu
                 assert published["config_events"][-1]["result"] == "applied"
                 assert len(published["config_events"]) == 1
                 # 失败引用不清除；冲突的新候选不能假装继续替换成功。
-                payload["mcp"]["servers"]["schema"]["url"] = old.url
+                servers["schema"]["url"] = old.url
                 path.write_text(json.dumps(payload), encoding="utf-8")
                 async with asyncio.timeout(20):
                     while True:
@@ -239,12 +254,14 @@ async def test_real_process_exit_recovers_commit_boundary_and_replays_http_event
     async with http_schema_endpoint_factory("old") as old, http_schema_endpoint_factory("new") as new:
         new.definitions.write_text(json.dumps({"probe": {"type": "object"}, "new_connection": {"type": "object"}}))
         path = case.mount.workspace_root / ".boxteam/workspace.jsonc"
-        payload = read_jsonc_object(path) if path.exists() else {}
-        payload["mcp"] = {"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": old.url}}}
+        payload = {"config_version": 4, "extends": "builtin:workspace", "settings": {"workspace": {
+            "mcp": {"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": old.url}}},
+        }}}
+        servers = payload["settings"]["workspace"]["mcp"]["servers"]
         path.write_text(json.dumps(payload), encoding="utf-8")
         async with case.process(window) as (process, reports, _base_url):
             original = await ready(process, reports)
-            payload["mcp"]["servers"]["schema"]["url"] = new.url
+            servers["schema"]["url"] = new.url
             path.write_text(json.dumps(payload), encoding="utf-8")
             code = await asyncio.wait_for(asyncio.to_thread(process.wait), 20)
             assert code == (81 if window == "before_promotion" else 82), (reports / "process.raw").read_text()

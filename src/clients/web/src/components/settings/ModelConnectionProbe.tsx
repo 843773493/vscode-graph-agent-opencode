@@ -165,7 +165,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
     setTesting(true); setError(undefined);
     try {
       // 一次点击冻结全部输入，最多三个消费者；停止后不再领取剩余模型。
-      const input = request(actualMode);
+      const input = request(actualMode), target = { ...editor.target };
       const modes = testMode === 'both' ? ['stream', 'complete'] as const : [testMode];
       const queue = ids.flatMap(modelId => modes.map(mode => ({ modelId, mode })));
       let cursor = 0;
@@ -173,10 +173,10 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
         while (!controller.signal.aborted && cursor < queue.length) {
           const { modelId, mode } = queue[cursor++], key = `${modelId}:${mode}`;
           const entry: TestObservation = { modelId, mode, status: 'running', version, preview: '' };
-          const update = () => { if (batch.current === controller) setTests(previous => ({ ...previous, [key]: { ...entry } })); };
+          const update = () => { if (batch.current === controller && !editor.signal.aborted) setTests(previous => ({ ...previous, [key]: { ...entry } })); };
           update();
           try {
-            const result = await testLlmModel(0, editor.target, { ...input, model_id: modelId, timeout_seconds: 60,
+            const result = await testLlmModel(0, target, { ...input, model_id: modelId, timeout_seconds: 60,
               ...(mode === 'configured' ? {} : { streaming: mode === 'stream' }) }, {
               signal: controller.signal,
               onStart: start => { entry.start = start; update(); },
@@ -243,7 +243,12 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
       <p role="status">{t(catalog.result.complete ? 'configuration.probe.completeCatalog' : 'configuration.probe.incompleteCatalog', catalog.result.models.length)}
         {stale(catalog.result.observation, catalog.version) ? ` · ${t('configuration.probe.stale')}` : ''}</p>
       {catalog.result.observation ? <details><summary>{t('configuration.probe.observationDetails')}</summary>{observation(catalog.result.observation)}</details> : null}
-      {catalog.result.error ? <p role="alert" className="failure-summary">{failureSummary(catalog.result.error.message)}</p> : null}
+      {catalog.result.error ? <>
+        <p role="alert" className="failure-summary">{failureSummary(catalog.result.error.message)}</p>
+        <details><summary>{t('configuration.probe.errorDetails')}</summary>
+          <pre>{`${catalog.result.error.category}${catalog.result.error.field ? ` · ${catalog.result.error.field}` : ''}\n${catalog.result.error.message}`}</pre>
+        </details>
+      </> : null}
       {catalog.result.models.length > 0 ? <>
       <div className="configuration-form-grid"><label className="configuration-entity-field">{t('configuration.probe.modelType')}
         <select value={hasMetadata ? modelFilter : 'all'} onChange={event => setModelFilter(event.target.value)}>
@@ -283,16 +288,19 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
     {Object.entries(tests).map(([key, entry]) => <section key={key} className="configuration-probe-result" data-probe-model={entry.modelId}>
       <p role="status">{entry.modelId} · {t(`configuration.probe.test.${entry.mode}`)} · {t(`configuration.probe.status.${entry.status}`)}
         {stale(entry.result?.observation ?? entry.start?.observation, entry.version) ? ` · ${t('configuration.probe.stale')}` : ''}</p>
-      {entry.start?.observation ? <details><summary>{t('configuration.probe.observationDetails')}</summary>{observation(entry.start.observation)}</details> : null}
+      {entry.start ? <details><summary>{t('configuration.probe.observationDetails')}</summary>
+        {entry.start.observation ? observation(entry.start.observation) : null}
+        <small>request_id: {entry.start.request_id}</small>
+      </details> : null}
       {entry.preview ? <pre>{entry.preview}</pre> : null}
       {entry.result ? <p>{t('configuration.probe.timing', entry.result.first_content_ms?.toFixed(0) ?? '—', entry.result.elapsed_ms.toFixed(0))}
         {entry.result.preview_truncated ? ` · ${t('configuration.probe.truncated')}` : ''}
         {entry.result.usage ? ` · usage ${JSON.stringify(entry.result.usage)}` : ''}</p> : null}
-      {entry.start ? <small>request_id: {entry.start.request_id}</small> : null}
       {entry.error || entry.result?.error ? <>
         <p role="alert" className="failure-summary">{entry.error ? errorSummary(entry.error) : failureSummary(entry.result!.error!.message)}</p>
         <details><summary>{t('configuration.probe.errorDetails')}</summary>
-          <pre>{entry.error ? errorDiagnostic(entry.error) : `${entry.result!.error!.field ?? ''}\n${entry.result!.error!.message}`}</pre>
+          <pre>{entry.error ? errorDiagnostic(entry.error) : `${entry.result!.error!.category}${entry.result!.error!.field ? ` · ${entry.result!.error!.field}` : ''}\n${entry.result!.error!.message}`}
+            {entry.start ? `\nrequest_id: ${entry.start.request_id}` : ''}</pre>
           {onOpenSource ? <button type="button" onClick={onOpenSource}>{t('configuration.entities.openJsonc')}</button> : null}
         </details>
       </> : null}

@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import nullcontext
@@ -28,21 +27,13 @@ import pytest
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from langchain.agents.middleware import ModelRequest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.agents.model_call_execution import ModelCallExecution
-from app.agents.summarization.planning import build_cache_preserving_event
-from app.agents.summarization.projection import apply_summarization_event
-from app.agents.summarization.state import CachePreservingPartition
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
-from app.core.model_request_context import (
-    SummaryCandidateScope,
-    summary_candidate_scope,
-)
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
@@ -61,7 +52,6 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.schemas.internal_v2.turn_search import TurnMessageSearchRequest
-from app.services.business.message_service import MessageService
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     CONFLICT_CODE,
     ToolProtocolBoundary,
@@ -82,10 +72,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.store import (
     RolloutContextStore,
 )
-from app.services.mapping.agent_state_messages import message_to_agent_state_record
 from app.services.mapping.itemized.canonical_langchain import project_tool_result
-from tests.support.messages import compaction_summary_message
-from tests.support.rollout.view_mutations import mutate_view_members
 
 SESSION_ID = "ses_019c3c97527e707e8dc56fca3f021b97"
 TURN_ID = "turn-delegated-turn2"
@@ -394,11 +381,11 @@ def _persist_tool_declarations(storage: RolloutContextStore) -> str:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("checkpoint_ns", ["", "model:summary"])
 @pytest.mark.parametrize("stream_result_first", [False, True])
-async def test_summary_boundary_commits_original_result_before_stream_completion(
+async def test_graph_boundary_commits_original_result_before_stream_completion(
     storage, carrier_saver, tool_declarations, registered_tool_set_producer_factory,
     checkpoint_ns, stream_result_first,
 ):
-    """摘要候选截掉末轮工具组时，仍以完整原始输入结算真实 canonical 边界。"""
+    """普通请求以实际输入结算真实工具边界，迟到的 stream 仍保持幂等。"""
     thread_id = tool_declarations
     if stream_result_first:
         storage.executions.append_items(SESSION_ID, thread_id, (_live_tool_result(3),), execution_id=MODEL_CALL_ID)
@@ -407,8 +394,7 @@ async def test_summary_boundary_commits_original_result_before_stream_completion
                   tool_calls=[{"id": PROVIDER_TOOL_CALL_ID, "name": "task", "args": {}}]),
         ToolMessage(content=RESULT_CONTENT, id="request-result", name="task", tool_call_id=PROVIDER_TOOL_CALL_ID),
     )
-    candidate_messages = [HumanMessage(content="只摘要早期历史，不包含末轮工具结果", id="summary-instruction")]
-    request = ModelRequest(model=object(), messages=candidate_messages)
+    request = ModelRequest(model=object(), messages=list(original))
     execution = ModelCallExecution(
         checkpointer=carrier_saver, session_id=SESSION_ID, thread_id=thread_id,
         context_source_manager=ContextSourceManager(), tool_set_producer=registered_tool_set_producer_factory(),
@@ -420,14 +406,12 @@ async def test_summary_boundary_commits_original_result_before_stream_completion
     with (
         session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
-        summary_candidate_scope(SummaryCandidateScope(0, "initial", False, True, canonical_messages=original)),
     ):
         conflict, cancelled = await execution._settle_boundary(request, context)
         assert conflict is None and cancelled is None
         committed = storage.storage.read_items(SESSION_ID, thread_id)
         assert "item-request-result" in {item.item_id for item in committed}
-        assert all(item.message_group_id != "message-summary-instruction" for item in committed)
-        assert request.messages == candidate_messages
+        assert request.messages == list(original)
         # request carrier 已闭合；较迟的 stream terminal 只能追加其自己的身份。
         if not stream_result_first:
             storage.executions.append_items(SESSION_ID, thread_id, (_live_tool_result(3),), execution_id=MODEL_CALL_ID)
@@ -671,234 +655,6 @@ def test_tool_result_owner_requires_registered_original_model(
         )
     assert _catalog_tool_result_ids(storage) == []
     assert storage.storage.jsonl_path(SESSION_ID, thread_id=tool_declarations).read_bytes() == committed_bytes
-
-
-@pytest.fixture(params=["before_checkpoint", "after_checkpoint"])
-def compaction_carrier_checkpoint(
-    storage: RolloutContextStore, carrier_saver: RolloutCheckpointSaver,
-    request: pytest.FixtureRequest,
-) -> tuple[str, RunnableConfig, list[BaseMessage]]:
-    """真实双声明 carrier，覆盖 terminal 两种到达顺序，再恢复冻结 state。"""
-    thread_id = storage.storage.main_thread_id(SESSION_ID)
-    codec = storage.storage._codec()
-    root = storage.storage.read_items(SESSION_ID, thread_id)[0]
-    user = codec.from_dict(codec.project_message((root,)))
-    stream_call = CanonicalItemRecord.create(
-        item_sequence=1, item_id="item-live-call", semantic_kind=SemanticKind.TOOL_CALL,
-        payload_kind=PayloadKind.TOOL_CALL, status=CanonicalItemStatus.COMPLETED,
-        producer_ref={"producer_kind": "provider", "producer_id": "live-call", "invocation_id": MODEL_CALL_ID},
-        payload={"tool_call_id": SCOPED_TOOL_CALL_ID, "name": "task", "args": {}},
-        projection_identity=ItemProjectionIdentity(model_call_id=MODEL_CALL_ID),
-        turn_id=TURN_ID, turn_scope=TurnScope.TURN_MEMBER, message_group_id="message-live-call",
-        wire_role="assistant",
-    )
-    storage.executions.append_items(SESSION_ID, thread_id, (stream_call,), execution_id=MODEL_CALL_ID)
-    if request.param == "before_checkpoint":
-        storage.executions.append_items(SESSION_ID, thread_id, (_live_tool_result(3),), execution_id=MODEL_CALL_ID)
-    messages = [
-        user,
-        AIMessage(content="", id="request-call", response_metadata={"model_call_id": MODEL_CALL_ID},
-                  tool_calls=[{"id": PROVIDER_TOOL_CALL_ID, "name": "task", "args": {}}]),
-        ToolMessage(content=RESULT_CONTENT, id="request-result", name="task", tool_call_id=PROVIDER_TOOL_CALL_ID,
-                    response_metadata={"model_call_id": MODEL_CALL_ID}),
-        AIMessage(content="工具已完成，保留近期回答。", id="carrier-final"),
-    ]
-    checkpoint = empty_checkpoint()
-    checkpoint["id"] = "compaction-carrier-source"
-    checkpoint["channel_values"] = {"messages": messages}
-    checkpoint["channel_versions"] = {"messages": "1"}
-    checkpoint["updated_channels"] = ["messages"]
-    admission = carrier_saver.execution_admission(SESSION_ID, thread_id=thread_id, execution_id=MODEL_CALL_ID)
-    with (
-        session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
-        execution_admission_scope(admission, langgraph_thread_id=thread_id),
-    ):
-        config = carrier_saver.put(build_checkpoint_config(thread_id), checkpoint, {"source": "unit"}, {"messages": "1"})
-    if request.param == "after_checkpoint":
-        with storage.storage.read_connection(SESSION_ID, thread_id) as connection:
-            terminal_commit = connection.execute(
-                "SELECT commit_id FROM item_catalog WHERE item_id='item-request-result'",
-            ).fetchone()[0]
-        appended = storage.executions.append_items(SESSION_ID, thread_id, (_live_tool_result(3),), execution_id=MODEL_CALL_ID)
-        assert appended and terminal_commit not in appended
-    expected_terminals = (
-        [_live_tool_result(3).item_id, "item-request-result"]
-        if request.param == "before_checkpoint"
-        else ["item-request-result", _live_tool_result(3).item_id]
-    )
-    assert _catalog_tool_result_ids(storage) == expected_terminals
-    with session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id):
-        restored = carrier_saver.get_tuple(config)
-    assert restored is not None
-    state = restored.checkpoint["channel_values"]["messages"]
-    assert [message.id for message in state] == [message.id for message in messages]
-    assert state[2].content == RESULT_CONTENT
-    assert state[2].tool_call_id == PROVIDER_TOOL_CALL_ID
-    return thread_id, config, state
-
-
-@pytest.mark.parametrize("checkpoint_ns", ["", "model:compaction-call"])
-def test_compaction_preflight_uses_selected_checkpoint_carriers(
-    storage: RolloutContextStore, carrier_saver: RolloutCheckpointSaver,
-    compaction_carrier_checkpoint: tuple[str, RunnableConfig, list[BaseMessage]],
-    checkpoint_ns: str,
-) -> None:
-    thread_id, _config, state = compaction_carrier_checkpoint
-    with storage.storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot:
-        before = tuple(snapshot.connection.iterdump())
-        checkpoint = storage.checkpoints.latest_checkpoint(
-            SESSION_ID, thread_id, snapshot.checkpoint_ns, None, snapshot=snapshot,
-        )
-        assert checkpoint is not None
-        cold_state = storage.checkpoints.checkpoint_values(
-            SESSION_ID, thread_id, snapshot.checkpoint_ns, checkpoint,
-            snapshot=snapshot, include_execution_context=True,
-        )["messages"]
-        assert cold_state == state
-        items = carrier_saver._storage.checkpoints.committed_context_items(
-            snapshot, predecessor=carrier_saver._storage.assemblies.latest_context_assembly(snapshot),
-        )
-        selected = carrier_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
-        raw = storage.storage._view_message_sequences_from_connection(
-            snapshot.connection, storage.checkpoints.active_view_id(snapshot),
-        )
-        assert raw != selected
-        rows = dict(snapshot.connection.execute("SELECT message_id, message_sequence FROM messages"))
-        assert selected == [rows[message.id] for message in state]
-    jsonl = storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id)
-    before_jsonl = jsonl.read_bytes()
-    # state 中的 call/result 位于 1/2，实际持久序号之间还包含两个 sink 的 shadow。
-    assert carrier_saver.safe_compaction_prefix_cutoffs(
-        SESSION_ID, thread_id, checkpoint_ns=checkpoint_ns,
-        state_messages=state, cutoff_indexes=[0, 1, 2, 3, 4],
-    ) == frozenset({0, 1, 3, 4})
-    with storage.storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot:
-        assert tuple(snapshot.connection.iterdump()) == before
-    assert jsonl.read_bytes() == before_jsonl
-
-
-@pytest.mark.parametrize("damage", ["duplicate", "reorder", "gap", "shadow", "inflight_gap"])
-def test_compaction_preflight_rejects_invalid_state_prefix(
-    storage: RolloutContextStore, carrier_saver: RolloutCheckpointSaver,
-    compaction_carrier_checkpoint: tuple[str, RunnableConfig, list[BaseMessage]],
-    damage: str,
-) -> None:
-    thread_id, _config, state = compaction_carrier_checkpoint
-    invalid = {
-        "duplicate": [state[0], state[0], *state[1:]],
-        "reorder": [state[0], state[2], state[1], state[3]],
-        "gap": [state[0], *state[2:]],
-        "shadow": [state[0], AIMessage(content="", id="live-call"), *state[1:]],
-        "inflight_gap": [state[0], AIMessage(content="", id="not-yet-persisted"), *state[1:]],
-    }[damage]
-    with storage.storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot:
-        before = tuple(snapshot.connection.iterdump())
-    jsonl = storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id)
-    before_jsonl = jsonl.read_bytes()
-    with pytest.raises(RuntimeError, match="compaction preflight 映射损坏"):
-        carrier_saver.safe_compaction_prefix_cutoffs(
-            SESSION_ID, thread_id, checkpoint_ns="", state_messages=invalid,
-            cutoff_indexes=[len(invalid)],
-        )
-    with storage.storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot:
-        assert tuple(snapshot.connection.iterdump()) == before
-    assert jsonl.read_bytes() == before_jsonl
-
-
-def test_compaction_preflight_does_not_restore_hidden_declarations(
-    storage: RolloutContextStore, carrier_saver: RolloutCheckpointSaver,
-    compaction_carrier_checkpoint: tuple[str, RunnableConfig, list[BaseMessage]],
-) -> None:
-    thread_id, _config, state = compaction_carrier_checkpoint
-    with sqlite3.connect(storage.storage.index_path(SESSION_ID, thread_id=thread_id)) as connection:
-        view_id = connection.execute(
-            "SELECT head_view_id FROM branches WHERE status='active'",
-        ).fetchone()[0]
-        mutate_view_members(connection,
-            "UPDATE context_view_items SET visible=0 WHERE view_id=? "
-            "AND item_id IN ('item-live-call','item-request-call')", (view_id,),
-        )
-    with storage.storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot:
-        items = carrier_saver._storage.checkpoints.committed_context_items(
-            snapshot, predecessor=carrier_saver._storage.assemblies.latest_context_assembly(snapshot),
-        )
-        selected = carrier_saver._storage.checkpoints.selected_context_message_sequences(snapshot, items=items)
-        ids = {sequence: message_id for sequence, message_id in snapshot.connection.execute(
-            "SELECT message_sequence, message_id FROM messages",
-        )}
-        assert "live-call" not in {ids[sequence] for sequence in selected}
-        assert "request-call" not in {ids[sequence] for sequence in selected}
-        with pytest.raises(ToolProtocolBoundaryConflict, match=CONFLICT_CODE):
-            ToolProtocolBoundary(snapshot.connection, selected).validate(len(selected))
-        before = tuple(snapshot.connection.iterdump())
-    jsonl = storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id)
-    before_jsonl = jsonl.read_bytes()
-    with pytest.raises(RuntimeError, match="compaction preflight 映射损坏"):
-        carrier_saver.safe_compaction_prefix_cutoffs(
-            SESSION_ID, thread_id, checkpoint_ns="", state_messages=state,
-            cutoff_indexes=[len(state)],
-        )
-    with storage.storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot:
-        assert tuple(snapshot.connection.iterdump()) == before
-    assert jsonl.read_bytes() == before_jsonl
-
-
-@pytest.mark.asyncio
-async def test_compaction_checkpoint_preserves_selected_state_cutoff(
-    storage: RolloutContextStore, carrier_saver: RolloutCheckpointSaver,
-    compaction_carrier_checkpoint: tuple[str, RunnableConfig, list[BaseMessage]],
-) -> None:
-    thread_id, config, state = compaction_carrier_checkpoint
-    assert carrier_saver.safe_compaction_prefix_cutoffs(
-        SESSION_ID, thread_id, checkpoint_ns="", state_messages=state, cutoff_indexes=[1, 3],
-    ) == frozenset({1, 3})
-    summary = compaction_summary_message(content="已完成工具调用，保留真实结果。", id="carrier-summary")
-    event = build_cache_preserving_event(
-        CachePreservingPartition(prefix_messages=state[:1], messages_to_summarize=state[1:3],
-                                 preserved_messages=state[3:], state_cutoff=3),
-        summary_message=summary,
-    )
-    checkpoint = empty_checkpoint()
-    checkpoint["id"] = "compaction-selected-carrier-cutoff"
-    checkpoint["channel_values"] = {"messages": state, "_summarization_event": event}
-    checkpoint["channel_versions"] = {"messages": "2", "_summarization_event": "2"}
-    checkpoint["updated_channels"] = ["messages", "_summarization_event"]
-    admission = carrier_saver.execution_admission(SESSION_ID, thread_id=thread_id, execution_id=MODEL_CALL_ID)
-    with (
-        session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
-        execution_admission_scope(admission, langgraph_thread_id=thread_id),
-    ):
-        saved = carrier_saver.put(config, checkpoint, {"source": "compaction"}, checkpoint["channel_versions"])
-    with storage.storage.open_read_snapshot(SESSION_ID, thread_id) as snapshot:
-        control = json.loads(snapshot.connection.execute(
-            "SELECT payload_json FROM control_events WHERE checkpoint_id=?",
-            (checkpoint["id"],),
-        ).fetchone()[0])
-        cutoff_sequence = snapshot.connection.execute(
-            "SELECT message_sequence FROM messages WHERE message_id='request-result'",
-        ).fetchone()[0]
-        assert control["cutoff_index"] == 3
-        assert control["cutoff_message_id"] == "request-result"
-        assert control["cutoff_message_sequence"] == cutoff_sequence
-        assert cutoff_sequence != control["cutoff_index"]
-    with (
-        RolloutCheckpointSaver(storage.storage.sessions_dir) as cold,
-        session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id),
-    ):
-        restored = cold.get_tuple(saved)
-        assert restored is not None
-        channels = restored.checkpoint["channel_values"]
-        assert channels["messages"] == state
-        assert channels["_summarization_event"] == event
-        assert apply_summarization_event(channels["messages"], channels["_summarization_event"]) == [state[0], summary, state[3]]
-        consumer = MessageService(main_thread_resolver=storage.storage.main_thread_id, checkpointer=cold)
-        context = await consumer.get_agent_context_state(SESSION_ID, thread_id)
-        assert context["raw_message_count"] == 4
-        assert context["compaction_cutoff"] == 3
-        assert context["records"] == [
-            message_to_agent_state_record(message)
-            for message in [state[0], summary, state[3]]
-        ]
 
 
 @pytest.mark.parametrize("result_order, expected_stream_result", [
@@ -1213,7 +969,7 @@ def test_new_execution_restores_preceding_terminal_tool_group(
             TurnHistoryLoadRequest(turn_ids=[TURN_ID], include=["user", "tool_call", "tool_result"]),
         ).items[0]
         assert original.status == "failed"
-        assert [part.result for part in original.response_parts if part.kind == "tool_result"] == [RESULT_CONTENT]
+        assert [part.result for part in original.response_items if part.kind == "tool_result"] == [RESULT_CONTENT]
     assert storage.storage.jsonl_path(SESSION_ID, thread_id=thread_id).read_bytes().startswith(committed_bytes)
 
 

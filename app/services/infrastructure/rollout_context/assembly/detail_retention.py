@@ -26,6 +26,17 @@ from app.services.infrastructure.rollout_context.storage.transaction import stri
 
 _REFERENCE_QUERY_BATCH_SIZE = 100
 
+# 直接依赖属于原 contribution binding；只保护实际进入封存请求的摘要来源。
+_SUMMARY_RESULT_REFERENCE = (
+    "EXISTS (SELECT 1 FROM context_assembly_contributions contribution "
+    "JOIN context_assemblies assembly USING(assembly_id) "
+    "WHERE json_extract(contribution.binding_manifest_json,'$.source_binding.summary_result_ref')={detail_ref} "
+    "AND assembly.status IN ('sealed','terminal') "
+    "AND EXISTS (SELECT 1 FROM context_assembly_selections selection "
+    "WHERE selection.assembly_id=assembly.assembly_id AND selection.included=1 "
+    "AND selection.contribution_id=contribution.contribution_id))"
+)
+
 
 def _activation_referenced(
     connection: sqlite3.Connection,
@@ -79,6 +90,38 @@ def _referenced(
         (session_id, thread_id, checkpoint_ns, detail_ref, assembly_id, assembly_id),
     ).fetchone() is not None:
         return True
+    # 原任务回执与冷对账仍直接引用输入详情；released 只解除来源 view 的占用。
+    if connection.execute(
+        "SELECT 1 FROM retention_refs retention JOIN context_plan_details detail "
+        "ON detail.assembly_id=retention.retention_id "
+        "WHERE detail.detail_ref=? AND retention.reference_kind='derived_input' "
+        "AND retention.reference_id=detail.detail_ref LIMIT 1", (detail_ref,),
+    ).fetchone() is not None:
+        return True
+    # 候选结果沿原 detail 存储；未采用结果不能因没有普通 assembly selection 而被回收。
+    if connection.execute(
+        "SELECT 1 FROM retention_refs WHERE reference_kind='derived_summary' "
+        "AND reference_id=? AND status='active' LIMIT 1", (detail_ref,),
+    ).fetchone() is not None:
+        return True
+    if connection.execute(
+        "SELECT 1 FROM context_compaction_candidates candidate JOIN context_plan_details detail "
+        "ON detail.assembly_id='compaction-'||candidate.candidate_id "
+        "WHERE candidate.checkpoint_ns=? AND detail.detail_ref=? AND candidate.discarded_reason IS NULL "
+        "AND (candidate.applied_view_id IS NULL OR candidate.result_detail_ref=detail.detail_ref) LIMIT 1",
+        (checkpoint_ns, detail_ref),
+    ).fetchone() is not None:
+        return True
+    if connection.execute(
+        "SELECT 1 FROM context_compaction_candidates WHERE predecessor_result_detail_ref=? "
+        "AND discarded_reason IS NULL LIMIT 1", (detail_ref,),
+    ).fetchone() is not None:
+        return True
+    if connection.execute(
+        "SELECT 1 WHERE " + _SUMMARY_RESULT_REFERENCE.format(detail_ref="?"),
+        (detail_ref,),
+    ).fetchone() is not None:
+        return True
     # sealed activation provenance/lineage 不是 context assembly 的附属 detail，
     # 必须由 activation catalog 自己的引用列保护。
     return _activation_referenced(connection, session_id, thread_id, detail_ref)
@@ -118,7 +161,7 @@ class DetailRetentionMixin:
             raise TypeError("expired_before 必须是 datetime")
         try:
             with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
-                self._storage._require_v2_runtime(connection)
+                self._storage._require_current_rollout_format(connection)
                 if current_scope(connection) != (session_id, thread_id):
                     raise ValueError("source-mismatch: detail GC owner 与 rollout catalog 不一致")
                 scopes = read_local_scopes(connection)
@@ -185,7 +228,7 @@ class DetailRetentionMixin:
         referenced: set[DetailRef] = set()
         try:
             with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
-                self._storage._require_v2_runtime(connection)
+                self._storage._require_current_rollout_format(connection)
                 validated_scopes: set[tuple[str, str]] = set()
                 for ref in refs_by_key.values():
                     scope = (ref.session_id, ref.thread_id)
@@ -236,6 +279,30 @@ class DetailRetentionMixin:
                     "WHERE r.assembly_id = a.assembly_id AND r.detail_ref = d.detail_ref)))",
                     (checkpoint_ns,),
                 )
+                context_keys.update(query_referenced_detail_keys(
+                    candidates,
+                    "EXISTS (SELECT 1 FROM retention_refs retention "
+                    "WHERE retention.reference_id=c.detail_ref "
+                    "AND ((retention.reference_kind='derived_input' AND retention.retention_id=c.assembly_id) "
+                    "OR (retention.reference_kind='derived_summary' AND retention.status='active')))",
+                ))
+                context_keys.update(query_referenced_detail_keys(
+                    candidates,
+                    "EXISTS (SELECT 1 FROM context_compaction_candidates candidate "
+                    "WHERE candidate.predecessor_result_detail_ref=c.detail_ref AND candidate.discarded_reason IS NULL)",
+                ))
+                context_keys.update(query_referenced_detail_keys(
+                    candidates,
+                    _SUMMARY_RESULT_REFERENCE.format(detail_ref="c.detail_ref"),
+                ))
+                context_keys.update(query_referenced_detail_keys(
+                    candidates,
+                    "EXISTS (SELECT 1 FROM context_compaction_candidates candidate "
+                    "WHERE candidate.checkpoint_ns=? AND c.assembly_id='compaction-'||candidate.candidate_id "
+                    "AND candidate.discarded_reason IS NULL "
+                    "AND (candidate.applied_view_id IS NULL OR candidate.result_detail_ref=c.detail_ref))",
+                    (checkpoint_ns,),
+                ))
                 remaining = tuple(
                     (key, ref) for key, ref in candidates if key not in context_keys
                 )

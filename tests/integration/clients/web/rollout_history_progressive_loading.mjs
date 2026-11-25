@@ -346,6 +346,9 @@ try {
   const firstReadStarted = performance.now();
   await sessionButton.click();
   const thread = page.locator(`section.boxteam-thread[data-workspace-id="${owner.workspaceId}"][data-session-id="${sessionId}"][data-thread-id="${owner.threadId}"]`);
+  await expect(thread.locator('textarea')).toBeEditable();
+  const composerOpenings = [performance.now() - firstReadStarted];
+  expect(composerOpenings[0]).toBeLessThanOrEqual(2000);
   await expect(thread).toBeVisible({timeout:30_000});
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.keepEditor'));
   await thread
@@ -413,10 +416,10 @@ try {
     (item) => item.turn_id === "job-0128",
   );
   if (!detailItem) throw new Error("工具详情响应缺少 job-0128");
-  const detailToolCall = detailItem.response_parts.find(
+  const detailToolCall = detailItem.response_items.find(
     (part) => part.kind === "tool_call",
   );
-  const detailToolResult = detailItem.response_parts.find(
+  const detailToolResult = detailItem.response_items.find(
     (part) => part.kind === "tool_result",
   );
   const detailProjectionSafe =
@@ -483,7 +486,7 @@ try {
     },
   );
   const largeToolDetailItem = largeToolDetailPage.data.items[0];
-  const largeToolDetailCall = largeToolDetailItem.response_parts.find(
+  const largeToolDetailCall = largeToolDetailItem.response_items.find(
     (part) => part.kind === "tool_call",
   );
   const largeToolDetailsBounded =
@@ -565,7 +568,7 @@ try {
   await latestTurn.locator(':scope > .chat-assistant-row > .chat-turn-activity > button').click();
   const outlineResponse = await outlineResponsePromise;
   const outlinePayload = await outlineResponse.json();
-  const outlineParts = outlinePayload.data.items[0].response_parts;
+  const outlineParts = outlinePayload.data.items[0].response_items;
   if (outlineParts.some(part => ["reasoning", "tool_call", "tool_result"].includes(part.kind) && (part.text || part.arguments || part.result))) {
     throw new Error("活动轮廓泄漏了大正文");
   }
@@ -583,7 +586,7 @@ try {
   const toolDetailsPayload = await toolDetailsResponse.json();
   const toolDetailsBody = JSON.stringify(toolDetailsPayload);
   const expandedTurn = toolDetailsPayload.data.items.find((item) => item.turn_id === "job-0128");
-  const expandedTools = expandedTurn.response_parts.filter((part) => part.kind === "tool_call" || part.kind === "tool_result");
+  const expandedTools = expandedTurn.response_items.filter((part) => part.kind === "tool_call" || part.kind === "tool_result");
   if (expandedTools.length !== 2 || expandedTools.some((part) => part.tool_call_id !== detailToolCall.tool_call_id || part.tool_name !== "invoke_extension_tool")) {
     throw new Error(`展开活动响应的工具身份不一致: ${JSON.stringify(expandedTools)}`);
   }
@@ -901,10 +904,13 @@ try {
       idempotency_key:`process-layout-${index}`,source_uri:source.source_uri,source_view_id:source.source_view_id,source_view_revision:source.source_view_revision,
       anchor_item_id:source.anchor_item_id,mode:'view_prefix_fork',creation_kind:'new_session_main',target_container_uri:source.main_container_uri,title:`独立会话 ${index+1}`})})).data;
     independent.push({sessionId:fork.session.session_id,threadId:fork.thread_id});
+    const composerStarted = performance.now();
     await page.evaluate(({uri,index})=>globalThis.workbench.commands.executeCommand('_workbench.open',uri,[index,{pinned:true}]),
       {uri:`boxteam-thread://${owner.gatewayId}/${owner.workspaceId}/${fork.session.session_id}/${fork.thread_id}`,index});
     const pane=page.locator(`section.boxteam-thread[data-session-id="${fork.session.session_id}"]:visible`);
     await expect(pane.locator('textarea')).toBeEditable();
+    composerOpenings.push(performance.now() - composerStarted);
+    expect(composerOpenings.at(-1)).toBeLessThanOrEqual(2000);
     await expect(pane.locator('.chat-turn[data-turn-id="job-0128"] .chat-turn-activity > .chat-thinking-toggle')).toHaveAttribute('aria-expanded','false');
   }
   expect(new Set(independent.map(item=>item.sessionId)).size).toBe(6);
@@ -973,7 +979,7 @@ try {
   const internalPath = `/api/v1/sessions/${internalOwner.sessionId}/threads/${internalOwner.threadId}/history`;
   const internalHistory = (await api(page,internalPath,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({direction:'tail'})})).data;
-  const targetItem = internalHistory.internal_executions.flatMap(entry=>entry.response_parts).find(part=>part.kind==='reasoning').source.item_id;
+  const targetItem = internalHistory.internal_executions.flatMap(entry=>entry.response_items).find(part=>part.kind==='reasoning').source.item_id;
   const targetLocation = (await api(page,internalPath,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({direction:'around',anchor_item_id:targetItem})})).data.located_item;
   const locate = () => page.evaluate(({uri,location})=>globalThis.workbench.commands.executeCommand('_workbench.open',uri,
@@ -992,6 +998,7 @@ try {
   const explicitLocationCancellation = true;
 
   result = {
+    composerOpenings,
     extremeLayout:result.extremeLayout,
     readingRestored:result.readingRestored,savedReading:saved,independentSessions:independent,independentScreenshot,childAndInternal:true,
     firstReadMs:result.firstReadMs,firstReadTiming:result.firstReadTiming,cachedDisclosures,networkDisclosures,

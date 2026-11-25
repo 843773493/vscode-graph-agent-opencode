@@ -152,6 +152,10 @@ def prepare_target_snapshot(
                 source_view_revision=source_view_revision,
                 source_checkpoint_id=source_checkpoint_id,
             )
+        # 候选记录属于来源 Thread 的任务，已采用记录也不能成为目标的任务。
+        # 历史摘要、provenance 与封存正文仍由各自不可变引用保留。
+        connection.execute("DELETE FROM context_compaction_candidates")
+        connection.execute("DELETE FROM retention_refs WHERE reference_kind='compaction_candidate'")
         # now 是目标 fork 安装时新建 view/branch 的记账时刻，不是来源执行事件时间。
         # 来源 item/message 的业务时间由复制的历史事实保留。
         now = utc_now_text()

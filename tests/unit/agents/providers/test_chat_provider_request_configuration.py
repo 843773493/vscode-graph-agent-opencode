@@ -31,7 +31,7 @@ def empty_chat_completion_stream() -> _EmptyChatCompletionStream:
     return _EmptyChatCompletionStream()
 
 
-def test_build_model_omits_unspecified_generation_parameters():
+def test_build_model_omits_unspecified_generation_parameters(direct_proxy_routes):
     """最小 provider 配置不得人为限制采样策略或输出长度。"""
     model = build_model_from_provider(
         provider={
@@ -41,6 +41,7 @@ def test_build_model_omits_unspecified_generation_parameters():
             "api_key": "test-key",
             "endpoint": "https://example.com/v1",
             "api_mode": _chat_api_mode(),
+            "proxy_routes": direct_proxy_routes,
         },
         runtime_config={},
     )
@@ -58,6 +59,7 @@ def test_build_model_omits_unspecified_generation_parameters():
 async def test_minimal_model_does_not_send_unspecified_generation_parameters(
     monkeypatch: pytest.MonkeyPatch,
     empty_chat_completion_stream: _EmptyChatCompletionStream,
+    direct_proxy_routes,
 ) -> None:
     captured: dict[str, object] = {}
 
@@ -78,6 +80,7 @@ async def test_minimal_model_does_not_send_unspecified_generation_parameters(
             "api_key": "test-key",
             "endpoint": "https://example.com/v1",
             "api_mode": _chat_api_mode(),
+            "proxy_routes": direct_proxy_routes,
         },
         runtime_config={},
         invocation_purpose="tool_test",
@@ -155,7 +158,7 @@ async def test_nonstream_call_keeps_nonstream_request_parameters(
     assert captured["messages"] == [{"role": "user", "content": "hi"}]
 
 
-def test_build_model_passes_provider_request_parameters():
+def test_build_model_passes_provider_request_parameters(direct_proxy_routes):
     """未声明 Agent 参数时透传模型参数。"""
     model = build_model_from_provider(
         provider={
@@ -173,6 +176,7 @@ def test_build_model_passes_provider_request_parameters():
                     },
                 }
             },
+            "proxy_routes": direct_proxy_routes,
         },
         runtime_config={},
     )
@@ -191,13 +195,14 @@ def test_build_model_passes_provider_request_parameters():
     assert model._default_params["temperature"] == 1
 
 
-def test_agent_parameters_override_model_defaults_and_preserve_extension_null():
+def test_agent_parameters_override_model_defaults_and_preserve_extension_null(direct_proxy_routes):
     """Agent 显式参数高于模型默认；扩展正文中的 JSON null 保持。"""
     model = build_model_from_provider(
         provider={
             "provider_id": "service", "model_id": "configured", "model": "work-model",
             "custom_llm_provider": "openai", "api_key": "test-key",
             "api_mode": _chat_api_mode(),
+            "proxy_routes": direct_proxy_routes,
             "request_options": {"parameters": {
                 "temperature": 1, "top_p": None, "max_tokens": None,
                 "extra_body": {"vendor_feature": None},

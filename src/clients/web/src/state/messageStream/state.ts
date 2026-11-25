@@ -228,6 +228,7 @@ export function toolExecutionOutcomeValue(value: unknown): MessageStreamToolExec
     || value === "provider_error"
     || value === "execution_lost"
     || value === "outcome_unknown"
+    || value === "cancelled"
     ? value
     : undefined;
 }

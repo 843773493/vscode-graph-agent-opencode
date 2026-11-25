@@ -346,6 +346,12 @@ def test_stream_runtime_fields_are_removed_and_provider_item_is_restored():
     ]
     assert "reasoning_content" not in canonical.additional_kwargs
     assert "thinking_blocks" not in canonical.additional_kwargs
+    assert canonical.response_metadata["content_part_refs"] == [
+        {"id": "part_abc", "index": 0, "type": "reasoning"},
+        {"id": "part_def", "index": 1, "type": "text"},
+    ]
+    assert canonicalize_ai_message(canonical) == canonical
+    assert message.response_metadata == {}
 
 
 def test_direct_thinking_blocks_are_preserved_once():

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import UTC, datetime
 
 from boxteam_plugin_sdk.lifecycle import run_cleanup_shielded
 from langchain_core.messages import HumanMessage
@@ -14,8 +13,9 @@ from app.agents.checkpoint_recovery import (
     pending_tool_checkpoint,
 )
 from app.agents.execution_checkpoint import (
+    AcceptedExecutionInput,
     checkpoint_accepted_execution_input,
-    persist_final_assistant_checkpoint,
+    finalize_assistant_checkpoint,
 )
 from app.agents.graph_binding import GraphBindingUnavailableError
 from app.agents.policy import parse_custom_tool_specs
@@ -25,7 +25,6 @@ from app.core.execution_admission_context import (
     reset_current_execution_admission,
     set_current_execution_admission,
 )
-from app.core.identifier import create_prefixed_id
 from app.core.job_context import (
     reset_active_tool_name,
     reset_current_agent_id,
@@ -317,13 +316,6 @@ class StepRunner:
             resolved_message_metadata.pop("boxteam_session_model", None)
         preferred_model = (ModelReferenceDTO.model_validate(preferred_model_value)
                            if preferred_model_value is not None else None)
-        read_input_message = getattr(
-            checkpointer,
-            "accepted_user_message" if isinstance(execution_binding, UserExecutionIdentity) else "accepted_internal_message",
-            None,
-        )
-        if not callable(read_input_message):
-            raise TypeError("v2 checkpoint saver 缺少已接受输入 reader")
         next_input_messages: list[HumanMessage] = []
         message_source = resolved_message_metadata.get("source")
         message_kind = resolved_message_metadata.get("kind")
@@ -373,11 +365,9 @@ class StepRunner:
         admission: ExecutionAdmission | None = None
         message_stream_writer: MessageStreamWriter | None = None
         message_stream_runtime: MessageStreamRuntime | None = None
-        input_checkpoint_task: asyncio.Task[bool] | None = None
-        admission_read_task: asyncio.Task[ExecutionAdmission] | None = None
-        input_read_task: asyncio.Task[HumanMessage] | None = None
+        input_checkpoint_task: asyncio.Task[AcceptedExecutionInput] | None = None
         stream_open_task: asyncio.Task[MessageStreamWriter] | None = None
-        assistant_write_task: asyncio.Task[bool] | None = None
+        assistant_finalize_task: asyncio.Task[None] | None = None
         runtime_acquire_task: (
             asyncio.Task[ThreadRuntimeLease[StepAgentRuntime]] | None
         ) = None
@@ -417,10 +407,8 @@ class StepRunner:
                 task
                 for task in (
                     input_checkpoint_task,
-                    admission_read_task,
-                    input_read_task,
                     stream_open_task,
-                    assistant_write_task,
+                    assistant_finalize_task,
                     runtime_acquire_task,
                     activation_freeze_task,
                 )
@@ -440,7 +428,10 @@ class StepRunner:
                 and runtime_acquire_task.exception() is None
             ):
                 runtime_lease = runtime_acquire_task.result()
-            if admission is None and (input_checkpoint_task is not None or input_read_task is not None):
+            if (input_checkpoint_task is not None and not input_checkpoint_task.cancelled()
+                    and input_checkpoint_task.exception() is None):
+                admission = input_checkpoint_task.result().admission
+            if admission is None and input_checkpoint_task is not None:
                 try:
                     admission = await asyncio.to_thread(
                         read_admission, session_id, thread_id=thread_id,
@@ -458,38 +449,16 @@ class StepRunner:
 
         settled.clear()
         try:
-            # 用户、notice 和 seed/reference 的冻结读取都归 active Job 的取消排空。
-            input_options = ({"intent": execution_binding}
-                             if isinstance(execution_binding, InternalExecutionIntent) else {})
-            input_read_task = asyncio.create_task(asyncio.to_thread(
-                read_input_message,
-                session_id, thread_id=thread_id, job_id=job_id, message_id=message_id,
-                checkpoint_ns=rollout_checkpoint_ns, **input_options,
+            # 输入读取与 checkpoint 消费共用一个受保护 worker；取消等待原写入结算。
+            input_checkpoint_task = asyncio.create_task(asyncio.to_thread(
+                checkpoint_accepted_execution_input,
+                checkpointer=checkpointer, session_id=session_id, thread_id=thread_id,
+                job_id=job_id, message_id=message_id, execution_binding=execution_binding,
+                checkpoint_ns=rollout_checkpoint_ns, write_checkpoint=resume_checkpoint_id is None,
             ))
-            next_input_messages = [await asyncio.shield(input_read_task)]
-            if resume_checkpoint_id is None:
-                input_checkpoint_task = asyncio.create_task(asyncio.to_thread(
-                    checkpoint_accepted_execution_input,
-                    checkpointer=checkpointer,
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    job_id=job_id,
-                    admission_idempotency_key=admission_idempotency_key,
-                    message=(None if isinstance(execution_binding, InternalExecutionIntent)
-                             and execution_binding.input_reference_json is not None else next_input_messages[0]),
-                    execution_intent=(
-                        execution_binding
-                        if isinstance(execution_binding, InternalExecutionIntent)
-                        else None
-                    ),
-                    checkpoint_ns=rollout_checkpoint_ns,
-                ))
-                await asyncio.shield(input_checkpoint_task)
-            admission_read_task = asyncio.create_task(asyncio.to_thread(
-                read_admission, session_id, thread_id=thread_id,
-                job_id=job_id, checkpoint_ns=rollout_checkpoint_ns,
-            ))
-            admission = await asyncio.shield(admission_read_task)
+            accepted_input = await asyncio.shield(input_checkpoint_task)
+            admission = accepted_input.admission
+            next_input_messages = [accepted_input.message]
             validate_admission(admission)
 
             if admission.execution_origin == "internal":
@@ -556,7 +525,6 @@ class StepRunner:
                 turn_scope.register_cleanup(release_turn_occupancy)
             message_delta_token = set_current_model_delta_sink(message_stream_runtime)
             final_text = ""
-            latest_model_content_blocks: tuple[dict[str, object], ...] = ()
             turn_token_usage_parts: list[ModelTokenUsagePayload] = []
             with self.ports.config_service.use_snapshot(config_snapshot):
                 tool_config = self.ports.config_service.get_agent_tool_config(resolved_agent_id)
@@ -695,10 +663,10 @@ class StepRunner:
                 ),
             )
             final_text = retry_result.final_text
-            latest_model_content_blocks = retry_result.latest_model_content_blocks
+            has_final_output = retry_result.has_final_output
             turn_token_usage_parts = list(retry_result.token_usage_parts)
 
-            if final_text:
+            if has_final_output:
                 SessionInterruptState.set(
                     session_id, thread_id=thread_id,
                     phase=None,
@@ -708,35 +676,17 @@ class StepRunner:
                 set_interruptible_phase("text")
                 set_active_tool_name(None)
             turn_token_usage = last_model_token_usage(turn_token_usage_parts)
-            assistant_message_id = create_prefixed_id("msg")
-            assistant_message_created_at = datetime.now(UTC)
+            final_message_id = retry_result.stream_result.final_message_id if has_final_output else None
             settled.clear()
-            assistant_write_task = asyncio.create_task(asyncio.to_thread(
-                persist_final_assistant_checkpoint,
-                checkpointer=checkpointer,
-                thread_id=thread_id,
-                turn_id=admission.turn_id,
-                content_blocks=latest_model_content_blocks,
-                final_text=final_text,
-                message_id=assistant_message_id,
-                message_created_at=assistant_message_created_at,
-                token_usage=turn_token_usage,
-                preserve_content_part_refs=True,
-                before_persist=(
-                    model_call_adapter.converge_final_message
-                    if final_text
-                    else None
-                ),
-            ))
-            persisted = await asyncio.shield(assistant_write_task)
-            if final_text and not persisted:
-                raise RuntimeError(
-                    "最终 assistant 消息未能写入 checkpoint: "
-                    f"session_id={session_id} job_id={job_id}"
-                )
-            await model_call_adapter.converge_final_checkpoint(
-                assistant_message_id if final_text else None
-            )
+            if has_final_output:
+                assistant_finalize_task = asyncio.create_task(asyncio.to_thread(
+                    finalize_assistant_checkpoint,
+                    checkpointer=checkpointer, thread_id=thread_id,
+                    message_id=final_message_id,
+                    on_finalize=model_call_adapter.converge_final_message,
+                ))
+                await asyncio.shield(assistant_finalize_task)
+            await model_call_adapter.converge_final_checkpoint(final_message_id)
 
             # provider delta hook 可能晚于 model.completed 到达；stream.completed
             # 是整轮消息流的最终原子边界，提交前必须再次收口 runtime 中仍在
@@ -785,8 +735,7 @@ class StepRunner:
                     session_id=session_id,
                     thread_id=thread_id,
                     job_id=job_id,
-                    turn_id=admission.turn_id if admission is not None else None,
-                    execution_id=admission.execution_id if admission is not None else None,
+                    admission=admission,
                     checkpoint_ns=rollout_checkpoint_ns,
                     logger=logger,
                 )
@@ -814,8 +763,7 @@ class StepRunner:
                     session_id=session_id,
                     thread_id=thread_id,
                     job_id=job_id,
-                    turn_id=admission.turn_id if admission is not None else None,
-                    execution_id=admission.execution_id if admission is not None else None,
+                    admission=admission,
                     checkpoint_ns=rollout_checkpoint_ns,
                     publish=event_publisher.publish,
                     logger=logger,

@@ -101,7 +101,7 @@ try {
   );
   const historyItem = history.data.items.find((item) => item.turn_id === turnId);
   const apiCancelled = historyItem?.status === "cancelled";
-  const nonFinalResponsePart = historyItem?.response_parts?.find(
+  const nonFinalResponsePart = historyItem?.response_items?.find(
     (part) => part.text === "我已经开始分析这个问题，但回答在这里被用户中断……",
   );
   const apiNonFinalText =

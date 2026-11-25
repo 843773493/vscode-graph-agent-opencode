@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import { createPortal } from "react-dom";
@@ -227,7 +228,7 @@ export default function MessageAttachments({
               <button
                 type="button"
                 className="message-attachment-error"
-                title={error}
+                title={failureSummary(error)}
                 onClick={reload}
               >
                 {t("chat.media.reload")}

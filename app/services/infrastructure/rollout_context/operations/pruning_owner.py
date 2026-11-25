@@ -45,7 +45,7 @@ class RolloutPruningOwner:
         retained = tuple(dict.fromkeys(retain_checkpoint_ids))
         with self._host.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
             connection = snapshot.connection
-            self._host._require_v2_runtime(connection)
+            self._host._require_current_rollout_format(connection)
             meta = connection.execute(
                 "SELECT active_branch_id, projection_epoch, last_message_sequence FROM database_meta WHERE singleton_id = 1"
             ).fetchone()
@@ -124,7 +124,7 @@ class RolloutPruningOwner:
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection,
         ):
-            self._host._require_v2_runtime(connection)
+            self._host._require_current_rollout_format(connection)
             transaction_id = create_uuid_hex()
             timestamp = _now()
             connection.execute("BEGIN IMMEDIATE")

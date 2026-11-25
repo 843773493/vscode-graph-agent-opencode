@@ -238,7 +238,7 @@ class ContextSourceActivationMixin:
                                        event_hash: str, payload_json: str) -> None:
         """发布 ready 前按状态索引精确核持久提交，不重投已完成 recipient。"""
         with self._storage._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
-            self._storage._require_v2_runtime(connection)
+            self._storage._require_current_rollout_format(connection)
             row = connection.execute("SELECT event_hash,facet_hashes_json FROM team_source_observations "
                                      "WHERE session_id=? AND thread_id=? AND ledger_revision=?",
                                      (session_id, thread_id, ledger_revision)).fetchone()

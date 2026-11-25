@@ -29,6 +29,7 @@ from app.domain.itemized.epoch.root_compilation import (
 )
 from app.domain.itemized.epoch.source_protocol import SOURCE_PROTOCOL
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.validation import _non_empty_string
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
@@ -290,6 +291,32 @@ def runtime_instruction_producers(
             update_binding=config_binding,
         ),
     )
+
+
+def freeze_initial_derived_sources(
+    *, agent_id: str, runtime_config: Mapping[str, object], config_revision: str,
+    provider_candidates: Sequence[tuple[str, str]],
+) -> tuple[ContextContribution, ...]:
+    """无来源 seal 时复用原配置 producer 和纯投影，不构建父 Agent 或消费 CSM。"""
+    from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+        ContextSourceSnapshot,
+        PendingContextSourceBatch,
+    )
+    from app.services.infrastructure.rollout_context.runtime.prefix_compiler import (
+        source_contributions,
+    )
+
+    prompt, identity = runtime_config["system_prompt"], runtime_config["runtime_identity_description"]
+    if not isinstance(prompt, str) or not isinstance(identity, str):
+        raise TypeError("派生初始配置缺少已解析的说明及运行时身份")
+    specs = runtime_instruction_producers(
+        agent_id=agent_id, content=prompt, config_revision=config_revision,
+        provider_candidates=provider_candidates, runtime_identity_description=identity,
+    )
+    return source_contributions(PendingContextSourceBatch(deltas=(), sources=tuple(
+        ContextSourceSnapshot(instruction_producer_descriptor(spec), spec.revision, spec.content, None, False)
+        for spec in specs
+    )))
 
 
 _KNOWN_PRODUCER_IDS: frozenset[str] = frozenset(

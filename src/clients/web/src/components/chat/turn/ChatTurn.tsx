@@ -2,7 +2,7 @@ import type { ProcessDetailSelection } from "../../../api/session/sessionTurnHis
 import { ChatItemOwnerContext } from "../itemContextMenu";
 import React from "react";
 import ContextNotice from "../ContextNotice";
-import { contextNoticeGroups } from "../../../state/timeline/responseParts";
+import { contextNoticeGroups } from "../../../state/timeline/responseItems";
 import { MessageSearchLocation } from "../messageSearchLocation";
 import type { TurnHistoryInclude } from "../../../api/session/sessionTurnHistory";
 import type { AttachmentRef } from "../../../types/backend";
@@ -61,7 +61,7 @@ function ChatTurn({
   return (
     <ChatItemOwnerContext.Provider value={conversation.threadId ? { sessionId: conversation.sessionId, threadId: conversation.threadId } : null}><article className="chat-turn" data-conversation-id={conversation.conversationId} data-turn-id={conversation.turnId} data-root-logical-item-ordinal={conversation.rootLogicalItemOrdinal}>
       <MessageSearchLocation turnId={conversation.turnId} />
-      {contextNoticeGroups(conversation.responseParts ?? [], "before_user_message")
+      {contextNoticeGroups(conversation.responseItems ?? [], "before_user_message")
         .map(group => <ContextNotice key={group.id} notices={group.notices} />)}
       <ChatTurnUserSection
         apiPort={apiPort}
@@ -108,22 +108,25 @@ function assistantMessagesMemoKey(conversation: ConversationView): string {
     : "0";
 }
 
-function responsePartsEqual(
-  left: ConversationView["responseParts"],
-  right: ConversationView["responseParts"],
+function responseItemsEqual(
+  left: ConversationView["responseItems"],
+  right: ConversationView["responseItems"],
 ): boolean {
   if (left === right) return true;
   if (!left || !right || left.length !== right.length) return false;
   return left.every((part, index) => {
     const other = right[index];
-    return part.part_id === other.part_id
+    return part.id === other.id
       && part.kind === other.kind
       && part.projection === other.projection
       && part.status === other.status
       && part.text === other.text
+      && part.content === other.content
       && part.carrier_type === other.carrier_type
       && part.tool_call_id === other.tool_call_id
       && part.tool_name === other.tool_name
+      && part.tool_execution === other.tool_execution
+      && part.tool_outcome === other.tool_outcome
       && part.arguments === other.arguments
       && part.result === other.result
       && part.truncated === other.truncated
@@ -189,12 +192,13 @@ export function areChatTurnPropsEqual(
     && left.sourceViewId === right.sourceViewId
     && left.sourceViewRevision === right.sourceViewRevision
     && left.activityOutline?.beforeCursor === right.activityOutline?.beforeCursor
+    && left.historyTruncated === right.historyTruncated
     && left.bodyEvicted === right.bodyEvicted
     && left.turnItemsView === right.turnItemsView
     && left.status === right.status
     && left.pending === right.pending
     && left.jobId === right.jobId
-    && responsePartsEqual(left.responseParts, right.responseParts)
+    && responseItemsEqual(left.responseItems, right.responseItems)
     && left.events.length === right.events.length
     && lastEventId(left) === lastEventId(right)
     && assistantMessagesMemoKey(left) === assistantMessagesMemoKey(right);

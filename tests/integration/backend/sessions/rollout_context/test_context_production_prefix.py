@@ -18,7 +18,6 @@ from app.agents.graph_binding import (
 from app.agents.providers.wire_finalize import finalize_provider_wire
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_prefixed_id
-from app.core.model_request_context import SummaryCandidateScope
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
@@ -45,9 +44,6 @@ from app.services.infrastructure.rollout_context.assembly.plans import (
 )
 from app.services.infrastructure.rollout_context.assembly.plans import (
     sealing as plan_sealing,
-)
-from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
-    ToolProtocolBoundaryConflict,
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner import context_owner
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_projection import (
@@ -102,7 +98,7 @@ def production_context(frozen_provider_activation, frozen_provider_wire, registr
 
     def prepare(
         key, *, supplier=None, target_format="chat_completions",
-        request_messages=(), summary_candidate=None, source_message_grouping="aggregate",
+        request_messages=(), source_message_grouping="aggregate",
     ):
         with (
             session_thread_owner_scope(
@@ -115,7 +111,7 @@ def production_context(frozen_provider_activation, frozen_provider_wire, registr
                 execution_id=accepted["initial_execution_id"],
                 plan_creation_idempotency_key="create:" + key,
                 seal_idempotency_key="seal:" + key,
-                request_messages=request_messages, summary_candidate=summary_candidate,
+                request_messages=request_messages,
                 source_message_grouping=source_message_grouping,
                 context_source_manager=manager,
                 tool_set_supplier=supplier or (lambda: selected),
@@ -417,20 +413,13 @@ def test_prepare_reuses_only_pure_predecessor_validation_within_one_attempt(
         ):
             assert any(f"FROM {table} WHERE" in sql for sql in statements), table
 
-    # summary 不成为常规前驱；随后新 prepare 必须对同一前驱重新完整校验。
-    items = saver._storage.storage.read_items(session, thread)
-    messages = tuple(project_summary_source(group) for group in summary_source_groups(items).values())
-    prepare(
-        "pure-validation-summary", request_messages=messages,
-        summary_candidate=SummaryCandidateScope(0, "initial", False, True, canonical_messages=messages),
-    )
+    # 下一次 Graph prepare 仍须重新完整校验；独立摘要不成为前驱另由派生请求测试证明。
     prepare("pure-validation-third")
-    assert [entry[1] for entry in registrations] == [0, 1, 0, 0, 1]
-    assert [entry[2].assembly_id for entry in registrations[2:]] == [second["assembly_id"]] * 3
-    assert [entry[3] for entry in registrations[2:]] == [(1, 1, 1, 1, 1), (1, 1, 1, 1, 1), (0, 0, 1, 1, 1)]
-    assert registrations[2][0] is not registrations[3][0]
-    assert registrations[3][0] is registrations[4][0]
-    assert registrations[0][0] is not registrations[3][0]
+    assert [entry[1] for entry in registrations] == [0, 1, 0, 1]
+    assert [entry[2].assembly_id for entry in registrations[2:]] == [second["assembly_id"]] * 2
+    assert [entry[3] for entry in registrations[2:]] == [(1, 1, 1, 1, 1), (0, 0, 1, 1, 1)]
+    assert registrations[2][0] is registrations[3][0]
+    assert registrations[0][0] is not registrations[2][0]
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         restored = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
         again = cold.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
@@ -954,11 +943,12 @@ def test_cold_assembly_rejects_independently_damaged_tool_snapshot(production_co
 
 
 @pytest.mark.parametrize("terminal_available", [False, True])
-def test_summary_seal_reconciles_original_tool_group(production_context, terminal_available):
-    """摘要只发送早期 user；seal 仍必须提交原始末轮结果，真实缺失时明确拒绝。"""
-    saver, session, thread, connection, _manager, prepare = production_context
-    root = saver._storage.storage.read_items(session, thread)[0]
-    original_user = project_summary_source((root,))
+def test_summary_prepare_requires_closed_frozen_tool_group(
+    production_context, frozen_summary_prepare, terminal_available,
+):
+    """冻结来源自身须闭合；派生请求不会补写父工具结果。"""
+    saver, session, thread, connection, _manager, _prepare = production_context
+    root = saver.read_canonical_items(session, thread)[0]
     assistant = AIMessage(
         content="", id="summary-tail-call", response_metadata={"model_call_id": "summary-tail-model"},
         tool_calls=[{"id": "summary-tail-tool", "name": "read_file", "args": {"path": "README.md"}}],
@@ -970,77 +960,73 @@ def test_summary_seal_reconciles_original_tool_group(production_context, termina
         session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
         execution_admission_scope(admission, langgraph_thread_id=thread),
     ):
-        saver.ensure_request_items(
-            session, thread, turn_id=root.turn_id, execution_id=execution_id, messages=(assistant,),
-        )
-    original_items = saver._storage.storage.read_items(session, thread)
-    scope = SummaryCandidateScope(
-        0, "initial", False, True,
-        canonical_messages=(original_user, assistant, result) if terminal_available else (original_user, assistant),
-    )
+        saver.ensure_request_items(session, thread, turn_id=root.turn_id, execution_id=execution_id,
+                                   messages=(assistant, result) if terminal_available else (assistant,))
+    items = saver.read_canonical_items(session, thread)
     if not terminal_available:
-        with pytest.raises(ToolProtocolBoundaryConflict, match="tool-protocol-boundary-conflict"):
-            prepare("summary-tail-missing", request_messages=(original_user,), summary_candidate=scope)
-        assert saver._storage.storage.read_items(session, thread) == original_items
+        with pytest.raises(ValueError, match="未闭合 tool calls"):
+            frozen_summary_prepare(saver, session, thread, key="open-group", items=items)
         assert connection.execute("SELECT assembly_id FROM context_assemblies").fetchall() == []
-        return
-    prepared = prepare("summary-tail-complete", request_messages=(original_user,), summary_candidate=scope)
-    snapshot = prepared["snapshot"]
-    assert snapshot.selection_policy == "summary_candidate"
-    result_item, = [item for item in saver._storage.storage.read_items(session, thread) if item.semantic_kind == "tool_result"]
-    assert result_item.payload["content"] == result.content
-    backing = [entry for entry in snapshot.selection if entry.ref.ref_type == "canonical_item"]
-    # 摘要只追溯实际候选的来源；尾组结算到 canonical 历史，不进入摘要 selection。
-    assert {entry.ref.ref_id for entry in backing} == {root.item_id}
-    assert all(not entry.included for entry in backing)
-    assert not any(isinstance(message, ToolMessage) for message in prepared["messages"])
-    assert not any(isinstance(message, AIMessage) and message.tool_calls for message in prepared["messages"])
-    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        assert cold.get_context_assembly(session, thread, assembly_id=snapshot.assembly_id) == snapshot
-        assert cold._storage.storage.read_items(session, thread, item_ids=(result_item.item_id,)) == [result_item]
+    else:
+        prepared = frozen_summary_prepare(saver, session, thread, key="closed-group", items=items)
+        snapshot = prepared["snapshot"]
+        assert snapshot.selection_policy == "derived_request"
+        backing = [entry for entry in snapshot.selection if entry.ref.ref_type == "canonical_item"]
+        assert {entry.ref.ref_id for entry in backing} == {item.item_id for item in items}
+        assert all(entry.included for entry in backing)
+        assert [message.tool_call_id for message in prepared["messages"] if isinstance(message, ToolMessage)] == ["summary-tail-tool"]
+        with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+            assert cold.get_context_assembly(session, thread, assembly_id=snapshot.assembly_id) == snapshot
+    assert saver.read_canonical_items(session, thread) == items
 
 
 @pytest.mark.parametrize("with_predecessor", [False, True])
-@pytest.mark.parametrize("minimal_system", [False, True])
 def test_summary_prepare_keeps_canonical_sources_without_applying_pending(
-    production_context, with_predecessor, minimal_system,
+    production_context, frozen_summary_prepare, with_predecessor,
 ):
     saver, session, thread, connection, manager, prepare = production_context
     previous = prepare("summary-base") if with_predecessor else None
     manager.observe("instruction:R01", "尚未确认的摘要指引", revision="instructions:2")
     pending = manager.prepare_pending()
-    items = saver._storage.storage.read_items(session, thread)
-    messages = tuple(project_summary_source(group) for group in summary_source_groups(items).values())
-    result = prepare(
-        "summary-candidate", request_messages=messages,
-        summary_candidate=SummaryCandidateScope(0, "initial", False, minimal_system, canonical_messages=messages),
-    )
+    items = saver.read_canonical_items(session, thread)
+    result = frozen_summary_prepare(saver, session, thread, key="summary-candidate", items=items)
     snapshot = saver.get_context_assembly(session, thread, assembly_id=result["assembly_id"])
-    assert snapshot.selection_policy == "summary_candidate"
+    assert snapshot.selection_policy == "derived_request"
+    assert snapshot.turn_id is None
     assert snapshot.seal_binding.previous_assembly_id is None
     assert snapshot.seal_binding.source_revisions == ()
     assert snapshot.seal_binding.prefix.consumed_transition is None
     backing = [entry for entry in snapshot.selection if entry.ref.ref_type == "canonical_item"]
     assert {entry.ref.ref_id for entry in backing} == {item.item_id for item in items}
-    assert all(not entry.included for entry in backing)
-    assert [message.content for message in result["messages"][1:]] == [message.content for message in messages]
-    expected_system = (
-        "Summarize the provided conversation. Return only a concise factual plain-text summary. Do not call tools."
-        if minimal_system else "尚未确认的摘要指引"
-    )
-    assert parse_root_section(result["messages"][0].content, tag="context_sources")["sources"][0]["body"] == expected_system
+    assert all(entry.included for entry in backing)
+    messages = tuple(project_summary_source(group) for group in summary_source_groups(items).values())
+    instruction = "Summarize the provided conversation. Return only a factual plain-text summary. Do not call tools."
+    instruction_indexes = [
+        index for index, message in enumerate(result["messages"])
+        if isinstance(message, HumanMessage) and message.content == instruction
+    ]
+    assert len(instruction_indexes) == 1
+    instruction_index, = instruction_indexes
+    assert instruction_index == len(result["messages"]) - 1
+    expected_sources = [(message.type, message.content) for message in messages]
+    actual_sources = [
+        (message.type, message.content)
+        for message in result["messages"][:instruction_index]
+    ]
+    assert actual_sources == expected_sources
+    assert result["messages"][instruction_index].type == "human"
     assert manager.prepare_pending() == pending
     assert connection.execute(
         "SELECT latest_visible_committed_revision FROM context_source_control_states"
     ).fetchone() == ("instructions:1" if with_predecessor else None,)
-    cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
-    restored = cold.get_context_assembly(session, thread, assembly_id=result["assembly_id"])
-    assert restored.to_dict() == snapshot.to_dict()
-    projected, tools, losses = cold.project_context_plan_to_provider(
-        session, thread, restored.as_sealed_plan(), target_format="chat_completions",
-        include_runtime_notices=True, include_summaries=True,
-    )
-    assert (projected, tools, losses) == (result["messages"], result["tools"], ())
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        restored = cold.get_context_assembly(session, thread, assembly_id=result["assembly_id"])
+        assert restored.to_dict() == snapshot.to_dict()
+        projected, tools, losses = cold.project_context_plan_to_provider(
+            session, thread, restored.as_sealed_plan(), target_format="chat_completions",
+            include_runtime_notices=True, include_summaries=True,
+        )
+        assert (projected, tools, losses) == (result["messages"], result["tools"], ())
     with saver._context_reader.open_snapshot(session, thread, "") as read_snapshot:
         latest = saver._storage.assemblies.latest_context_assembly(read_snapshot)
     assert (None if latest is None else latest.assembly_id) == (
@@ -1048,11 +1034,8 @@ def test_summary_prepare_keeps_canonical_sources_without_applying_pending(
     )
 
 
-@pytest.mark.parametrize("minimal_system", [False, True])
-def test_summary_prepare_rejects_damaged_predecessor_detail(
-    production_context, minimal_system,
-):
-    saver, session, thread, connection, manager, prepare = production_context
+def test_summary_prepare_does_not_read_unrelated_parent_detail(production_context, frozen_summary_prepare):
+    saver, session, thread, _connection, manager, prepare = production_context
     previous = prepare("summary-damaged-base")
     snapshot = saver.get_context_assembly(session, thread, assembly_id=previous["assembly_id"])
     source = next(entry for entry in snapshot.selection if entry.included and entry.ref.ref_type == "request_only")
@@ -1060,14 +1043,12 @@ def test_summary_prepare_rejects_damaged_predecessor_detail(
     assert path is not None
     path.write_bytes(b"{}")
     pending = manager.prepare_pending()
-    items = saver._storage.storage.read_items(session, thread)
-    messages = tuple(project_summary_source(group) for group in summary_source_groups(items).values())
-    with pytest.raises(DetailUnavailableError, match="typed v3"):
-        prepare(
-            "summary-damaged-candidate", request_messages=messages,
-            summary_candidate=SummaryCandidateScope(0, "initial", False, minimal_system, canonical_messages=messages),
-        )
-    assert connection.execute("SELECT assembly_id FROM context_assemblies").fetchall() == [(previous["assembly_id"],)]
+    items = saver.read_canonical_items(session, thread)
+    result = frozen_summary_prepare(saver, session, thread, key="summary-damaged-candidate", items=items)
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        assert cold.read_context_for_dispatch(result["dispatch_ref"])["snapshot"] == result["snapshot"]
+        with pytest.raises(DetailUnavailableError, match="typed v3"):
+            cold.read_context_for_dispatch(previous["dispatch_ref"])
     assert manager.prepare_pending() == pending
 
 

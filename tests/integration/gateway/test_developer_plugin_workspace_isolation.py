@@ -109,7 +109,7 @@ async def test_developer_plugins_isolate_resources_and_release_package_reference
             headers = {"X-BoxTeam-Workspace-Id": target}
             document = (await client.get(path, headers=headers)).raise_for_status().json()["data"]
             config = commentjson.loads(document["jsonc"])
-            config["plugins"]["runtime"]["entries"] = [{"package_id": PACKAGE, "package_version": VERSION,
+            config["settings"]["workspace"]["plugins"]["runtime"]["entries"] = [{"package_id": PACKAGE, "package_version": VERSION,
                 "plugin_id": plugin_id, "enabled": True} for plugin_id in plugin_ids]
             response = await client.put(path, headers=headers, json={"gateway_id": gateway, "workspace_id": target,
                 "source_key": "workspace_root_mutable_override", "jsonc": json.dumps(config),

@@ -47,7 +47,7 @@ def marker_instructions(integration_workspace_root_path, integration_workspace_c
         "# 上下文历史验收\n\nCONTEXT_MARKER_FROZEN_GUIDANCE：保留来源的完整原文。\n", encoding="utf-8")
     path = Path(integration_workspace_config_path)
     config = commentjson.loads(path.read_text(encoding="utf-8"))
-    config["agents"]["default"]["instructions"]["system_prompt"] = "CONTEXT_MARKER_SYSTEM：完整保留系统来源。"
+    config["settings"]["workspace"]["agents"]["default"]["instructions"]["system_prompt"] = "CONTEXT_MARKER_SYSTEM：完整保留系统来源。"
     path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 

@@ -16,5 +16,6 @@
 
 - 纯 LangChain 编解码只由注入 codec 完成；本目录只协调有界读取和派生 projection。
 - 所有 locator 必须来自已验证的 SQLite commit/catalog 边界。
+- 思考安全投影以 canonical `item_id` 唯一索引；完整消息与独立思考共用 codec 和写入 owner，不按消息级匿名来源合并，不用 Provider block 坐标代替 Item 身份。
 
 - `attachments.py` 统一投影 typed 附件引用及系统生成的附件块；通过注入的附件 owner 解析冻结映射，保留用户正文和 canonical bytes/hash。请求、历史和附件使用查询都消费该 owner，不在基础 storage 中重建投影。

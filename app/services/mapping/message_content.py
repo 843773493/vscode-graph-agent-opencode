@@ -262,22 +262,24 @@ def extract_message_content(message: BaseMessage) -> dict[str, object]:
     content_blocks: list[dict[str, object]] = []
     reasoning_id: str | None = None
     raw_part_refs = (message.response_metadata or {}).get("content_part_refs")
-    part_refs = raw_part_refs if isinstance(raw_part_refs, list) else []
+    # refs覆盖原流式来源；相邻carrier收敛后不一定与显示块一一对应。
+    # 只有保留一一对应形状时才恢复坐标，不能把思考来源挪给后面的正文。
+    part_refs = raw_part_refs if isinstance(raw_part_refs, list) and len(raw_part_refs) == len(content) else []
 
-    def part_ref(position: int) -> Mapping[object, object] | None:
+    def part_ref(position: int, block_type: object) -> Mapping[object, object] | None:
         if position >= len(part_refs) or not isinstance(part_refs[position], Mapping):
             return None
-        return part_refs[position]
+        ref = part_refs[position]
+        return ref if ref.get("type") in (None, block_type) else None
 
-    for part in content:
-        content_position = len(content_blocks)
+    for content_position, part in enumerate(content):
         if not isinstance(part, dict):
             text = str(part)
             text_parts.append(text)
             content_blocks.append({"type": "text", "text": text})
             continue
         part_type = part.get("type")
-        ref = part_ref(content_position)
+        ref = part_ref(content_position, part_type)
         if part_type in ("text", "output_text"):
             text = part.get("text", "")
             if isinstance(text, str):

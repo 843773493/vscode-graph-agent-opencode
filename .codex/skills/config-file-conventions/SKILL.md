@@ -34,7 +34,7 @@ setting_dev_local.jsonc   # 本地开发覆盖，仅供当前机器使用
 - `_dev`、`_test`、`_prod` 等后缀表达运行场景；先写场景，再写更窄的范围，例如 `setting_dev_local.jsonc`。
 - `_local` 表示个人或机器私有覆盖。仓库中的 `_local` 配置不得被 Git 跟踪；新增这类文件前检查 `.gitignore`，必要时加入精确规则（常见写法为 `*_local.jsonc`），并用 `git check-ignore -v <file>` 验证。不要擅自删除已经被跟踪的历史文件，应报告并按迁移任务处理。
 - 尽量不要为一次性差异创建新的后缀文件。能用现有覆盖层表达的差异就放入现有变体；确有新的稳定场景时，使用能说明用途的名词后缀。
-- 新代码默认读取 `{base}.jsonc`，其他文件只有在明确选择场景或本地覆盖时才加载。若加载器支持分层，推荐顺序为默认基线 → 场景覆盖 → 本地覆盖，但必须以项目实际合并语义为准。
+- 文件名表达用途，不决定运行时加载顺序。Gateway／Workspace 从明确入口沿 `extends` 单父链读取，默认父边由安装器写入；其他配置族按其实际加载契约处理。
 - `.jsonc` 是本约定的默认格式。若外部协议、工具或历史兼容要求固定使用其他格式，不要强行改格式；应在变更说明中记录例外。
 
 ## 参数结构与命名
@@ -121,7 +121,7 @@ gateway_local.jsonc       # Gateway 用户级机器私有覆盖，不纳入 Git
 workspace_inline.jsonc    # Workspace 发行包内置默认配置
 workspace.jsonc           # Workspace 用户级覆盖
 workspace_schema.jsonc    # Workspace 最终结构 schema
-workspace_dev.jsonc       # Workspace 源码开发完整配置模板
+workspace_dev.jsonc       # Workspace 源码开发节点模板，仅声明开发差异
 workspace_local.jsonc     # Workspace 用户级机器私有覆盖，不纳入 Git
 ```
 

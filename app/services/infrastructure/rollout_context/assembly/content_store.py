@@ -71,7 +71,7 @@ class _AssemblyContentStore(ExitStack):
             database_path = next(name for _, schema, name in self.connection.execute("PRAGMA database_list") if schema == "main")
             stream = self.enter_context(Path(database_path).with_name("rollout.jsonl").open("rb"))
             self._canonical_stream = stream
-        item = RolloutCanonicalReadMixin._read_v2_item_at(
+        item = RolloutCanonicalReadMixin._read_item_at(
             self.connection, stream, sequence=locator[0], offset=locator[1], length=locator[2],
             validated_commits=self._validated_commits,
             validated_scopes=self._validated_scopes,

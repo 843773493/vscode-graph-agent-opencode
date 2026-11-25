@@ -111,7 +111,7 @@ async def test_failed_preview_keeps_uri_through_execution_and_cold_history(
     frozen = saver.accepted_user_message(
         session_id, thread_id=accepted.thread_id,
         job_id=accepted.job_id, message_id=accepted.message_id,
-    )
+    )[1]
     assert json.dumps(private)[1:-1] not in frozen.model_dump_json()
     (resolved,) = frozen.response_metadata["attachments"]
     uri = resolved["file_id"]
@@ -163,7 +163,7 @@ async def test_failed_preview_keeps_uri_through_execution_and_cold_history(
     with workspace_context(container.workspace_id, container.workspace_root):
         cold_message = cold.accepted_user_message(
             session_id, thread_id=accepted.thread_id, job_id=accepted.job_id, message_id=accepted.message_id,
-        )
+        )[1]
         cold_items = cold.read_canonical_items(session_id, accepted.thread_id)
         cold_assembly = cold._storage.assemblies.get_context_assembly(
             session_id, accepted.thread_id, assembly_id=assembly_id,
@@ -190,7 +190,7 @@ async def test_failed_preview_keeps_uri_through_execution_and_cold_history(
         assert successor.thread_id == accepted.thread_id and successor.job_id != accepted.job_id
         assert saver.accepted_user_message(
             session_id, thread_id=accepted.thread_id, job_id=accepted.job_id, message_id=accepted.message_id,
-        ) == frozen
+        )[1] == frozen
         assert saver.read_canonical_items(session_id, accepted.thread_id)[:len(originals)] == originals
         assemblies = saver._storage.assemblies.list_context_assemblies(session_id, accepted.thread_id)
         assert {entry.model_call_id for entry in assemblies} == {first_call, second_call}

@@ -1,109 +1,116 @@
-"""为摘要候选编译独立请求；候选不参与主上下文 applied 状态。"""
+"""只消费冻结来源，为独立摘要请求编译 root、selection 与 provenance。"""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import replace
+from collections.abc import Mapping, Sequence
 
 from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    HumanMessage,
-    ToolMessage,
     message_to_dict,
 )
 
-from app.core.model_request_context import SummaryCandidateScope
-from app.domain.itemized.epoch.prefix_epoch import (
-    AppendedItemRef,
-    ProviderProfileItemFrame,
-    append_items,
-)
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.compaction import CanonicalTextRange, FrozenSummaryResult
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
-from app.domain.itemized.hashing import contribution_content_hash
-from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
+from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    ContextSourceDescriptor,
+    ContextSourceSnapshot,
+    PendingContextSourceBatch,
+)
+from app.services.infrastructure.rollout_context.runtime.derived_compiler import (
+    closed_source_boundaries,
+    compile_derived_request,
+)
+from app.services.infrastructure.rollout_context.runtime.prefix_compiler import (
+    source_contributions,
+)
 from app.services.mapping.itemized.canonical_langchain import (
-    project_summary_source,
-    summary_retry_variants,
-    summary_source_groups,
-    validate_summary_source,
+    project_derived_summary_message,
 )
 
 
-def compile_summary_candidate(
-    plan: ContextRequestPlan,
-    preparation: ContextSealPreparation,
-    messages: Sequence[BaseMessage],
-    items: Sequence[CanonicalItemRecord],
-    scope: SummaryCandidateScope,
-) -> tuple[tuple[ContextRef, ...], tuple[ContextContribution, ...], ContextSealPreparation, dict[str, object]]:
-    """固定候选顺序与角色，原消息身份进入可冷读的 detail provenance。"""
-    by_message = summary_source_groups(items)
-    retry_groups = []
-    for message_id in scope.retry_source_message_ids:
-        if message_id not in by_message:
-            raise ValueError(f"summary-source-mismatch: 摘要重试中段缺少 canonical 来源: {message_id}")
-        retry_groups.append(by_message[message_id])
-    retry_ids = [item.item_id for group in retry_groups for item in group] if scope.candidate_ordinal > 0 else []
-    variants = summary_retry_variants([project_summary_source(group) for group in retry_groups]) if retry_ids else {}
-    refs = list(plan.refs)
-    sources = list(plan.contributions)
-    frames: list[ProviderProfileItemFrame] = []
-    bodies: dict[str, object] = {}
-    pending_calls: set[str] = set()
-    profile = preparation.prefix_state.provider_profile
-    for ordinal, message in enumerate(messages):
-        if not isinstance(message, (HumanMessage, AIMessage, ToolMessage)):
-            raise TypeError("摘要候选只接受已声明的 user/assistant/tool 消息")
-        group = by_message.get(message.id, []) if message.id is not None else []
-        validate_summary_source(message, group, retry_variants=variants.get(message.id, ()))
-        if isinstance(message, AIMessage):
-            for call in message.tool_calls:
-                call_id = call["id"]
-                if call_id in pending_calls:
-                    raise ValueError("摘要候选重复声明 tool call")
-                pending_calls.add(call_id)
-        elif isinstance(message, ToolMessage):
-            if message.tool_call_id not in pending_calls:
-                raise ValueError("摘要候选 tool result 缺少前序声明")
-            pending_calls.remove(message.tool_call_id)
-        ref_id = f"summary-message:{plan.plan_id}:{ordinal}"
-        body = {"message": message_to_dict(message), "item_ids": [item.item_id for item in group],
-                "retry_source_item_ids": retry_ids}
-        source = ContextContribution(
-            contribution_id=ref_id, source_kind="summary_candidate",
-            source_revision=f"{scope.candidate_ordinal}:{scope.retry_phase}",
-            contribution_kind="model_message", body=body,
-            content_hash=contribution_content_hash("model_message", body),
-            source_binding=SourceBinding(source_ref=ref_id),
-            selection_role="backing_only",
-        )
-        refs.append(ContextRef.request_only_ref(
-            ref_id, session_id=plan.session_id, thread_id=plan.thread_id,
-            plan_id=plan.plan_id, source_revision=source.source_revision,
-            semantic_kind="extension", payload_kind="structured_content",
-            content_length=source.content_length, content_hash_value=source.content_hash,
-            source_ref=ref_id,
-        ))
-        sources.append(replace(source, body=None))
-        bodies[ref_id] = body
-        frames.append(ProviderProfileItemFrame(
-            len(preparation.prefix_state.frames) + len(frames) + 1, profile,
-            {"human": "user", "ai": "assistant", "tool": "tool"}[message.type],
-            "structured_content", body,
-            (AppendedItemRef("source_item", ref_id, ref_id, source.source_revision, "untracked"),),
-        ))
-    if pending_calls:
-        raise ValueError("摘要候选包含未闭合 tool calls")
-    state = append_items(
-        preparation.prefix_state, frames, desired_provider_profile=profile,
-        desired_tool_compatibility_key=preparation.prefix_state.tool_compatibility_key,
+def compaction_history_items(items: Sequence[CanonicalItemRecord]) -> tuple[CanonicalItemRecord, ...]:
+    """最新用户输入以前的闭合历史；冻结范围和保留输入预算共用此切点。"""
+    last_input = max((index for index, item in enumerate(items) if item.semantic_kind == "user_input"), default=len(items))
+    historical = items[:last_input]
+    ends = closed_source_boundaries(historical)
+    return tuple(historical[:ends[-1]]) if ends else ()
+
+
+def _instruction_batch(instruction: str) -> PendingContextSourceBatch:
+    return PendingContextSourceBatch(deltas=(), sources=(ContextSourceSnapshot(
+        descriptor=ContextSourceDescriptor(
+            source_id=f"compaction-instruction:{sha256_jcs(instruction)}", source_kind="summarization", name="摘要规则",
+            description="本次冻结的独立摘要指令", internal_locator="runtime:compaction-instruction",
+            root_placement="tail_only",
+        ), revision=sha256_jcs(instruction), content=instruction, applied_revision=None, tracked=False,
+    ),))
+
+
+def summary_request_contributions(
+    *, instruction: str, derived_summaries: Sequence[FrozenSummaryResult] = (),
+) -> tuple[ContextContribution, ...]:
+    """声明冻结正文；实际 source ordinal 由原 request owner 登记。"""
+    return (*source_contributions(_instruction_batch(instruction)),
+            *(summary_result_contribution(result) for result in derived_summaries))
+
+
+def summary_result_contribution(result: FrozenSummaryResult) -> ContextContribution:
+    """普通派生替换与摘要合并共用同一冻结结果引用和正文投影。"""
+    ref_id = f"summary-result:{sha256_jcs(result.result_ref.to_dict())}"
+    body = {"message": message_to_dict(project_derived_summary_message(result.text, message_id=ref_id)),
+            "result_ref": result.result_ref.to_dict(), **result.detail()}
+    return ContextContribution(
+        contribution_id=ref_id, source_kind="derived_request", source_revision=sha256_jcs(body),
+        contribution_kind="model_message", body=body, content_hash=contribution_content_hash("model_message", body),
+        source_binding=SourceBinding(source_ref=ref_id, summary_result_ref=result.result_ref),
+        selection_role="backing_only",
     )
-    return (
-        tuple(refs), tuple(sources),
-        replace(preparation, prefix_state=state, previous_assembly_id=None, source_revisions=(), transition=None),
-        bodies,
+
+
+
+def compile_summary_request(
+    *, session_id: str, thread_id: str, plan_id: str, provider_profile: str, instruction: str,
+    items: Sequence[CanonicalItemRecord], source_refs: Sequence[ContextRef],
+    contributions: Sequence[ContextContribution], derived_summaries: Sequence[FrozenSummaryResult] = (),
+    source_snapshot: ContextAssemblySnapshot | None = None,
+    source_contributions: Sequence[ContextContribution] = (), source_content: Mapping[str, object] | None = None,
+    tool_set: ToolSetSnapshot | None = None,
+    text_range: CanonicalTextRange | None = None,
+) -> tuple[ContextRequestPlan, ContextSealPreparation, dict[str, object]]:
+    """压缩只声明块／合并来源，root、tools与指令后缀交共同派生编译器。"""
+    if not isinstance(instruction, str) or not instruction.strip():
+        raise ValueError("摘要请求需要明确的冻结指令")
+    if not items and not derived_summaries:
+        raise ValueError("摘要请求没有冻结来源")
+    if items and (not (boundaries := closed_source_boundaries(items)) or boundaries[-1] != len(items)):
+        raise ValueError("摘要来源包含未闭合 tool calls")
+    coverage = {}
+    for result in derived_summaries:
+        if (result.result_ref.session_id, result.result_ref.thread_id) != (session_id, thread_id):
+            raise ValueError("summary-source-mismatch: 合并结果不属于本 Thread")
+        for ref in (*result.coverage, *result.output_refs):
+            identity = selection_ref_identity(ref)
+            if identity in coverage and coverage[identity] != ref:
+                raise ValueError("summary-source-mismatch: 合并来源版本冲突")
+            coverage[identity] = ref
+    if any(selection_ref_identity(ref) in coverage for ref in source_refs):
+        raise ValueError("summary-source-mismatch: 新原文与前序摘要 coverage 重复")
+    instruction_source, = (source for source in contributions if source.contribution_kind == "prompt")
+    return compile_derived_request(
+        session_id=session_id, thread_id=thread_id, plan_id=plan_id, provider_profile=provider_profile,
+        items=items, source_refs=source_refs, instruction=instruction_source,
+        tool_set=tool_set if tool_set is not None else ToolSetSnapshot(selection_revision=sha256_jcs({"tools": []}), tools=()),
+        source_snapshot=source_snapshot, source_contributions=source_contributions, source_content=source_content,
+        input_messages=tuple(source for source in contributions if source.contribution_kind == "model_message"),
+        backing_refs=tuple(coverage.values()),
+        text_range=text_range,
     )
+
+
+__all__ = ["compile_summary_request", "summary_request_contributions"]

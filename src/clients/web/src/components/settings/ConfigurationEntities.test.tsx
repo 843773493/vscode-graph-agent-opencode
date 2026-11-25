@@ -8,6 +8,7 @@ import { t } from '../../../../shared/core/i18n/index.js';
 import { ConfigSourceDocumentDTO, ConfigSourcePreflightDTO } from '../../types/protocol_generated/boxteam/workspace/v2/public.js';
 import { ConfigurationEntities, localProfilePath } from './ConfigurationEntities';
 import { ConfigurationProxyFields } from './ConfigurationProxyFields.js';
+import { installGatewayFetch, restoreGatewayTestEnvironment, TEST_GATEWAY_WORKSPACE_REQUEST_TARGET } from '../../tests/fixtures/session/gatewayEnvironment.js';
 
 function sourceDocument(): ConfigSourceDocumentDTO {
   const document = ConfigSourceDocumentDTO.fromPartial({ gateway_id: 'gateway-a', workspace_id: 'workspace-a', source_key: 'workspace', layer: 'workspace', writable: true,
@@ -25,6 +26,11 @@ function sourceDocument(): ConfigSourceDocumentDTO {
       { source_key: 'runtime', layer: 'runtime_override', precedence: 3, writable: false, payload: { agents: { coder: { name: '更高层显示名' } } } },
     ] });
   document.source_inherited = document.layers[0].payload;
+  document.source_inherited_origins = [
+    { path: '/agents/coder', source_key: 'user', shadowed_sources: [] },
+    { path: '/llm/providers/team', source_key: 'user', shadowed_sources: [] },
+    { path: '/llm/providers/other', source_key: 'user', shadowed_sources: [] },
+  ];
   for (const layer of document.layers) layer.payload = { config_version: 4, settings: { workspace: layer.payload } };
   return document;
 }
@@ -35,6 +41,52 @@ const providerDraft = (options: Record<string, unknown> = {}, modelOptions: Reco
 } } } }, { provider: profile(options), main: profile(modelOptions) });
 const callbacks = { onSelect() {}, onEdit() {}, onSetDefaultAgent() {}, onOpenSource() {}, isNodeReady: () => true, async onPrepareOptions() {} };
 const flush = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
+test('来源、节点准备及实际目录请求的失败均显示安全短摘要，不改原原因', async () => {
+  const reason = `配置读取失败 Authorization: Bearer model-form-secret\n${'完整诊断'.repeat(100)}`;
+  const original = new Error(reason);
+  const document = sourceDocument();
+  let view: ReturnType<typeof create> | undefined;
+  const check = () => {
+    const alerts = view!.root.findAllByProps({ role: 'alert' });
+    expect(alerts.length).toBeGreaterThan(0);
+    for (const alert of alerts) {
+      const visible = alert.children.join('');
+      expect(visible).toContain('配置读取失败');
+      expect(Array.from(visible).length).toBeLessThanOrEqual(160);
+      expect(visible).not.toContain('model-form-secret');
+      expect(visible).not.toContain('\n');
+    }
+  };
+  try {
+    await act(async () => {
+      view = create(<ConfigurationEntities kind="providers" selectedId="team" selectedModelId="main"
+        draft={providerDraft()} document={document} {...callbacks} error={reason} />);
+      await flush();
+    });
+    check();
+    await act(async () => {
+      view!.update(<ConfigurationEntities kind="providers" selectedId="team" selectedModelId="main"
+        draft={providerDraft()} document={document} {...callbacks} isNodeReady={() => false}
+        onPrepareOptions={async () => { throw original; }} />);
+      await flush();
+    });
+    check();
+    installGatewayFetch(({ path }) => path.startsWith('/api/v1/config/llm/')
+      ? Response.json({ detail: { message: reason } }, { status: 503, headers: { 'X-Request-ID': 'req_catalog_failure' } }) : undefined);
+    await act(async () => {
+      view!.update(<ConfigurationEntities kind="providers" selectedId="team" selectedModelId="main"
+        draft={providerDraft({ custom_llm_provider: 'openai' })} document={document} {...callbacks}
+        catalogTarget={TEST_GATEWAY_WORKSPACE_REQUEST_TARGET} catalogSignal={new AbortController().signal} />);
+      await flush(); await flush();
+    });
+    check();
+    expect(original.message).toBe(reason);
+  } finally {
+    act(() => view?.unmount());
+    restoreGatewayTestEnvironment();
+  }
+});
 
 test('节点归属未准备时禁用参数但允许修正引用，同文本版本的来源更新仍重新准备', async () => {
   const document = sourceDocument(), prepare = mock(async () => {});
@@ -66,6 +118,19 @@ test('移除本层 Agent 覆盖立即显示下层正文，不能继续展示旧�
   expect(html).toContain('value="下层显示名"'); expect(html).toContain('下层提示词');
   expect(html).toContain('value="backup-a"'); expect(html).toContain('value="backup-b"');
   expect(html).toContain('继承自 user'); expect(html).not.toContain('保存前的本层覆盖'); expect(html).not.toContain('更高层显示名');
+});
+
+test('继承实体跳转使用后端父链归属，不按来源列表顺序猜测', () => {
+  const document = sourceDocument();
+  document.layers = [];
+  document.source_inherited_origins = document.source_inherited_origins.map(origin =>
+    origin.path === '/agents/coder' ? { ...origin, source_key: 'inline' } : origin);
+  const open = mock();
+  const view = create(<ConfigurationEntities kind="agents" selectedId="coder" draft={draft({ agents: {} })}
+    document={document} {...callbacks} onOpenSource={open} />);
+  view.root.findAllByType('button').find(button => button.children.includes(t('configuration.entities.editOwningSource')))!.props.onClick();
+  expect(open.mock.calls).toEqual([['inline']]);
+  view.unmount();
 });
 
 test('局部 Agent 覆盖保留下层提示，fallback 保存完整模型引用', () => {

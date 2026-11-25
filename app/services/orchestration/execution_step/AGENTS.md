@@ -21,3 +21,5 @@
 - 用户点名工具的重试要求由 runner 从静态策略启用的 `tools.custom` 中排除持久禁用项后确定；此集合不含 MCP，不等于最终执行工具全集。runtime 只装配依赖，不查询这条重试规则。
 - 新状态只属于当前 run；事件契约直接 import event_stream/contracts。
 - 所有必需 v2 端口缺失必须明确报错，不允许关闭持久化的降级模式。
+- 当前输入与 admission 由原 checkpoint 消费 worker 一次读取并随写入回执交回；runner 直接消费同一份结果。恢复原 checkpoint 只读取输入，取消仍排空该 worker，不按后续查询替换当前输入。
+- 失败与取消收尾沿用 runner 原 admission，不在镜像终态前重复查询；消息流仍由原 terminal owner 完整核对 admission 与已提交结果。

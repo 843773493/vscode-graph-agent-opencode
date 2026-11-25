@@ -55,7 +55,7 @@ async def test_discovered_definition_survives_real_compaction_cold_read_and_fork
 
     def reply(payload):
         nonlocal searched, compressed
-        if case.model_dispatches[-1].snapshot.selection_policy == "summary_candidate":
+        if case.model_dispatches[-1].snapshot.selection_policy == "derived_request":
             return _reply("摘要：此前已发现调试工具并完成历史记录。")
         if phase == "discover" and not searched:
             searched = True

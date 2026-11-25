@@ -22,3 +22,5 @@ source overlay 与 CSM 控制状态、reconciliation ledger、resource activatio
 - 每个 owner 事实源唯一；发现双 owner 必须合并，不得并存。
 - 详情GC保留sealed/terminal assembly及activation引用；引用检查和tombstone沿原线程写锁提交，物理删除在锁外执行并可重试。显式None namespace用于后台遍历该线程库的全部过期详情namespace，不物化空rollout。
 
+
+- `runtime_execution.py` 的已接受用户／内部消息 reader 同次返回真实 admission 和 HumanMessage；消费者直接核原绑定，不先重复查询 admission。用户正文与准入沿 execution owner 的同一只读快照取得，内部 notice／seed／derived 仍保留冻结 preimage 和引用边界校验。

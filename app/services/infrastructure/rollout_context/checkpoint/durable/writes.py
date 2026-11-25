@@ -119,7 +119,7 @@ class RolloutWriteMixin:
         strict_text(checkpoint_id, field="pending_writes.checkpoint_id")
 
         def read(connection: sqlite3.Connection) -> list[PendingWrite]:
-            self._storage._require_v2_runtime(connection)
+            self._storage._require_current_rollout_format(connection)
             channel_filter = ""
             parameters: tuple[object, ...] = (checkpoint_id,)
             if requested_channels is not None:

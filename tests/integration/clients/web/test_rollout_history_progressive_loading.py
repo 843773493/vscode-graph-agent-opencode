@@ -573,7 +573,7 @@ async def test_rollout_history_around_loading_real_web_chain(
                 json={"direction": "tail"},
             )
             assert internal_page.status_code == 200, internal_page.text
-            internal_parts = internal_page.json()["data"]["internal_executions"][0]["response_parts"]
+            internal_parts = internal_page.json()["data"]["internal_executions"][0]["response_items"]
             assert len([part for part in internal_parts if part["kind"] == "reasoning"]) == 3, internal_page.text
 
         environment = os.environ.copy()

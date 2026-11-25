@@ -1,4 +1,4 @@
-import { mergeCanonicalParts } from "../timeline/responseParts";
+import { mergeCanonicalItem, mergeCanonicalItems } from "../timeline/responseItems";
 import type {
   SessionTurnBootstrap,
   TurnDetail,
@@ -7,7 +7,7 @@ import type {
   TurnJobSummary,
   TurnPage,
   TurnSummary,
-  TurnResponsePart,
+  TurnResponseItem,
 } from "../../types/backend";
 import { mergeInternalExecutions, type InternalExecutionRecord } from "./internalExecutionHistory";
 import { compactTurnBodies } from "./turnBodyRetention";
@@ -201,7 +201,7 @@ function mergeTurnItems(
 
   // 初始投影会用 tool_summary 生成没有 raw/content 的占位事件；详情请求
   // 返回真实 tool_call/tool_result 后，不能把两套事件同时交给 React。
-  // 否则同一个 part_id 会在 过程活动组 中出现两次，并触发重复 key。
+  // 否则同一个 id 会在 过程活动组 中出现两次，并触发重复 key。
   const isSummaryPlaceholder = (item: TurnDetailItem): boolean =>
     item.event_id.includes(":tool_summary:");
   const isMaterialized = (item: TurnDetailItem): boolean =>
@@ -244,65 +244,17 @@ function mergeTurnItems(
   return [...merged.values()];
 }
 
-function partIdOf(part: unknown): string | null {
-  const value = (part as { part_id?: unknown } | null)?.part_id;
-  return typeof value === "string" && value ? value : null;
-}
-
-/**
- * 定点工具详情请求只返回被请求的工具部件（携带 tool_call_ids）。若把它的
- * response_parts 直接整体替换，会把同一 Turn 的 reasoning、final 等部件一并
- * 丢掉。这里按稳定 part_id 把定点结果补丁进现有部件：保持现有部件的后端顺序，
- * 命中的部件用定点结果覆盖（拿到 arguments/result），未命中的新部件追加到末尾。
- *
- * 只有当 incoming 的每个 part_id 都已在 current 中时才使用补丁语义（说明这是
- * 对既有部件的定点补载，而不是引入新部件的整轮详情）。否则仍按契约整体替换，
- * 避免把旧 summary 与新 detail 拼成第三套历史。
- */
-export function patchResponseParts(
-  current: readonly unknown[] | undefined | null,
-  incoming: readonly unknown[],
-): unknown[] {
-  const currentList = Array.isArray(current) ? current : [];
-  if (currentList.length === 0) return [...incoming];
-  const incomingById = new Map<string, unknown>();
-  let hasUnidentifiedPart = false;
-  for (const part of incoming) {
-    const id = partIdOf(part);
-    if (id) incomingById.set(id, part);
-    else hasUnidentifiedPart = true;
-  }
-  const currentIds = new Set<string>();
-  for (const part of currentList) {
-    const id = partIdOf(part);
-    if (id) currentIds.add(id);
-  }
-  const isPointPatch = !hasUnidentifiedPart
-    && incomingById.size > 0
-    && [...incomingById.keys()].every((id) => currentIds.has(id));
-  if (!isPointPatch) {
-    return [...incoming];
-  }
-  const patched: unknown[] = currentList.map((part) => {
-    const id = partIdOf(part);
-    if (!id) return part;
-    return incomingById.get(id) ?? part;
-  });
-  return patched;
-}
-
-function mergeResponseParts(
-  current: unknown,
-  incoming: unknown,
-): unknown[] | undefined {
-  if (Array.isArray(incoming)) {
-    // 同 revision 的 include 投影可能只请求 metadata，空部件不撤销已加载正文。
-    if (incoming.length === 0 && Array.isArray(current)) return [...current];
-    // 历史响应已经携带 canonical item identity 和后端顺序。前端不得再按
-    // message 坐标重排、按正文去重，或把旧 summary 与新 detail 拼成第三套历史。
-    return Array.isArray(current) ? patchResponseParts(current, incoming) : [...incoming];
-  }
-  return Array.isArray(current) ? [...current] : undefined;
+/** 同绑定保留已读正文；定点补读保持原顺序，完整新集合沿后端顺序替换。 */
+function mergeResponseItems(
+  current: readonly TurnResponseItem[] | undefined,
+  incoming: readonly TurnResponseItem[] | undefined,
+): TurnResponseItem[] | undefined {
+  if (!incoming?.length) return current ? [...current] : incoming ? [] : undefined;
+  const previous = new Map(current?.map(part => [part.id, part]));
+  const merged = incoming.map(part => mergeCanonicalItem(previous.get(part.id), part));
+  if (!current || !incoming.every(part => previous.has(part.id))) return merged;
+  const updated = new Map(merged.map(part => [part.id, part]));
+  return current.map(part => updated.get(part.id) ?? part);
 }
 
 function mergeSameRevisionTurn(
@@ -322,20 +274,20 @@ function mergeSameRevisionTurn(
     "assistant_text",
     "thinking_blocks",
     "tool_summary",
-    "response_parts",
+    "response_items",
     "final_response",
   ];
   for (const field of projectionFields) {
-    if (field === "response_parts") {
-      const mergedResponseParts = mergeResponseParts(
-        currentRecord[field],
-        incomingRecord[field],
+    if (field === "response_items") {
+      const mergedResponseItems = mergeResponseItems(
+        current.response_items,
+        incoming.response_items,
       );
-      if (mergedResponseParts !== undefined) {
+      if (mergedResponseItems !== undefined) {
         // 元数据页只覆盖本页来源；同一 binding 的常规详情不能撤销已补读的页外标记。
-        const ids = new Set(mergedResponseParts.map(partIdOf));
-        merged[field] = [...mergedResponseParts, ...(current.response_parts ?? [])
-          .filter(part => part.kind === "context_notice" && !ids.has(part.part_id))];
+        const ids = new Set(mergedResponseItems.map(part => part.id));
+        merged[field] = [...mergedResponseItems, ...(current.response_items ?? [])
+          .filter(part => part.kind === "context_notice" && !ids.has(part.id))];
       }
       continue;
     }
@@ -871,29 +823,29 @@ export function applyContextNoticePage(
     throw new Error("上下文元数据续页不属于当前历史视图");
   }
   const batches = page.context_notices ?? [];
-  const merge = (parts: TurnResponsePart[], additions: TurnResponsePart[] = []) => {
+  const merge = (parts: TurnResponseItem[], additions: TurnResponseItem[] = []) => {
     if (!additions.length && !parts.some(part => part.context_cursor === consumedCursor)) return parts;
-    const result = new Map(parts.map(part => [part.part_id, part.context_cursor === consumedCursor
+    const result = new Map(parts.map(part => [part.id, part.context_cursor === consumedCursor
       ? { ...part, context_cursor: null } : part]));
-    for (const part of additions) result.set(part.part_id, part);
+    for (const part of additions) result.set(part.id, part);
     return [...result.values()];
   };
   const turnsById = { ...timeline.turnsById };
   const summaryTurnsById = { ...timeline.summaryTurnsById };
   for (const [id, turn] of Object.entries(turnsById)) {
-    const additions = batches.find(batch => batch.owner_kind === "turn" && batch.owner_id === id)?.parts;
-    const parts = merge(turn.response_parts ?? [], additions);
-    if (parts !== turn.response_parts) turnsById[id] = { ...turn, response_parts: parts };
+    const additions = batches.find(batch => batch.owner_kind === "turn" && batch.owner_id === id)?.items;
+    const parts = merge(turn.response_items ?? [], additions);
+    if (parts !== turn.response_items) turnsById[id] = { ...turn, response_items: parts };
     const summary = summaryTurnsById[id];
     if (summary) {
-      const parts = merge(summary.response_parts ?? [], additions);
-      if (parts !== summary.response_parts) summaryTurnsById[id] = { ...summary, response_parts: parts };
+      const parts = merge(summary.response_items ?? [], additions);
+      if (parts !== summary.response_items) summaryTurnsById[id] = { ...summary, response_items: parts };
     }
   }
   return { ...timeline, turnsById, summaryTurnsById,
     internalExecutions: timeline.internalExecutions.map(execution => ({ ...execution,
-      response_parts: merge(execution.response_parts ?? [], batches.find(batch =>
-        batch.owner_kind === "execution" && batch.owner_id === execution.execution_id)?.parts),
+      response_items: merge(execution.response_items ?? [], batches.find(batch =>
+        batch.owner_kind === "execution" && batch.owner_id === execution.execution_id)?.items),
     })) };
 }
 
@@ -987,7 +939,7 @@ export function applyHistoryFragment(timeline: SessionTurnTimeline, page: import
   const items = page.items.flatMap(detail => {
     const current = timeline.turnsById[detail.turn_id];
     if (!current || current.source_view_id !== page.source_view_id || current.source_view_revision !== page.source_view_revision) return [];
-    return [{ ...current, response_parts: mergeCanonicalParts(current.response_parts ?? [], detail.response_parts ?? []),
+    return [{ ...current, response_items: mergeCanonicalItems(current.response_items ?? [], detail.response_items ?? []),
       ...(outline ? {activityOutline: {beforeCursor: page.before_cursor ?? null}} : {}) }];
   });
   const executions = (page.internal_executions ?? []).filter(execution => timeline.internalExecutions.some(current =>

@@ -176,6 +176,14 @@ def frozen_provider_activation() -> Callable[..., dict[str, object]]:
 
 
 @pytest.fixture
+def frozen_summary_prepare(frozen_provider_wire, frozen_provider_activation):
+    """独立摘要只经冻结来源和自己的 internal execution 准备。"""
+    from tests.support.model_stream.frozen_provider import create_frozen_summary_prepare
+
+    return create_frozen_summary_prepare(frozen_provider_wire, frozen_provider_activation)
+
+
+@pytest.fixture
 def frozen_provider_prepare(frozen_provider_wire, frozen_provider_activation):
     """历史 fixture 经真实封存和 ModelCall 登记激活当前 admission，不发送 Provider 请求。"""
     from tests.support.model_stream.frozen_provider import (

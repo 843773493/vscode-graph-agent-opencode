@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { t } from "../../../../shared/core/i18n/index.js";
 import { useToolApprovals } from "../../hooks/sessionToolApprovals/useToolApprovals";
 import type { ToolApproval } from "../../types/backend";
@@ -14,7 +15,7 @@ export default function ToolApprovalPanel({ apiPort, workspaceId, sessionId, thr
   }
   if (!state.error && batches.size === 0) return null;
   return <aside aria-label={t("chat.approval.panel")} className="chat-tool-approvals">
-    {state.error ? <div role="alert">{state.error}<button type="button" onClick={() => void state.retry()}>{t("chat.approval.reload")}</button></div> : null}
+    {state.error ? <div role="alert"><span className="failure-summary">{failureSummary(state.error)}</span><button type="button" onClick={() => void state.retry()}>{t("chat.approval.reload")}</button></div> : null}
     {[...batches].map(([key, approvals]) => {
       const accepted = state.receipt?.checkpoint_id === approvals[0].checkpoint_id && state.receipt.status !== "rejected";
       return <div key={key}>

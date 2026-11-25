@@ -175,8 +175,10 @@ def _at_path(payload: object, path: tuple[str, ...]) -> object:
     return payload
 
 
-def redact_source_text(text: str) -> str:
-    redacted = redact_source_payload(parse_source_text(text))
+def redact_source_text(text: str, *, payload: dict[str, object] | None = None) -> str:
+    """调用方可复用同次稳定读取的解析值；仍逐 token 处理被重复键覆盖的秘密。"""
+    original = parse_source_text(text) if payload is None else payload
+    redacted = redact_source_payload(original)
     replacements = []
     for path, token in _strings(parser.parse(text)):
         value = json.loads(str(token))

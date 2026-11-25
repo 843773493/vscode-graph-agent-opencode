@@ -35,14 +35,14 @@ export interface GatewaySettingsContentProps extends GatewayBackendRuntimeAction
 
 /** 只渲染原设置 Pane 的管理内容；分类、范围与工具栏均由原生 Workbench 持有。 */
 export default function GatewaySettingsContent(props: GatewaySettingsContentProps) {
-  const [health, setHealth] = useState<{ data?: GatewayHealth; error?: string }>();
+  const [health, setHealth] = useState<{ data?: GatewayHealth; error?: unknown }>();
   useEffect(() => {
     if (props.page !== 'connections') return;
     let active = true;
     void getGatewayHealth(0).then(data => {
       if (data.gateway_id !== props.entryGatewayId) throw new Error(t('gateway.connections.ownerMismatch'));
       if (active) setHealth({ data });
-    }).catch(cause => { if (active) setHealth({ error: errorSummary(cause) }); });
+    }).catch(cause => { if (active) setHealth({ error: cause }); });
     return () => { active = false; };
   }, [props.page, props.entryGatewayId, props.revision]);
   return <div className="gateway-settings-content" data-management-page={props.page}>
@@ -54,7 +54,7 @@ export default function GatewaySettingsContent(props: GatewaySettingsContentProp
           <span>{health?.error ? t('gateway.control.errorStatus') : health?.data ? t('gateway.control.available') : t('gateway.control.loadingPage')}</span>
           <small>{props.entryGatewayId}</small>
         </div>
-        {health?.error ? <p role="alert">{health.error}</p> : null}
+        {health?.error ? <p className="failure-summary" role="alert">{errorSummary(health.error)}</p> : null}
         <Connections apiPort={0} gatewayId={props.entryGatewayId} workspaces={props.workspaces} revision={props.revision}
           onAddRemoteGatewayConnection={props.onAddRemoteGatewayConnection} onRefresh={props.onRefresh} onRemoteGatewayReconnected={props.onRemoteGatewayReconnected}
           onOpenConfiguration={props.onOpenConfiguration} onOpenLogs={props.onOpenLogs} />

@@ -611,7 +611,7 @@ export type TurnDetailBatchRequest = Omit<WorkspaceProtocol.TurnDetailBatchReque
   tool_call_ids?: string[] | null;
   include?: string[];
 };
-export type TurnDetail = Omit<WorkspaceProtocol.TurnDetailDTO, "created_at" | "updated_at" | "completed_at" | "source_message_ids" | "merged_job_ids" | "user_messages" | "assistant_text" | "thinking_blocks" | "tool_summary" | "response_parts" | "items" | "activity_stats"> & {
+export type TurnDetail = Omit<WorkspaceProtocol.TurnDetailDTO, "created_at" | "updated_at" | "completed_at" | "source_message_ids" | "merged_job_ids" | "user_messages" | "assistant_text" | "thinking_blocks" | "tool_summary" | "response_items" | "items" | "activity_stats"> & {
   created_at: string;
   updated_at: string;
   completed_at?: string | null;
@@ -621,7 +621,7 @@ export type TurnDetail = Omit<WorkspaceProtocol.TurnDetailDTO, "created_at" | "u
   assistant_text?: string[];
   thinking_blocks?: TurnThinkingBlock[];
   tool_summary?: TurnToolSummary[];
-  response_parts?: TurnResponsePart[];
+  response_items?: TurnResponseItem[];
   items?: TraceEventDTO[];
   activity_stats?: TurnActivityStats;
 };
@@ -638,14 +638,14 @@ export type TurnHistoryPage = Omit<
   items: TurnDetail[];
   summaries?: TurnSummary[];
   internal_executions?: InternalExecutionHistory[];
-  context_notices?: Array<Omit<WorkspaceProtocol.ContextNoticeBatchDTO, "parts"> & { parts: TurnResponsePart[] }>;
+  context_notices?: Array<Omit<WorkspaceProtocol.ContextNoticeBatchDTO, "items"> & { items: TurnResponseItem[] }>;
   next_cursor?: string | null;
   before_cursor?: string | null;
   after_cursor?: string | null;
 };
 export type InternalDisplayProvenance = WorkspaceProtocol.InternalDisplayProvenanceDTO;
-export type InternalExecutionDisplayPart = Omit<
-  WorkspaceProtocol.InternalExecutionDisplayPartDTO,
+export type InternalExecutionDisplayItem = Omit<
+  WorkspaceProtocol.InternalExecutionDisplayItemDTO,
   "kind" | "created_at" | "provenance"
 > & {
   kind: "generated_session_result";
@@ -665,16 +665,16 @@ export type InternalExecutionHistory = Omit<
   WorkspaceProtocol.InternalExecutionHistoryDTO,
   | "created_at"
   | "updated_at"
-  | "display_parts"
-  | "response_parts"
+  | "display_items"
+  | "response_items"
   | "status"
   | "logical_item_ordinal"
 > & {
   created_at: string;
   updated_at: string;
   status: InternalExecutionStatus;
-  display_parts: InternalExecutionDisplayPart[];
-  response_parts: TurnResponsePart[];
+  display_items: InternalExecutionDisplayItem[];
+  response_items: TurnResponseItem[];
 };
 export type TurnJobSummary = WorkspaceProtocol.TurnJobSummaryDTO;
 export type TurnPage = Omit<WorkspaceProtocol.TurnPageDTO, "items" | "next_cursor"> & {
@@ -683,7 +683,7 @@ export type TurnPage = Omit<WorkspaceProtocol.TurnPageDTO, "items" | "next_curso
 };
 export type TurnSummary = Omit<
   WorkspaceProtocol.TurnSummaryDTO,
-  "created_at" | "updated_at" | "completed_at" | "source_message_ids" | "merged_job_ids" | "user_messages" | "thinking_blocks" | "tool_summary" | "response_parts" | "activity_stats"
+  "created_at" | "updated_at" | "completed_at" | "source_message_ids" | "merged_job_ids" | "user_messages" | "thinking_blocks" | "tool_summary" | "response_items" | "activity_stats"
 > & {
   created_at: string;
   updated_at: string;
@@ -693,13 +693,16 @@ export type TurnSummary = Omit<
   user_messages?: TurnUserMessageSummary[];
   thinking_blocks?: TurnThinkingBlock[];
   tool_summary?: TurnToolSummary[];
-  response_parts?: TurnResponsePart[];
+  response_items?: TurnResponseItem[];
   activity_stats?: TurnActivityStats;
 };
 export type TurnResponseSource = WorkspaceProtocol.TurnResponseSourceDTO;
-export type TurnResponsePart = Omit<WorkspaceProtocol.TurnResponsePartDTO, "kind" | "projection" | "status" | "source" | "carrier_type" | "tool_call_id" | "tool_name" | "arguments" | "result" | "context_cursor"> & {
+export type TurnResponseItem = Omit<WorkspaceProtocol.TurnResponseItemDTO, "kind" | "projection" | "status" | "source" | "carrier_type" | "tool_call_id" | "tool_name" | "arguments" | "result" | "context_cursor" | "tool_execution" | "tool_outcome" | "content"> & {
+  content?: WorkspaceProtocol.TurnResponseItemDTO["content"] | null;
+  tool_execution?: WorkspaceProtocol.ToolExecutionSummaryDTO | null;
+  tool_outcome?: "success" | "failure" | "cancelled" | "unknown" | null;
   context_cursor?: string | null;
-  kind: "text" | "reasoning" | "reasoning_summary" | "reasoning_encrypted" | "compaction_summary" | "tool_call" | "tool_result" | "final_text" | "context_notice";
+  kind: "text" | "content" | "reasoning" | "reasoning_summary" | "reasoning_encrypted" | "compaction_summary" | "tool_call" | "tool_result" | "final_text" | "context_notice";
   projection: "summary" | "detail" | "streaming";
   status?: "pending" | "running" | "completed" | "failed" | "cancelled";
   source: TurnResponseSource;

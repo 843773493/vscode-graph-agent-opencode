@@ -72,7 +72,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         config_path=Path(integration_workspace_config_path), schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
     configuration = commentjson.loads(config_path.read_text(encoding="utf-8"))
     clear_test_provider_api_keys(configuration)
-    configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{plugin_gateway_port}"
+    configuration["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{plugin_gateway_port}"
     config_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     package_path = context.artifacts_dir / "ui-plugin-package.zip"
     version_start_count = context.artifacts_dir / "failed-version-start-count.txt"
@@ -209,7 +209,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
                 source_path = "/api/gateway/config/sources/gateway_mutable_override"
                 document = client.get(source_path).raise_for_status().json()["data"]
                 source = commentjson.loads(document["jsonc"])
-                source.setdefault("plugins", {})["sources"] = {"entries": [{
+                source["settings"]["gateway"].setdefault("plugins", {})["sources"] = {"entries": [{
                     "source_id": "proof", "protocol_version": 1, "base_url": plugin_source["base_url"], "enabled": True,
                 }]}
                 saved = client.put(source_path, json={

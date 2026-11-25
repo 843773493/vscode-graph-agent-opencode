@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, cast
 
@@ -20,6 +21,8 @@ from app.services.infrastructure.config.snapshot import ConfigSnapshot
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigPendingCandidateRecord,
+    prepare_config_for_persistence,
+    restore_environment_secret_references,
 )
 from configs.inheritance.values import thaw
 from configs.network import ExplicitProxy, NetworkSettings
@@ -287,6 +290,22 @@ class ConfigPublicMixin:
 
     async def resolve_llm_model(self, model: ModelReferenceDTO) -> dict[str, Any]:
         resolved = self.get_llm_model(model)
+        credentials = await self.prepare_llm_credentials([resolved])
+        with self.use_llm_credentials(credentials):
+            return self._llm_resolution.expand_model(resolved)
+
+    def freeze_model_recipe(self, reference: ModelReferenceDTO) -> dict[str, object]:
+        """冻结已选模型的解析选项；凭据保留引用，沿原配置 owner 序列化。"""
+        resolved = self._llm_resolution.resolve_model_reference(
+            self._require_snapshot().graph, reference, expand_credentials=False,
+        )
+        return prepare_config_for_persistence(thaw(resolved))
+
+    async def prepare_model_recipe(self, recipe: Mapping[str, object]) -> dict[str, Any]:
+        """执行只展开首次冻结的模型，不重新查询热更新后的默认配置。"""
+        resolved = cast(
+            dict[str, Any], restore_environment_secret_references(dict(recipe)),
+        )
         credentials = await self.prepare_llm_credentials([resolved])
         with self.use_llm_credentials(credentials):
             return self._llm_resolution.expand_model(resolved)

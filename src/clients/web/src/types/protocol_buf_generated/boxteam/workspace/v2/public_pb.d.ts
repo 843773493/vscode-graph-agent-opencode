@@ -807,6 +807,13 @@ export declare type ConfigSourceDocumentDTO = Message<"boxteam.workspace.v2.Conf
    * @generated from field: repeated boxteam.common.v1.ConfigNodeInspectionDTO nodes = 25;
    */
   nodes: ConfigNodeInspectionDTO[];
+
+  /**
+   * 选定来源实际父节点中的实体定义归属；不根据文件层级重算。
+   *
+   * @generated from field: repeated boxteam.workspace.v2.ConfigSourceOriginDTO source_inherited_origins = 26;
+   */
+  sourceInheritedOrigins: ConfigSourceOriginDTO[];
 };
 
 /**
@@ -7369,6 +7376,16 @@ export declare type SessionCompactResultDTO = Message<"boxteam.workspace.v2.Sess
    * @generated from field: optional google.protobuf.Timestamp compacted_at = 12;
    */
   compactedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string thread_id = 13;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: optional string task_id = 14;
+   */
+  taskId?: string | undefined;
 };
 
 /**
@@ -12356,7 +12373,7 @@ export declare const TraceEventDTOSchema: GenMessage<TraceEventDTO>;
  */
 export declare type TurnActivityStatsDTO = Message<"boxteam.workspace.v2.TurnActivityStatsDTO"> & {
   /**
-   * 历史值取 Turn projection.created_at 到 updated_at 的整数毫秒差；已有投影的起止时刻必须合法、带时区且不倒退；无统计投影时为空。
+   * 由历史 owner 按 Turn acceptance 到 terminal 计算整数毫秒；进行中或无统计投影时为空。不使用消息投影时间或累计工具耗时，生命周期时刻必须合法、带时区且不倒退。
    *
    * @generated from field: optional int64 duration_ms = 1;
    */
@@ -12777,9 +12794,9 @@ export declare type TurnDetailDTO = Message<"boxteam.workspace.v2.TurnDetailDTO"
   toolSummary: TurnToolSummaryDTO[];
 
   /**
-   * @generated from field: repeated boxteam.workspace.v2.TurnResponsePartDTO response_parts = 19;
+   * @generated from field: repeated boxteam.workspace.v2.TurnResponseItemDTO response_items = 30;
    */
-  responseParts: TurnResponsePartDTO[];
+  responseItems: TurnResponseItemDTO[];
 
   /**
    * @generated from field: optional string final_response = 20;
@@ -13362,9 +13379,9 @@ export declare type ContextNoticeBatchDTO = Message<"boxteam.workspace.v2.Contex
   ownerKind: string;
 
   /**
-   * @generated from field: repeated boxteam.workspace.v2.TurnResponsePartDTO parts = 3;
+   * @generated from field: repeated boxteam.workspace.v2.TurnResponseItemDTO items = 4;
    */
-  parts: TurnResponsePartDTO[];
+  items: TurnResponseItemDTO[];
 };
 
 /**
@@ -13498,14 +13515,14 @@ export declare type InternalExecutionHistoryDTO = Message<"boxteam.workspace.v2.
   createdAt?: Timestamp | undefined;
 
   /**
-   * @generated from field: repeated boxteam.workspace.v2.InternalExecutionDisplayPartDTO display_parts = 5;
+   * @generated from field: repeated boxteam.workspace.v2.InternalExecutionDisplayItemDTO display_items = 13;
    */
-  displayParts: InternalExecutionDisplayPartDTO[];
+  displayItems: InternalExecutionDisplayItemDTO[];
 
   /**
-   * @generated from field: repeated boxteam.workspace.v2.TurnResponsePartDTO response_parts = 6;
+   * @generated from field: repeated boxteam.workspace.v2.TurnResponseItemDTO response_items = 14;
    */
-  responseParts: TurnResponsePartDTO[];
+  responseItems: TurnResponseItemDTO[];
 
   /**
    * 持久 execution/admission 的历史 Session scope；fork 保留原值，可不同于请求目标，仅由目标本地冻结 namespace binding 校验，不用于重新寻址来源。
@@ -13548,9 +13565,9 @@ export declare type InternalExecutionHistoryDTO = Message<"boxteam.workspace.v2.
 export declare const InternalExecutionHistoryDTOSchema: GenMessage<InternalExecutionHistoryDTO>;
 
 /**
- * @generated from message boxteam.workspace.v2.InternalExecutionDisplayPartDTO
+ * @generated from message boxteam.workspace.v2.InternalExecutionDisplayItemDTO
  */
-export declare type InternalExecutionDisplayPartDTO = Message<"boxteam.workspace.v2.InternalExecutionDisplayPartDTO"> & {
+export declare type InternalExecutionDisplayItemDTO = Message<"boxteam.workspace.v2.InternalExecutionDisplayItemDTO"> & {
   /**
    * @generated from field: string kind = 1;
    */
@@ -13588,10 +13605,10 @@ export declare type InternalExecutionDisplayPartDTO = Message<"boxteam.workspace
 };
 
 /**
- * Describes the message boxteam.workspace.v2.InternalExecutionDisplayPartDTO.
- * Use `create(InternalExecutionDisplayPartDTOSchema)` to create a new message.
+ * Describes the message boxteam.workspace.v2.InternalExecutionDisplayItemDTO.
+ * Use `create(InternalExecutionDisplayItemDTOSchema)` to create a new message.
  */
-export declare const InternalExecutionDisplayPartDTOSchema: GenMessage<InternalExecutionDisplayPartDTO>;
+export declare const InternalExecutionDisplayItemDTOSchema: GenMessage<InternalExecutionDisplayItemDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.InternalDisplayProvenanceDTO
@@ -13718,15 +13735,83 @@ export declare type TurnProjectionCorruptedErrorDTO = Message<"boxteam.workspace
 export declare const TurnProjectionCorruptedErrorDTOSchema: GenMessage<TurnProjectionCorruptedErrorDTO>;
 
 /**
- * @generated from message boxteam.workspace.v2.TurnResponsePartDTO
+ * 单个真实 attempt 的安全摘要，不包含工具参数、结果或原始事件。
+ *
+ * @generated from message boxteam.workspace.v2.ToolExecutionSummaryDTO
  */
-export declare type TurnResponsePartDTO = Message<"boxteam.workspace.v2.TurnResponsePartDTO"> & {
+export declare type ToolExecutionSummaryDTO = Message<"boxteam.workspace.v2.ToolExecutionSummaryDTO"> & {
   /**
-   * 历史部件由 canonical item_id 与 part_ordinal 生成唯一引用；streaming 为临时部件 ID，不代表 canonical item 身份。
-   *
-   * @generated from field: string part_id = 1;
+   * @generated from field: string session_id = 1;
    */
-  partId: string;
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: string turn_stream_id = 3;
+   */
+  turnStreamId: string;
+
+  /**
+   * @generated from field: string tool_invocation_id = 4;
+   */
+  toolInvocationId: string;
+
+  /**
+   * @generated from field: string tool_attempt_id = 5;
+   */
+  toolAttemptId: string;
+
+  /**
+   * @generated from field: string tool_execution_id = 6;
+   */
+  toolExecutionId: string;
+
+  /**
+   * @generated from field: int64 started_seq = 7;
+   */
+  startedSeq: bigint;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp started_at = 8;
+   */
+  startedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp execution_completed_at = 9;
+   */
+  executionCompletedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string status = 10;
+   */
+  status: string;
+
+  /**
+   * @generated from field: optional string outcome = 11;
+   */
+  outcome?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ToolExecutionSummaryDTO.
+ * Use `create(ToolExecutionSummaryDTOSchema)` to create a new message.
+ */
+export declare const ToolExecutionSummaryDTOSchema: GenMessage<ToolExecutionSummaryDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TurnResponseItemDTO
+ */
+export declare type TurnResponseItemDTO = Message<"boxteam.workspace.v2.TurnResponseItemDTO"> & {
+  /**
+   * 已提交内容等于 source.item_id；未提交和上下文标记沿原来源使用临时／标记 ID。
+   *
+   * @generated from field: string id = 31;
+   */
+  id: string;
 
   /**
    * @generated from field: string kind = 2;
@@ -13761,7 +13846,7 @@ export declare type TurnResponsePartDTO = Message<"boxteam.workspace.v2.TurnResp
   carrierType?: string | undefined;
 
   /**
-   * 保留 canonical payload 中合法的工具调用 ID 表示，可为 Provider 原始 ID 或已有 ModelCall 限定 ID；不等同于历史工具 Trace/摘要的聚合引用，也不等同于 part_id。
+   * 保留 canonical payload 中合法的工具调用 ID 表示，可为 Provider 原始 ID 或已有 ModelCall 限定 ID；不等同于历史工具 Trace/摘要的聚合引用，也不等同于 Item ID。
    *
    * @generated from field: optional string tool_call_id = 8;
    */
@@ -13870,13 +13955,58 @@ export declare type TurnResponsePartDTO = Message<"boxteam.workspace.v2.TurnResp
    * @generated from field: optional string context_cursor = 28;
    */
   contextCursor?: string | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ToolExecutionSummaryDTO tool_execution = 29;
+   */
+  toolExecution?: ToolExecutionSummaryDTO | undefined;
+
+  /**
+   * 原回执的结果 marker；与声明完成和执行起止分开，缺失不表示成功。
+   *
+   * @generated from field: optional string tool_outcome = 30;
+   */
+  toolOutcome?: string | undefined;
+
+  /**
+   * 单个非文本输出块的按需正文；摘要只交付 carrier_type，不携带媒体数据。
+   *
+   * @generated from field: optional google.protobuf.Struct content = 32;
+   */
+  content?: JsonObject | undefined;
 };
 
 /**
- * Describes the message boxteam.workspace.v2.TurnResponsePartDTO.
- * Use `create(TurnResponsePartDTOSchema)` to create a new message.
+ * Describes the message boxteam.workspace.v2.TurnResponseItemDTO.
+ * Use `create(TurnResponseItemDTOSchema)` to create a new message.
  */
-export declare const TurnResponsePartDTOSchema: GenMessage<TurnResponsePartDTO>;
+export declare const TurnResponseItemDTOSchema: GenMessage<TurnResponseItemDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TurnMessageGroupSourceDTO
+ */
+export declare type TurnMessageGroupSourceDTO = Message<"boxteam.workspace.v2.TurnMessageGroupSourceDTO"> & {
+  /**
+   * @generated from field: string message_group_id = 1;
+   */
+  messageGroupId: string;
+
+  /**
+   * @generated from field: int32 ordinal = 2;
+   */
+  ordinal: number;
+
+  /**
+   * @generated from field: int32 size = 3;
+   */
+  size: number;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TurnMessageGroupSourceDTO.
+ * Use `create(TurnMessageGroupSourceDTOSchema)` to create a new message.
+ */
+export declare const TurnMessageGroupSourceDTOSchema: GenMessage<TurnMessageGroupSourceDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.TurnResponseSourceDTO
@@ -13923,11 +14053,6 @@ export declare type TurnResponseSourceDTO = Message<"boxteam.workspace.v2.TurnRe
   itemSequence?: bigint | undefined;
 
   /**
-   * @generated from field: optional int64 part_ordinal = 9;
-   */
-  partOrdinal?: bigint | undefined;
-
-  /**
    * 历史 activity 沿 canonical item 创建时刻；final 沿 final_item_created_at；standalone internal 沿原 item 创建时刻。streaming 可缺省。
    *
    * @generated from field: optional google.protobuf.Timestamp created_at = 10;
@@ -13957,11 +14082,6 @@ export declare type TurnResponseSourceDTO = Message<"boxteam.workspace.v2.TurnRe
   activityGroupItemId?: string | undefined;
 
   /**
-   * @generated from field: optional int64 activity_group_part_ordinal = 15;
-   */
-  activityGroupPartOrdinal?: bigint | undefined;
-
-  /**
    * @generated from field: optional string turn_id = 16;
    */
   turnId?: string | undefined;
@@ -13975,6 +14095,13 @@ export declare type TurnResponseSourceDTO = Message<"boxteam.workspace.v2.TurnRe
    * @generated from field: optional string process_segment_item_id = 18;
    */
   processSegmentItemId?: string | undefined;
+
+  /**
+   * 原消息的全部语义成员位置；size不是工具总数，也不是活动组大小。
+   *
+   * @generated from field: optional boxteam.workspace.v2.TurnMessageGroupSourceDTO message_group = 19;
+   */
+  messageGroup?: TurnMessageGroupSourceDTO | undefined;
 };
 
 /**
@@ -14111,9 +14238,9 @@ export declare type TurnSummaryDTO = Message<"boxteam.workspace.v2.TurnSummaryDT
   toolSummary: TurnToolSummaryDTO[];
 
   /**
-   * @generated from field: repeated boxteam.workspace.v2.TurnResponsePartDTO response_parts = 24;
+   * @generated from field: repeated boxteam.workspace.v2.TurnResponseItemDTO response_items = 31;
    */
-  responseParts: TurnResponsePartDTO[];
+  responseItems: TurnResponseItemDTO[];
 
   /**
    * @generated from field: optional boxteam.workspace.v2.TurnActivityStatsDTO activity_stats = 25;
@@ -17243,13 +17370,13 @@ export declare type LLMRequestLogSummaryDTO = Message<"boxteam.workspace.v2.LLMR
 export declare const LLMRequestLogSummaryDTOSchema: GenMessage<LLMRequestLogSummaryDTO>;
 
 /**
- * 卡片操作只在用户接受后读取；稳定 Item 引用不冻结正文版本。
+ * 卡片操作只在用户接受后读取；execution_output 精确绑定完整执行的最终结果。
  *
  * @generated from message boxteam.workspace.v2.ContextContentReferenceDTO
  */
 export declare type ContextContentReferenceDTO = Message<"boxteam.workspace.v2.ContextContentReferenceDTO"> & {
   /**
-   * item 或 sealed_contribution；引用分支由运行时业务模型校验。
+   * item、sealed_contribution 或 execution_output；引用分支由运行时业务模型校验。
    *
    * @generated from field: string kind = 1;
    */
@@ -17281,6 +17408,16 @@ export declare type ContextContentReferenceDTO = Message<"boxteam.workspace.v2.C
    * @generated from field: optional string contribution_id = 6;
    */
   contributionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string execution_id = 7;
+   */
+  executionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string content_hash = 8;
+   */
+  contentHash?: string | undefined;
 };
 
 /**

@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from app.agents.instruction_producers import build_toolset_policy_keys
 from app.agents.policy import (
     DEFAULT_TOOL_GROUP,
+    ToolCapabilityPolicy,
     ToolMetadata,
     ToolPolicyResolver,
     validate_tool_dependencies,
 )
 from app.core.shielded_cleanup import run_sync_shielded
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.schemas.internal_v2.tool import (
     ToolDTO,
     ToolSelectionPatchRequest,
@@ -43,6 +46,37 @@ class AgentToolSettingsService:
         self._config_service = config_service
         self._test_supported_tools = set(test_supported_tools)
         self._lock = asyncio.Lock()
+
+    def derived_tools(self, agent_id: str, tool_ids: tuple[str, ...]) -> tuple[dict[str, ToolCapabilityPolicy], ToolSetSnapshot]:
+        """派生无 Graph 工具只从原目录解析；执行前重新读取策略和用户撤销。"""
+        unsupported = set(tool_ids) - {"ls", "read_file", "glob", "grep"}
+        if unsupported:
+            raise ValueError(f"derived-tool-context-unsupported: {', '.join(sorted(unsupported))}")
+        snapshot, definitions = self._tool_catalog.list_tool_definitions(agent_id)
+        with self._config_service.use_snapshot(snapshot):
+            agent_id = self._config_service.validate_agent_id(agent_id)
+            resolver = self._config_service.get_tool_policy_resolver(agent_id)
+            selection = self._selection_store.snapshot(agent_id)
+            by_id = {definition["id"]: definition for definition in definitions}
+            result = {}
+            for tool_id in tool_ids:
+                definition = by_id.get(tool_id)
+                if definition is None or definition.get("origin", "builtin") != "builtin":
+                    raise ValueError(f"derived-tool-context-unsupported: 原内置目录不存在 {tool_id!r}")
+                result[tool_id] = resolver.resolve(
+                    ToolMetadata(tool_id, "builtin", definition.get("kind", DEFAULT_TOOL_GROUP.kind),
+                                 definition.get("group_id", DEFAULT_TOOL_GROUP.group_id)),
+                    execution_override=selection.execution_overrides.get(tool_id),
+                    model_visibility_override=selection.model_visibility_overrides.get(tool_id),
+                )
+            visible = [by_id[name] for name in sorted(result) if result[name].model_visible]
+            return result, ToolSetSnapshot(
+                selection_revision=selection.revision,
+                tools=tuple({"type": "function", "function": {
+                    "name": definition["name"], "description": definition["description"], "parameters": definition["parameters"],
+                }} for definition in visible),
+                policy_keys=build_toolset_policy_keys([definition["name"] for definition in visible]),
+            )
 
     async def list(self, agent_id: str | None = None) -> list[ToolDTO]:
         async with self._lock:

@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 from unittest.mock import AsyncMock
 
 import httpx
@@ -15,7 +14,7 @@ import pytest
 from boxteam_plugin_sdk.http import get_request_id
 from fastapi import FastAPI
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
-from langgraph.checkpoint.base import Checkpoint, CheckpointTuple, empty_checkpoint
+from langgraph.checkpoint.base import empty_checkpoint
 
 from app.agents.graph_binding import (
     DEEP_AGENT_CAPABILITY_PROFILE,
@@ -37,15 +36,15 @@ from app.api.sessions import router as sessions_router
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.job_event_bus import JobEventBus
+from app.core.path_utils import SessionCatalogComponents
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import bind_workspace_id
+from app.domain.background_work import BackgroundTaskHandle, BackgroundTaskStep
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.runtime.context_compaction import (
-    AgentSummarizationCompactor,
-    ContextCompactionCheck,
-)
+from app.runtime.context_compaction import AgentSummarizationCompactor
 from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugConfigurationUpdateRequest,
@@ -53,9 +52,11 @@ from app.schemas.internal_v2.node_debug import (
 )
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.job.service import JobService, JobState
+from app.services.business.message_service import MessageService
 from app.services.business.persistent_tasks.goal import GoalProgressSample
 from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -71,15 +72,26 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
+from app.services.infrastructure.rollout_context.activation.body import (
+    ResourceActivationBodyStore,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from app.services.orchestration.background_work.compaction import CompactionTaskHandler
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
 from app.services.orchestration.persistent_tasks.goal import sample_goal_progress
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
+from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from tests.harness.python.run_context import TestRunContext
 from tests.support.node_debug_dependencies import (
     node_debug_binding_snapshot,
@@ -103,7 +115,6 @@ class _RecordingCheckpointAdapter:
         self.workspace = workspace
         self.snapshot: ManualCompactionSnapshot | None = None
         self.load_calls = 0
-        self.save_calls = 0
 
     async def load_snapshot(self, owner: MutationIntentOwner) -> ManualCompactionSnapshot:
         assert self.workspace.resolver.main_thread_id(owner.session_id) == owner.thread_id
@@ -112,39 +123,23 @@ class _RecordingCheckpointAdapter:
         self.snapshot = ManualCompactionSnapshot(
             owner=owner,
             raw_messages=list(messages),
-            summarization_event=None,
-            source_tuple=cast(CheckpointTuple, object()),
-            graph_checkpoint=cast(Checkpoint, {"channel_versions": {}}),
-            channel_values={"messages": messages},
         )
         return self.snapshot
-
-    async def request_compaction(
-        self, *, snapshot: ManualCompactionSnapshot
-    ) -> None:
-        assert snapshot is self.snapshot
-        self.save_calls += 1
 
 
 class _CompactorProbe:
     def __init__(self) -> None:
-        self.check_calls = 0
+        self.source_calls: list[MutationIntentOwner] = []
+        self.request_calls: list[tuple[MutationIntentOwner, str, ModelReferenceDTO | None, tuple[str, ...], bool]] = []
 
-    async def check(
-        self,
-        *,
-        agent_id: str,
-        raw_messages: list[object],
-        event: object,
-    ) -> ContextCompactionCheck:
-        del agent_id, event
-        self.check_calls += 1
-        messages = [cast(AnyMessage, message) for message in raw_messages]
-        return ContextCompactionCheck(
-            messages=messages,
-            effective_messages=messages,
-            cutoff=1,
-        )
+    def source_item_ids(self, owner: MutationIntentOwner) -> tuple[str, ...]:
+        self.source_calls.append(owner)
+        return ("item-old-history",)
+
+    async def request(self, owner: MutationIntentOwner, *, agent_id: str,
+                      preferred_model: ModelReferenceDTO | None, item_ids: tuple[str, ...], manual: bool) -> SimpleNamespace:
+        self.request_calls.append((owner, agent_id, preferred_model, item_ids, manual))
+        return SimpleNamespace(task_id="short-write-compaction")
 
 
 class _StartBarrier:
@@ -225,10 +220,23 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
         creation_service=workspace.creation_service,
 
     )
+    saver = RolloutCheckpointSaver(sessions_dir=workspace.sessions_root)
+    messages = MessageService(
+        main_thread_resolver=workspace.resolver.main_thread_id,
+        checkpointer=saver,
+        workspace_root=workspace.workspace_root,
+    )
     job_service = JobService(
         job_event_bus=JobEventBus(),
         job_executor=_InstantJobExecutor(),
         session_lifecycle_guard=session_service.assert_session_active,
+        input_owner=messages,
+        terminal_status_writer=saver,
+        execution_queue_service=ExecutionQueueService(
+            sessions_dir=workspace.sessions_root,
+            owner=saver,
+            input_reader=lambda ref: messages.accepted_job_message(ref, display=False),
+        ),
     )
     task_state = WorkspaceStateStore(workspace_root=workspace.workspace_root)
     goal_service = SessionGoalService(
@@ -289,7 +297,7 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
 @pytest.fixture
 async def readonly_compaction(
     harness: _Harness, monkeypatch: pytest.MonkeyPatch,
-) -> AsyncIterator[tuple[ConfigService, RolloutCheckpointSaver]]:
+) -> AsyncIterator[tuple[ConfigService, RolloutCheckpointSaver, BackgroundTaskRegistry]]:
     document = {
         "config_version": 4,
         "extends": "builtin:workspace",
@@ -330,16 +338,41 @@ async def readonly_compaction(
     monkeypatch.setattr("app.runtime.agent_runtime.prepare_agent_model", reject_model)
     config = ConfigService(config_dir=Path.cwd() / "configs", workspace_root=harness.workspace.workspace_root)
     with RolloutCheckpointSaver(harness.workspace.sessions_root) as saver:
+        trace = TraceEventStore(sessions_dir=harness.workspace.sessions_root)
+        handler = CompactionTaskHandler(
+            saver=saver, config=config, trace_sink=trace,
+            workspace_id=harness.workspace.workspace_id, workspace_root=harness.workspace.workspace_root,
+            session_catalog=SessionCatalogComponents(harness.workspace.sessions_root, harness.workspace.resolver,
+                                                    harness.workspace.creation_service),
+            activation=ResourceActivationCoordinator(registry=ResourceRegistry(), saver=saver,
+                body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store)),
+            registry=lambda: registry,
+        )
+        # 本组只验真实登记边界；暂停执行步骤，避免将摘要生成混入只读入口验收。
+        barrier = asyncio.Event()
+
+        async def pause_generation(_handle: BackgroundTaskHandle) -> BackgroundTaskStep:
+            await barrier.wait()
+            raise AssertionError("登记验收不应执行摘要生成")
+
+        monkeypatch.setattr(handler, "step", pause_generation)
+        registry = BackgroundTaskRegistry(
+            store=BackgroundWorkStore(sessions_dir=harness.workspace.sessions_root),
+            residency_tracker=ThreadResidencyTracker(), handlers=(handler,),
+        )
         service = ContextCompactionService(
             checkpoint_adapter=ManualCompactionCheckpointAdapter(checkpointer=saver),
             job_service=harness.job_service,
             session_service=harness.session_service,
-            summarization_compactor=AgentSummarizationCompactor(config_service=config),
+            summarization_compactor=AgentSummarizationCompactor(
+                config_service=config, saver=saver, registry=registry, sessions=harness.session_service),
         )
         harness.api.dependency_overrides[get_context_compaction_service] = lambda: service
         try:
-            yield config, saver
+            yield config, saver, registry
         finally:
+            await registry.stop()
+            await trace.close()
             await config.close()
 
 
@@ -348,7 +381,7 @@ async def test_compact_http_uses_readonly_configuration_and_only_schedules(
     harness: _Harness, readonly_compaction, frozen_provider_prepare, target: str,
 ) -> None:
     """真实HTTP路由、配置、规划与checkpoint只登记请求，不生成或应用摘要。"""
-    config, saver = readonly_compaction
+    config, saver, registry = readonly_compaction
     runtime = config.get_agent_runtime_config("default")
     assert len(runtime["models"]) == 2
     assert runtime["models"][0]["api_mode"]["model_info"]["max_input_tokens"] == 1000
@@ -388,7 +421,7 @@ async def test_compact_http_uses_readonly_configuration_and_only_schedules(
         )
         user = saver.accepted_user_message(
             session_id, thread_id=seeded_thread, job_id=admission.job_id, message_id=user.id,
-        )
+        )[1]
         messages: list[AnyMessage] = [user]
         with (
             session_thread_owner_scope(seeded_owner, langgraph_thread_id=seeded_thread),
@@ -407,11 +440,35 @@ async def test_compact_http_uses_readonly_configuration_and_only_schedules(
             checkpoint["updated_channels"] = ["messages"]
             saver.put(build_checkpoint_config(seeded_thread), checkpoint,
                       {"source": "preview-history-fixture", "step": 1, "writes": {}}, {"messages": "1"})
+        if completed_history and seeded_thread == thread_id:
+            # 最新输入保留在摘要范围外；前一闭合问答才是可压缩历史。
+            tail_id = f"preview-tail-{seeded_thread}"
+            tail = saver.accept_turn(
+                session_id, thread_id=seeded_thread, accepted_ingress_id=tail_id,
+                acceptance_idempotency_key=f"accept-{tail_id}", job_id=f"job-{tail_id}",
+                admission_idempotency_key=f"admit-{tail_id}", payload="最新问题不可被摘要覆盖。",
+                root_item_id=f"item-{tail_id}",
+            )
+            tail_admission = saver.execution_admission(
+                session_id, thread_id=seeded_thread, execution_id=str(tail["initial_execution_id"]),
+            )
+            messages.append(saver.accepted_user_message(
+                session_id, thread_id=seeded_thread, job_id=tail_admission.job_id, message_id=tail_id)[1])
+            with (session_thread_owner_scope(seeded_owner, langgraph_thread_id=seeded_thread),
+                  execution_admission_scope(tail_admission, langgraph_thread_id=seeded_thread)):
+                checkpoint = empty_checkpoint()
+                checkpoint["channel_values"] = {"messages": messages}
+                checkpoint["channel_versions"] = {"messages": "2"}
+                checkpoint["updated_channels"] = ["messages"]
+                saver.put(build_checkpoint_config(seeded_thread), checkpoint,
+                          {"source": "preview-tail-fixture", "step": 2, "writes": {}}, {"messages": "2"})
     owner = MutationIntentOwner(session_id, thread_id)
     before_items = saver.read_canonical_items(session_id, thread_id)
     adapter = ManualCompactionCheckpointAdapter(checkpointer=saver)
     before = await adapter.load_snapshot(owner)
-    assert before is not None and before.summarization_event is None
+    assert before is not None
+    with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
+        checkpoint_before = saver.get_tuple(build_checkpoint_config(thread_id))
     main_owner = MutationIntentOwner(session_id, main_thread)
     main_before = await adapter.load_snapshot(main_owner)
     main_items = saver.read_canonical_items(session_id, main_thread)
@@ -424,7 +481,7 @@ async def test_compact_http_uses_readonly_configuration_and_only_schedules(
     assert response.status_code == 200, response.text
     assert response.json()["request_id"] == "test-request-id"
     data = response.json()["data"]
-    expected_count = 2 if completed_history else 1
+    expected_count = 3 if completed_history else 1
     assert data["session_id"] == session_id
     assert data["status"] == ("scheduled" if completed_history else "skipped")
     assert {field: data[field] for field in (
@@ -438,18 +495,34 @@ async def test_compact_http_uses_readonly_configuration_and_only_schedules(
         "retained_message_count": expected_count,
     }
     after = await adapter.load_snapshot(owner)
-    assert after is not None and after.summarization_event is None
+    assert after is not None
     assert after.raw_messages == before.raw_messages
     assert saver.read_canonical_items(session_id, thread_id) == before_items
     assert not any(item.semantic_kind == "compaction_summary" for item in before_items)
-    assert after.channel_values.get("_force_cache_compaction", False) is completed_history
-    assert (after.source_tuple.config != before.source_tuple.config) is completed_history
+    with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
+        assert saver.get_tuple(build_checkpoint_config(thread_id)) == checkpoint_before
+    handles = registry.list_handles(session_id)
+    with saver._storage.storage.read_connection(session_id, thread_id) as connection:
+        candidates = connection.execute(
+            "SELECT candidate_id,task_id,apply_on_next_request,result_detail_ref,applied_view_id "
+            "FROM context_compaction_candidates").fetchall()
+    if completed_history:
+        assert len(handles) == 1
+        handle = handles[0]
+        assert (handle.session_id, handle.thread_id, handle.task_id) == (session_id, thread_id, data["task_id"])
+        assert handle.status in {"pending", "running"}
+        assert candidates == [(handle.task_id, handle.task_id, 1, None, None)]
+        frozen = saver._storage.compactions.read(session_id, thread_id, handle.task_id)
+        assert (frozen.session_id, frozen.thread_id) == (session_id, thread_id)
+        assert tuple(ref.ref_id for ref in frozen.refs) == tuple(item.item_id for item in before_items[:-1])
+    else:
+        assert handles == [] and candidates == []
     if target == "child":
         assert await adapter.load_snapshot(main_owner) == main_before
         assert saver.read_canonical_items(session_id, main_thread) == main_items
     # 原harness探针不参与这条路径，不能用它们的固定cutoff冒充真实规划。
-    assert harness.compactor.check_calls == 0
-    assert harness.checkpoint_adapter.load_calls == harness.checkpoint_adapter.save_calls == 0
+    assert harness.compactor.source_calls == harness.compactor.request_calls == []
+    assert harness.checkpoint_adapter.load_calls == 0
 
 
 async def test_compact_http_rejects_foreign_and_invalid_thread_before_checkpoint_access(
@@ -463,7 +536,11 @@ async def test_compact_http_rejects_foreign_and_invalid_thread_before_checkpoint
         pytest.fail("非法Thread必须在任何checkpoint读取或写入前被拒绝")
 
     monkeypatch.setattr(ManualCompactionCheckpointAdapter, "load_snapshot", reject_checkpoint)
-    monkeypatch.setattr(ManualCompactionCheckpointAdapter, "request_compaction", reject_checkpoint)
+    def reject_source(*_args, **_kwargs):
+        pytest.fail("非法Thread不得读取或登记压缩候选")
+
+    monkeypatch.setattr(AgentSummarizationCompactor, "source_item_ids", reject_source)
+    monkeypatch.setattr(AgentSummarizationCompactor, "request", reject_checkpoint)
     foreign = await harness.client.post(
         f"/api/v1/sessions/{session_id}/compact", params={"thread_id": foreign_thread},
     )
@@ -479,6 +556,7 @@ async def test_compact_http_rejects_foreign_and_invalid_thread_before_checkpoint
 async def test_active_short_write_endpoints_keep_their_contracts(
     harness: _Harness,
 ) -> None:
+    selected_model = ModelReferenceDTO(provider_id="backup_1", model_id="default")
     session_id = await harness.workspace.create_session(
         "原始标题",
         current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
@@ -486,10 +564,11 @@ async def test_active_short_write_endpoints_keep_their_contracts(
 
     update = await harness.client.patch(
         f"/api/v1/sessions/{session_id}",
-        json={"agent_id": "coder"},
+        json={"agent_id": "coder", "model": selected_model.model_dump()},
     )
     assert update.status_code == 200, update.text
     assert update.json()["data"]["current_agent_id"] == "coder"
+    assert update.json()["data"]["current_model"] == selected_model.model_dump()
     assert harness.workspace.node(session_id).name == "原始标题"
     assert (await harness.session_service.get(session_id)).current_agent_id == "coder"
 
@@ -497,8 +576,12 @@ async def test_active_short_write_endpoints_keep_their_contracts(
     assert compact.status_code == 200, compact.text
     assert compact.json()["data"]["status"] == "scheduled"
     assert harness.checkpoint_adapter.load_calls == 1
-    assert harness.checkpoint_adapter.save_calls == 1
-    assert harness.compactor.check_calls == 1
+    owner = MutationIntentOwner(session_id, harness.workspace.resolver.main_thread_id(session_id))
+    assert harness.compactor.source_calls == [owner]
+    assert harness.compactor.request_calls == [(
+        owner, "coder", selected_model, ("item-old-history",), True,
+    )]
+    assert compact.json()["data"]["task_id"] == "short-write-compaction"
 
     created = await harness.client.put(
         f"/api/v1/sessions/{session_id}/goal",
@@ -759,14 +842,17 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
     assert (await harness.session_service.get(session_id)).title == "保持原状"
     assert await harness.goal_service.get(session_id) is None
     assert harness.checkpoint_adapter.load_calls == 0
-    assert harness.checkpoint_adapter.save_calls == 0
-    assert harness.compactor.check_calls == 0
+    assert harness.compactor.source_calls == harness.compactor.request_calls == []
     assert harness.workspace.node(session_id).state == "deleting"
     assert harness.workspace.session_dir(session_id).is_dir()
 
 
 @pytest.fixture
 def node_debug(harness: _Harness, monkeypatch: pytest.MonkeyPatch) -> NodeDebugService:
+    # 调试服务读取显式配置入口；空工作区不再隐式回退到用户配置。
+    (harness.workspace.workspace_root / ".boxteam/workspace.jsonc").write_text(
+        json.dumps({"config_version": 4, "extends": "builtin:workspace", "settings": {}}), encoding="utf-8",
+    )
     service = NodeDebugService(
         workspace_root=harness.workspace.workspace_root,
         file_paths=node_debug_file_paths(harness.workspace.workspace_root),

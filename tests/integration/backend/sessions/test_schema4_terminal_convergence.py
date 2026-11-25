@@ -27,7 +27,6 @@ from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
-    ItemProvenanceRelation,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
@@ -42,6 +41,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.rollout.view_mutations import mutate_view_members
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,7 +225,7 @@ def _terminal_rows(
     ).fetchall()
 
 
-def test_legacy_terminal_materialization_cannot_bypass_runtime_transition(
+def test_unstarted_turn_cannot_bypass_runtime_transition(
     terminal_case: TerminalCase,
 ) -> None:
     case = terminal_case
@@ -236,14 +236,6 @@ def test_legacy_terminal_materialization_cannot_bypass_runtime_transition(
             case.session_id, thread_id=case.thread_id, turn_id=case.turn_id,
             execution_id=case.execution_id, outcome="completed", turn_status="completed",
             items=(final,), final_item_id=final.item_id,
-        )
-    with pytest.raises(TypeError, match="历史终态物化只允许 importer 私有 staging"):
-        case.saver._storage.executions.materialize_legacy_turn(
-            case.session_id, thread_id=case.thread_id, turn_id=case.turn_id,
-            execution_id=case.execution_id, source_session_id="legacy-source-session",
-            source_thread_id="legacy-source-thread", turn_status="completed",
-            finalization_evidence="explicit_legacy_final_marker", items=(final,),
-            final_item_id=final.item_id, checkpoint_ns="",
         )
     assert case.jsonl.read_bytes() == before
     with sqlite3.connect(case.index.as_uri() + "?mode=ro", uri=True) as connection:
@@ -383,51 +375,6 @@ def test_acceptance_root_binding_and_turnless_internal_terminal_are_atomic(
     )
 
 
-def test_cold_wait_uses_direct_typed_legacy_notice_origin(
-    terminal_case: TerminalCase,
-) -> None:
-    case = terminal_case
-    legacy_item_id = f"item-legacy-notice-{case.session_id}"
-    live_item_id = f"item-live-notice-{case.session_id}"
-    fake_annotations = {
-        "boxteam.legacy.import": {"extension_version": "1", "protection": "public", "value": {}},
-        "boxteam.legacy.annotations": {
-            "extension_version": "1", "protection": "public",
-            "value": {"legacy_provenance": "legacy/unknown_source"},
-        },
-    }
-    for label, item_id, relations, extensions in (
-        ("legacy", legacy_item_id, (ItemProvenanceRelation("derived_from", "legacy_message", "legacy-notice"),), {}),
-        ("live", live_item_id, (ItemProvenanceRelation(
-            "derived_from", "canonical_item", legacy_item_id,
-            target_session_id=case.session_id, target_thread_id=case.thread_id,
-        ),), fake_annotations),
-    ):
-        item = CanonicalItemRecord.create(
-            item_sequence=1, item_id=item_id, semantic_kind="runtime_notice", payload_kind="text",
-            status="completed", producer_ref={"producer_kind": "runtime", "producer_id": label},
-            payload=f"{label} notice", turn_scope="pending_next_turn", wire_role="user",
-            provenance_relations=relations, extensions=extensions,
-        )
-        case.saver._storage.executions.admit_internal_execution(
-            case.session_id, thread_id=case.thread_id,
-            execution_id=f"execution-{label}-{case.session_id}", job_id=f"job-{label}-{case.session_id}",
-            admission_idempotency_key=f"admission-{label}-{case.session_id}", runtime_notice_item=item,
-            request_input={"kind": "runtime_notice", "payload": item.payload},
-        )
-    cold = RolloutCheckpointSaver(case.sessions)
-    assert cold.cold_execution_observations(
-        case.session_id, case.thread_id, job_ids=[f"job-legacy-{case.session_id}"],
-    ) == []
-    live = cold.cold_execution_observations(
-        case.session_id, case.thread_id, job_ids=[f"job-live-{case.session_id}"],
-    )
-    assert len(live) == 1
-    assert (live[0]["job_id"], live[0]["execution_id"], live[0]["state"]) == (
-        f"job-live-{case.session_id}", f"execution-live-{case.session_id}", "pending",
-    )
-
-
 def test_pre_model_failure_keeps_accepted_user_turn_visible(
     terminal_case: TerminalCase,
 ) -> None:
@@ -473,7 +420,6 @@ def test_item_bearing_terminal_is_one_barrier_and_one_transaction(frozen_provide
     assembly_id = _assemble_and_register_model_call(frozen_provider_activation, frozen_provider_wire, case)
     output = _assistant_item(case, f"item-output-{case.execution_id}", "终态正文")
     before = case.jsonl.read_bytes()
-
     commit_id = case.saver.converge_execution(
         case.session_id,
         thread_id=case.saver._storage.storage.main_thread_id(case.session_id), turn_id=case.turn_id,
@@ -752,31 +698,84 @@ def test_terminal_idempotency_conflict_preserves_committed_prefix(
         ).fetchone() == (output.content_hash,)
 
 
-def test_completed_terminal_cannot_split_precommitted_final_item(
-    terminal_active_case: TerminalCase,
+@pytest.mark.parametrize("visible", [True, False])
+def test_completed_terminal_references_precommitted_output_without_copying_body(
+    terminal_active_case: TerminalCase, visible: bool,
 ) -> None:
     case = terminal_active_case
-    output = _assistant_item(case, f"item-precommitted-{case.execution_id}", "不能拆分")
+    output = _assistant_item(case, f"item-precommitted-{case.execution_id}", "已有输出")
     case.saver.append_items(case.session_id, (output,), thread_id=case.thread_id)
     before = case.jsonl.read_bytes()
+    if not visible:
+        with sqlite3.connect(case.index) as connection:
+            mutate_view_members(connection,
+                "UPDATE context_view_items SET visible=0 WHERE item_id=?", (output.item_id,))
+        with pytest.raises(ValueError, match="当前 active view 可见"):
+            case.saver.converge_execution(case.session_id, thread_id=case.thread_id,
+                turn_id=case.turn_id, execution_id=case.execution_id,
+                outcome="completed", turn_status="completed", final_item_id=output.item_id)
+        assert case.jsonl.read_bytes() == before
+        with sqlite3.connect(case.index) as connection:
+            assert _terminal_rows(connection, case) == []
+            assert connection.execute("SELECT status,final_item_id FROM turn_records WHERE turn_id=?",
+                                      (case.turn_id,)).fetchone() == ("active", None)
+        return
 
-    with pytest.raises(ValueError, match="同一提交中包含 final canonical item"):
-        case.saver.converge_execution(
+    commit_id = case.saver.converge_execution(
             case.session_id,
             thread_id=case.saver._storage.storage.main_thread_id(case.session_id), turn_id=case.turn_id,
             execution_id=case.execution_id,
             outcome="completed",
             turn_status="completed",
             final_item_id=output.item_id,
-        )
+    )
+    assert case.saver.converge_execution(
+        case.session_id, thread_id=case.thread_id, turn_id=case.turn_id,
+        execution_id=case.execution_id, outcome="completed", turn_status="completed",
+        final_item_id=output.item_id,
+    ) == commit_id
 
     assert case.jsonl.read_bytes() == before
     with sqlite3.connect(case.index) as connection:
-        assert _terminal_rows(connection, case) == []
+        assert len(_terminal_rows(connection, case)) == 1
         assert connection.execute(
             "SELECT status, final_item_id FROM turn_records WHERE turn_id = ?",
             (case.turn_id,),
-        ).fetchone() == ("active", None)
+        ).fetchone() == ("completed", output.item_id)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM item_catalog WHERE item_id=?", (output.item_id,),
+        ).fetchone() == (1,)
+
+
+@pytest.mark.parametrize("terminal_execution_case", ["internal"], indirect=True)
+@pytest.mark.parametrize("visible", [True, False])
+def test_internal_terminal_reuses_visible_output_without_copying_body(
+    terminal_execution_case: TerminalCase, visible: bool,
+    frozen_provider_activation, frozen_provider_wire,
+) -> None:
+    case = terminal_execution_case
+    _assemble_and_register_model_call(frozen_provider_activation, frozen_provider_wire, case)
+    output = _assistant_item(case, f"item-original-{case.execution_id}", "内部原输出")
+    case.saver.append_items(case.session_id, (output,), thread_id=case.thread_id)
+    original_body = case.jsonl.read_bytes()
+    if not visible:
+        with sqlite3.connect(case.index) as connection:
+            mutate_view_members(connection,
+                "UPDATE context_view_items SET visible=0 WHERE item_id=?", (output.item_id,))
+        with pytest.raises(ValueError, match="当前 view 可见"):
+            case.saver.converge_execution(case.session_id, thread_id=case.thread_id,
+                execution_id=case.execution_id, turn_id=None, turn_status=None, outcome="completed")
+    else:
+        commit = case.saver.converge_execution(case.session_id, thread_id=case.thread_id,
+            execution_id=case.execution_id, turn_id=None, turn_status=None, outcome="completed")
+        assert case.saver.converge_execution(case.session_id, thread_id=case.thread_id,
+            execution_id=case.execution_id, turn_id=None, turn_status=None, outcome="completed") == commit
+    assert case.jsonl.read_bytes() == original_body
+    with sqlite3.connect(case.index) as connection:
+        assert connection.execute("SELECT outcome FROM executions WHERE execution_id=?",
+            (case.execution_id,)).fetchone() == ("completed" if visible else "unknown",)
+        assert connection.execute("SELECT COUNT(*) FROM storage_commits WHERE commit_kind='terminal_convergence' AND subject_id=?",
+            (case.execution_id,)).fetchone() == (1 if visible else 0,)
 
 
 def test_terminal_projection_failure_rolls_back_jsonl_and_all_control_state(

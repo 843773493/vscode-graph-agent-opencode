@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { t } from "../../../../shared/core/i18n/index.js";
 import { useContext, useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -151,7 +152,7 @@ export default function WarmActionDialog({
           </div>
         ) : null}
         {children ? <fieldset className="workspace-dialog-grid" disabled={submitting}>{children}</fieldset> : null}
-        {error ? <div className="workspace-dialog-error" role="alert">{error}</div> : null}
+        {error ? <div className="workspace-dialog-error failure-summary" role="alert">{failureSummary(error)}</div> : null}
         <footer className="workspace-dialog-actions">
           <button type="button" disabled={submitting} onClick={onClose}>{t("dialogs.cancel")}</button>
           <button

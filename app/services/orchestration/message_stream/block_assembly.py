@@ -15,6 +15,7 @@ from app.services.infrastructure.rollout_context.runtime.stream_accumulator impo
     CanonicalBlockAccumulator,
 )
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
+from app.services.mapping.itemized.provider_history import public_message_record
 
 
 class MessageStreamBlockAssemblyMixin:
@@ -145,8 +146,6 @@ class MessageStreamBlockAssemblyMixin:
         model_call_id: str | None = None,
     ) -> None:
         effective_model_call_id = self._resolve_model_call_id(model_call_id)
-        if self.is_summary_candidate(model_call_id or effective_model_call_id):
-            return
         content = getattr(chunk, "content", None)
         if isinstance(content, list):
             for block in content:
@@ -305,8 +304,16 @@ class MessageStreamBlockAssemblyMixin:
                     )
                 await self._observe_normalized_block("block.started", payload)
 
+        # canonical 保留规范化来源块；公开事件仍只发送允许展示的安全字段。
+        # 签名／密文不能经过文本提取后丢失，也不能随公开 block.delta 泄漏。
+        self._accept_canonical_block({
+            "block_id": block_id, "block_index": block_index, "carrier_type": carrier_type,
+            "source_content": {**block, "id": provider_block_id, "index": block_index},
+        }, model_call_id=model_call_id)
+
         if carrier_type == "reasoning_items":
-            items = block.get("reasoning_items")
+            safe_block = public_message_record({"content": [dict(block)]})["content"][0]
+            items = safe_block.get("reasoning_items")
             if isinstance(items, list):
                 for item in items:
                     if isinstance(item, Mapping):
@@ -326,10 +333,6 @@ class MessageStreamBlockAssemblyMixin:
                                 block_id=block_id,
                             )
                         await self._observe_normalized_block("block.delta", payload)
-                        self._accept_canonical_block(
-                            payload,
-                            model_call_id=model_call_id,
-                        )
             return
 
         if carrier_type == "redacted_thinking":
@@ -348,10 +351,24 @@ class MessageStreamBlockAssemblyMixin:
                     block_id=block_id,
                 )
             await self._observe_normalized_block("block.delta", payload)
-            self._accept_canonical_block(payload, model_call_id=model_call_id)
+            return
+
+        if carrier_type not in {"text", "output_text", "refusal", "reasoning", "reasoning_content", "thinking"}:
+            # 复用结构化 item_upsert 传递完整内容快照，媒体不经过文本拼接。
+            payload = {
+                "block_id": block_id, "block_index": block_index,
+                "local_seq": self._next_local_seq(block_id), "carrier_type": carrier_type,
+                "operation": "item_upsert", "item": {**block, "id": provider_block_id},
+            }
+            if self.writer is not None:
+                await self.writer.commit("block.delta", payload,
+                    model_call_id=model_call_id or self.current_model_call_id, block_id=block_id)
+            await self._observe_normalized_block("block.delta", payload)
             return
 
         text = block.get("text")
+        if carrier_type == "refusal" and not isinstance(text, str):
+            text = block.get("refusal")
         if not isinstance(text, str) and carrier_type == "reasoning":
             nested_content = block.get("content")
             if isinstance(nested_content, list):
@@ -379,7 +396,6 @@ class MessageStreamBlockAssemblyMixin:
                     block_id=block_id,
                 )
             await self._observe_normalized_block("block.delta", payload)
-            self._accept_canonical_block(payload, model_call_id=model_call_id)
             if carrier_type in {"text", "output_text", "refusal"}:
                 self._normalized_text_chunks_by_block.setdefault(block_id, []).append(text)
                 self._normalized_block_model_call_ids[block_id] = (
@@ -474,12 +490,20 @@ class MessageStreamBlockAssemblyMixin:
             self._tool_call_ids_by_provider_key[
                 (effective_model_call_id, provider_tool_call_id)
             ] = tool_call_id
-        if tool_call_id not in self._tool_call_model_call_ids:
+        is_new_call = tool_call_id not in self._tool_call_model_call_ids
+        if is_new_call:
             self._tool_call_model_call_ids[tool_call_id] = (
                 model_call_id or self.current_model_call_id
             )
         if tool_call_id not in self._tool_call_order:
-            self._tool_call_order.append(tool_call_id)
+            # 工具数组的来源 index 与 content-block index 不属于同一坐标域。
+            # 只在本 ModelCall 的调用之间排序，不拿片段到达顺序当声明顺序。
+            position = next((
+                index for index, call_id in enumerate(self._tool_call_order)
+                if self._tool_call_model_call_ids[call_id] == effective_model_call_id
+                and self._tool_call_indexes_by_id[call_id] > tool_index
+            ), len(self._tool_call_order))
+            self._tool_call_order.insert(position, tool_call_id)
         raw_tool_name = chunk.get("name")
         if isinstance(raw_tool_name, str) and raw_tool_name:
             self._tool_call_names_by_id[tool_call_id] = raw_tool_name
@@ -517,6 +541,7 @@ class MessageStreamBlockAssemblyMixin:
                 {
                     "tool_call_id": tool_call_id,
                     "tool_name": self._tool_call_names_by_id.get(tool_call_id, ""),
+                    **({"provider_call_index": raw_tool_index} if is_new_call and raw_tool_index is not None else {}),
                     **update,
                     "status": "accumulating",
                     "arguments_complete": self._tool_call_arguments_complete[tool_call_id],
@@ -554,10 +579,9 @@ class MessageStreamBlockAssemblyMixin:
         return (parsed, True) if isinstance(parsed, dict) else ({"raw": text}, False)
 
     def _next_tool_call_index(self, model_call_id: str | None) -> int:
-        index = 0
-        while (model_call_id, index) in self._tool_call_ids_by_index:
-            index += 1
-        return index
+        # 重复来源index的局部身份从尾部追加，不借空槽把后来的调用插到前面。
+        return 1 + max((index for scope, index in self._tool_call_ids_by_index
+                        if scope == model_call_id), default=-1)
 
     def _fallback_block_id(self, carrier_type: str, block_index: int) -> str:
         model_call_id = self.current_model_call_id or "unknown-model-call"

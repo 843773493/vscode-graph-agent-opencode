@@ -802,7 +802,7 @@ test("上下文续读使用原 history 入口且不自动排空、不推进 Turn
   installWindow(9178);
   const requests: Record<string, unknown>[] = [];
   const initial = { ...turnDetail(2), ...HISTORY_SOURCE_BINDING,
-    response_parts: [{ kind: "context_notice" as const, part_id: "context-page-1", projection: "summary" as const,
+    response_items: [{ kind: "context_notice" as const, id: "context-page-1", projection: "summary" as const,
       source: { message_sequence: 0 }, context_anchor: "before_user_message" as const,
       context_content_ref: { kind: "item", item_id: "notice-page-1" }, context_cursor: "context-page-next" }] };
   let current = state({ ...createSessionTurnTimeline(SCOPE_KEY, 1), threadId: THREAD_ID, phase: "ready",
@@ -813,8 +813,8 @@ test("上下文续读使用原 history 入口且不自动排空、不推进 Turn
     expect(String(_input)).toContain(`/sessions/${SESSION_ID}/threads/${THREAD_ID}/history`);
     requests.push(JSON.parse(String(init?.body)));
     return aroundResponse(aroundPage(initial.turn_id, { items: [], summaries: [], context_notices: [
-      { owner_id: initial.turn_id, owner_kind: "turn", parts: [{ ...initial.response_parts[0],
-        part_id: "context-page-2", context_cursor: "context-page-last" }] },
+      { owner_id: initial.turn_id, owner_kind: "turn", items: [{ ...initial.response_items[0],
+        id: "context-page-2", context_cursor: "context-page-last" }] },
     ] }));
   }, { preconnect: originalFetch.preconnect });
   const generationRef = { current: 1 }, controller = new AbortController();
@@ -834,8 +834,8 @@ test("上下文续读使用原 history 入口且不自动排空、不推进 Turn
   const timeline = current.turnTimelinesBySession.get(SCOPE_KEY)!;
   expect(timeline.beforeCursor).toBe("turn-page-before");
   expect(timeline.hasBefore).toBe(true);
-  expect(timeline.turnsById[initial.turn_id].response_parts?.map(part => part.part_id)).toEqual(["context-page-1", "context-page-2"]);
-  expect(timeline.turnsById[initial.turn_id].response_parts?.[0].context_cursor).toBeNull();
-  expect(timeline.turnsById[initial.turn_id].response_parts?.[1].context_cursor).toBe("context-page-last");
+  expect(timeline.turnsById[initial.turn_id].response_items?.map(part => part.id)).toEqual(["context-page-1", "context-page-2"]);
+  expect(timeline.turnsById[initial.turn_id].response_items?.[0].context_cursor).toBeNull();
+  expect(timeline.turnsById[initial.turn_id].response_items?.[1].context_cursor).toBe("context-page-last");
   expect(requests).toHaveLength(1);
 });

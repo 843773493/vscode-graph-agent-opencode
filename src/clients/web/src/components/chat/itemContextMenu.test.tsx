@@ -29,7 +29,7 @@ describe("Item 原生菜单接线", () => {
     const message = `配置失败 password=private-value\n${"完整原因😀".repeat(50)}末尾证据`;
     const failure = { code: "execution_error", message, details: {} };
     value.turnFailure = failure;
-    value.responseParts = [];
+    value.responseItems = [];
     let menu: ChatItemMenuRequest | undefined;
     let renderer!: ReactTestRenderer;
     await act(async () => { renderer = create(<ChatItemMenuContext.Provider value={request => { menu = request; }}>
@@ -54,12 +54,12 @@ describe("Item 原生菜单接线", () => {
   test("工具卡片从合并结果末尾分支，携带所属历史快照且没有独立 fork 按钮", async () => {
     const value = conversation("done");
     Object.assign(value, { turnId: "turn-tools", threadId: "thread-tools", sourceViewId: "view-tools", sourceViewRevision: 17 });
-    value.responseParts = [
-      { part_id: "call", kind: "tool_call", projection: "detail", status: "completed", tool_name: "inspect",
+    value.responseItems = [
+      { id: "call", kind: "tool_call", projection: "detail", status: "completed", tool_name: "inspect",
         tool_call_id: "tool-1", arguments: '{"path":"a.ts"}', source: { message_sequence: 1, item_id: "item-call" } },
-      { part_id: "result", kind: "tool_result", projection: "detail", status: "completed", tool_name: "inspect",
+      { id: "result", kind: "tool_result", projection: "detail", status: "completed", tool_name: "inspect",
         tool_call_id: "tool-1", result: "完整工具结果", source: { message_sequence: 2, item_id: "item-result" } },
-      ...value.responseParts!,
+      ...value.responseItems!,
     ];
     const fork = mock(() => {});
     let menu: ChatItemMenuRequest | undefined;
@@ -88,8 +88,8 @@ describe("Item 原生菜单接线", () => {
       toolCallId: "tool-1", inputText: "{}", resultText: "结果", detailsLoaded: true, active: false,
       timestamp: null, rawStart: {}, rawEnd: {},
       responseSources: [
-        { part_id: "call", kind: "tool_call", source: { message_sequence: 1, item_id: "call" } },
-        { part_id: "result", kind: "tool_result", source: { message_sequence: 2 } },
+        { id: "call", kind: "tool_call", source: { message_sequence: 1, item_id: "call" } },
+        { id: "result", kind: "tool_result", source: { message_sequence: 2 } },
       ],
     }, () => {});
     expect(actions.find(action => action.id === "forkItem")!.enabled).toBe(false);
@@ -127,7 +127,7 @@ describe("Item 原生菜单接线", () => {
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard: { writeText } } });
     const value = conversation("done");
     const text = "**完整 Markdown**\n\n另一段正文";
-    value.responseParts![0].text = text;
+    value.responseItems![0].text = text;
     value.assistantMessages = [];
     let menu: ChatItemMenuRequest | undefined;
     const showMenu = mock((request: ChatItemMenuRequest) => { menu = request; });

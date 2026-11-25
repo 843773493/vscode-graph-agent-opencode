@@ -1,3 +1,5 @@
+import { errorDiagnostic, errorMessage } from '../../../../src/clients/web/src/utils/errorMessage.js';
+import { copyTextToClipboard } from '../../../../src/clients/web/src/utils/clipboard.js';
 import { t } from '../../../../src/clients/shared/core/i18n/index.js';
 import { afterAll, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
@@ -13,7 +15,7 @@ import { DeferredPromise, raceTimeout } from '../../../../src/clients/workbench/
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
 // 提取的真实声明仍使用产品翻译入口，显式注入同一测试启动语言。
-const localizedFunction = (...parts) => new Function('t', 'pluginStateLabel', ...parts).bind(undefined, t, pluginStateLabel);
+const localizedFunction = (...parts) => new Function('t', 'pluginStateLabel', 'errorMessage', 'errorDiagnostic', 'copyTextToClipboard', ...parts).bind(undefined, t, pluginStateLabel, errorMessage, errorDiagnostic, copyTextToClipboard);
 
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/service_plugin_management_ownership.test.mjs').prepare();
 const sourcePath = 'src/clients/workbench/src/extensions/servicePluginManagement.ts';
@@ -577,6 +579,35 @@ for (const id of ['plugin.restart', 'plugin.secret./credential']) test(`${id} �
   expect(action.enabled).toBe(true); expect(state.refreshes).toBe(1);
 });
 
+test('插件动作与权威回读同时失败只交付一次，并保留两项原错误', async () => {
+  const state = actionState();
+  const operation = new Error('原实例重启拒绝'), reading = new Error('原绑定回读不可用');
+  state.refreshBindings = async () => { throw reading; };
+  const action = actionHarness(state, async () => { throw operation; }).find(item => item.id === 'plugin.restart');
+  await action.run();
+  expect(state.errors).toHaveLength(1);
+  expect(state.errors[0]).toBeInstanceOf(AggregateError);
+  expect(state.errors[0].errors).toEqual([operation, reading]);
+  expect(errorMessage(state.errors[0])).toBe('原实例重启拒绝');
+  expect(errorDiagnostic(state.errors[0])).toContain('原实例重启拒绝');
+  expect(errorDiagnostic(state.errors[0])).toContain('原绑定回读不可用');
+  expect(action.enabled).toBe(true);
+});
+
+test('来源保存结果未知且查询失败时保留原关联，不重放成功与否未确认的写入', async () => {
+  const save = localizedFunction(`${configurationDeclaration('saveSourceEdit')}\nreturn saveSourceEdit;`)();
+  const saving = new Error('原写入连接中断'), reading = new Error('原提交查询连接中断');
+  const calls = [];
+  const result = await save({
+    async save(intent) { calls.push(['save', intent.idempotency_key]); throw saving; },
+    async read(sourceKey, key) { calls.push(['read', sourceKey, key]); throw reading; },
+  }, { source_key: 'workspace', idempotency_key: 'original-operation' });
+  expect(calls).toEqual([['save', 'original-operation'], ['read', 'workspace', 'original-operation']]);
+  expect(result.error).toBeInstanceOf(AggregateError);
+  expect(result.error.errors).toEqual([saving, reading]);
+  expect(result.error.message).toContain('original-operation');
+});
+
 test('旧操作结算不刷新用户已切换的范围，当前视图操作完成仍读取权威状态', async () => {
   const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
   const owner = parsed.statements.find(statement => statement.name?.text === 'ServicePluginPackagesView');
@@ -597,7 +628,9 @@ test('旧操作结算不刷新用户已切换的范围，当前视图操作完�
   await view.runOperation(async () => {});
   expect(refreshes).toBe(1);
   await view.runOperation(async () => { throw new Error('原操作失败'); });
-  expect(errors).toEqual(['原操作失败']);
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toBeInstanceOf(Error);
+  expect(errors[0].message).toBe('原操作失败');
   expect(refreshes).toBe(2);
 });
 
@@ -673,7 +706,7 @@ test('首快照前销毁取消等待，旧范围不能覆盖新范围；流失�
   const current = runtimeScope(undefined, 'gateway-new');
   const ready = current.state.load(); current.streams[0].next(snapshot); await ready;
   current.streams[0].reject(new Error('原目标连接中断')); await new Promise(resolve => setTimeout(resolve, 0));
-  expect(current.errors).toEqual(['原目标连接中断']); expect(current.state.error).toBe('原目标连接中断');
+  expect(current.errors).toEqual([]); expect(current.state.error.message).toBe('原目标连接中断');
   expect(current.state.runtime).toBe(snapshot); current.state.dispose(); expect(current.streams[0].signal.aborted).toBe(true);
   const failed = runtimeScope();
   const rejected = failed.state.load().catch(error => error);

@@ -60,14 +60,15 @@ def change_document_backend(
     config_path = Path(integration_workspace_config_path)
     gateway_url = f"http://127.0.0.1:{port_block.port(20)}"
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
-    provider.update({
+    workspace_settings = config["settings"]["workspace"]
+    provider = workspace_settings["llm"]["providers"]["primary"]
+    config["profiles"]["provider.primary"]["settings"]["model_options"].update({
         "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
-        "model": "browser-chat-tool-loop-stub",
         "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
         "custom_llm_provider": "openai",
     })
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+    provider["models"]["default"]["model"] = "browser-chat-tool-loop-stub"
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()

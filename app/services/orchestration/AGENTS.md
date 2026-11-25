@@ -64,7 +64,7 @@ orchestration/
 ## 规范
 
 - 以流程控制为中心，不承担数据持久化职责。
-- 会话停止在 Job owner 关闭准入期间结算执行，再按原 holder→Session gate 顺序排空资源；每次冻结一份 `runtime.session_stop` 策略。普通停止完成后允许显式新操作，旧队列保留或丢弃；删除前必要排空不可由配置禁用，资源未核实停止时禁止继续数据删除。
+- 会话停止在 Job owner 关闭准入期间结算执行，再等待原 holder 并在 Session gate 外排空资源；各 owner 的短写取得原 gate，不能持有等待者结算所需的 gate。每次冻结一份 `runtime.session_stop` 策略。普通停止完成后允许显式新操作，旧队列保留或丢弃；删除前必要排空不可由配置禁用，资源未核实停止时禁止继续数据删除。
 - `execution_queue.py` 的全工作区恢复扫描逐个取得短 topology 准入和 Session read guard，重新核对 catalog active 状态后读取 main/child 队列；guard 覆盖同步读取线程及取消结算，不并持两个 Session 锁。删除排空中的精确 Session 读取沿用调用方已有准入，不重入该锁；原存储故障继续抛出。执行数据由 rollout owner 保存，既有 v5 显式迁移仍经同一 owner 导入。
 - 保持装配边界清晰，依赖协议而不是具体实现。
 - `AgentExecutionService` 只驱动真实执行，不承担工具定义查询或缓存。当前目录由 `business/agent_tool_settings/catalog.py` 独立读取；冻结工具发现继续消费原调用的封存目录，不能用最新管理定义替换。

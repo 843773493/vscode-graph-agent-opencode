@@ -5,7 +5,7 @@ import type {
   TurnDetail,
   TurnPage,
   TurnSummary,
-  TurnResponsePart,
+  TurnResponseItem,
 } from "../../types/backend";
 import {
   applyTurnBootstrap,
@@ -23,26 +23,27 @@ import {
   upsertTurns,
   writeTurnTimelineCache,
 } from "./turnTimeline";
+import { responseItemsToTimelineItems } from "../timeline/responseItems";
 
 const SESSION_ID = "ses_turns";
 const THREAD_ID = "thr_018f0000000070008000000000000001";
 const SCOPE_KEY = `workspace::${SESSION_ID}`;
 
 test("Item 片段与迟到轮廓保留其它正文和主游标，旧快照不能回写", () => {
-  const part = (id: number, projection: "summary" | "detail"): TurnResponsePart => ({
-    part_id: `item-${id}:part:0`, kind: "reasoning", projection, text: projection === "detail" ? `完整正文 ${id}` : "",
-    source: {item_id: `item-${id}`, message_sequence: id, logical_item_ordinal: id, part_ordinal: 0},
+  const part = (id: number, projection: "summary" | "detail"): TurnResponseItem => ({
+    id: `item-${id}:part:0`, kind: "reasoning", projection, text: projection === "detail" ? `完整正文 ${id}` : "",
+    source: {item_id: `item-${id}`, message_sequence: id, logical_item_ordinal: id, },
   });
-  const original = {...detail("process", 1), response_parts: [part(1,"detail"),part(2,"summary")]};
+  const original = {...detail("process", 1), response_items: [part(1,"detail"),part(2,"summary")]};
   const page = {thread_id: THREAD_ID, source_view_id: original.source_view_id,
     source_view_revision: original.source_view_revision, projection_epoch: 1, items: [original],
     internal_executions: [], before_cursor: "main-before", after_cursor: "main-after", has_before: true, has_after: true};
   const timeline = applyTurnHistoryPage(createSessionTurnTimeline(SCOPE_KEY), page, "around");
   const enriched = applyHistoryFragment(timeline, {...page, before_cursor:null, after_cursor:null,
-    items:[{...original,response_parts:[part(2,"detail")]}]});
+    items:[{...original,response_items:[part(2,"detail")]}]});
   const outlined = applyHistoryFragment(enriched,{...page,before_cursor:"outline-before",
-    items:[{...original,response_parts:[part(1,"summary"),part(2,"summary")]}]},true);
-  expect(outlined.turnsById.process.response_parts).toEqual([part(1,"detail"),part(2,"detail")]);
+    items:[{...original,response_items:[part(1,"summary"),part(2,"summary")]}]},true);
+  expect(outlined.turnsById.process.response_items).toEqual([part(1,"detail"),part(2,"detail")]);
   expect(outlined.turnsById.process.activityOutline).toEqual({beforeCursor:"outline-before"});
   expect([outlined.beforeCursor,outlined.afterCursor]).toEqual(["main-before","main-after"]);
   expect(applyHistoryFragment(outlined,{...page,source_view_revision:0})).toBe(outlined);
@@ -74,36 +75,45 @@ test("同一 execution 按 item 释放正文，定点补读只恢复可视 item 
   const execution: InternalExecutionHistory = {
     execution_id: "execution-body", job_id: "job-body", session_id: SESSION_ID, thread_id: THREAD_ID,
     status: "completed", created_at: "2026-07-28T00:00:00Z", updated_at: "2026-07-28T00:00:01Z",
-    display_parts: Array.from({ length: 12 }, (_, index) => ({ kind: "generated_session_result",
+    display_items: Array.from({ length: 12 }, (_, index) => ({ kind: "generated_session_result",
       text: `display-secret-${index}`, item_id: `item-${index}`, item_sequence: index + 1,
       logical_item_ordinal: index, created_at: "2026-07-28T00:00:00Z", provenance: {} })),
-    response_parts: Array.from({ length: 12 }, (_, index) => ({ part_id: `part-${index}`, kind: "text",
+    response_items: Array.from({ length: 12 }, (_, index) => ({ id: `part-${index}`, kind: "text",
       projection: "detail", text: `response-secret-${index}`, source: { message_sequence: index + 1,
-        item_id: `item-${index}`, item_sequence: index + 1, logical_item_ordinal: index, part_ordinal: 0 } })),
+        item_id: `item-${index}`, item_sequence: index + 1, logical_item_ordinal: index, } })),
   };
+  execution.response_items[1] = { ...execution.response_items[1], kind: "tool_result",
+    tool_call_id: "failed-call", tool_name: "read", status: "completed", tool_outcome: "failure",
+    result: "response-secret-1", completion_reason: "upstream_completed" };
   const page = { thread_id: THREAD_ID, source_view_id: "body-view", source_view_revision: 1,
     projection_epoch: 1, items: [], internal_executions: [execution], before_cursor: "older", has_before: true };
   const timeline = applyTurnHistoryPage(createSessionTurnTimeline(SCOPE_KEY), page);
   const store = (current: typeof timeline) => writeTurnTimelineCache(new Map(), SCOPE_KEY, current).get(SCOPE_KEY)!;
   const compacted = store({ ...timeline, bodyWindowTurnIds: [], bodyWindowExecutionItemIds: ["item-0"] });
   expect(compacted.orderedTurnIds).toEqual([]);
-  expect(compacted.internalExecutions[0].display_parts[0].text).toBe("display-secret-0");
-  expect(compacted.internalExecutions[0].display_parts[1].bodyEvicted).toBe(true);
-  expect(compacted.internalExecutions[0].response_parts[1].source.item_id).toBe("item-1");
+  expect(compacted.internalExecutions[0].display_items[0].text).toBe("display-secret-0");
+  expect(compacted.internalExecutions[0].display_items[1].bodyEvicted).toBe(true);
+  expect(compacted.internalExecutions[0].response_items[1].source.item_id).toBe("item-1");
+  expect(compacted.internalExecutions[0].response_items[1]).toMatchObject({
+    kind: "tool_result", status: "completed", tool_outcome: "failure", completion_reason: "upstream_completed",
+  });
+  const failedTool = responseItemsToTimelineItems(compacted.internalExecutions[0].response_items)
+    .find(item => item.kind === "aggregated_tool");
+  expect(failedTool).toMatchObject({ failed: true, active: false });
   expect(JSON.stringify(compacted)).not.toContain("secret-1");
   const restored = store(applyTurnHistoryPage({ ...compacted, bodyWindowExecutionItemIds: ["item-1"] },
     { ...page, before_cursor: null, has_before: false, internal_executions: [{ ...execution,
-      display_parts: [execution.display_parts[1]], response_parts: [execution.response_parts[1]] }] }, "details"));
+      display_items: [execution.display_items[1]], response_items: [execution.response_items[1]] }] }, "details"));
   expect(restored.beforeCursor).toBe("older");
   expect(restored.hasBefore).toBe(true);
-  expect(restored.internalExecutions[0].response_parts[1].text).toBe("response-secret-1");
-  expect(restored.internalExecutions[0].display_parts[0].bodyEvicted).toBe(true);
-  expect(restored.internalExecutions[0].display_parts[1].bodyEvicted).toBeUndefined();
+  expect(restored.internalExecutions[0].response_items[1].text).toBe("response-secret-1");
+  expect(restored.internalExecutions[0].display_items[0].bodyEvicted).toBe(true);
+  expect(restored.internalExecutions[0].display_items[1].bodyEvicted).toBeUndefined();
   const active = store({ ...timeline, bodyWindowTurnIds: [], bodyWindowExecutionItemIds: ["item-0"],
     internalExecutions: [{ ...execution, status: "unknown" }] });
-  expect(active.internalExecutions[0].display_parts.filter(part => !part.bodyEvicted).map(part => part.item_id))
+  expect(active.internalExecutions[0].display_items.filter(part => !part.bodyEvicted).map(part => part.item_id))
     .toEqual(["item-0", "item-10", "item-11"]);
-  expect(active.internalExecutions[0].response_parts[1].text).toBeUndefined();
+  expect(active.internalExecutions[0].response_items[1].text).toBeUndefined();
   const stale = applyTurnHistoryPage({ ...compacted, historyViewRevision: 2,
     loadingBefore: true, loadingAfter: true }, page, "details");
   expect(stale.error).toContain("正文补读未应用");
@@ -225,6 +235,26 @@ function bootstrap(latestTurn: TurnSummary, epoch = 1): SessionTurnBootstrap {
 }
 
 describe("Turn timeline revision 合并", () => {
+  test("常规同绑定summary接入执行终态并保留正文，换view不带入旧结果", () => {
+    const call: TurnResponseItem = { id: "call-a", kind: "tool_call", projection: "detail", status: "completed",
+      source: { message_sequence: 0, item_id: "a", model_call_id: "m" }, tool_call_id: "a", arguments: '{"path":"A"}' };
+    const tool_execution = { session_id: SESSION_ID, thread_id: THREAD_ID, turn_stream_id: "stream", tool_invocation_id: "inv",
+      tool_attempt_id: "attempt", tool_execution_id: "attempt", started_seq: 1, started_at: "2026-11-23T00:00:00Z",
+      execution_completed_at: "2026-11-23T00:00:01Z", status: "completed", outcome: "provider_error" };
+    const incoming = { ...summary("job_2", 2), response_items: [{ ...call, projection: "summary" as const,
+      arguments: null, tool_execution }] };
+    let timeline = upsertTurn(createSessionTurnTimeline(SCOPE_KEY), { ...detail("job_2", 2), response_items: [call] });
+    timeline = upsertTurn(timeline, incoming);
+    expect(timeline.turnsById.job_2.response_items?.[0]).toMatchObject({
+      projection: "detail", arguments: call.arguments, tool_execution,
+    });
+    timeline = upsertTurn(timeline, { ...incoming, response_items: [{ ...incoming.response_items[0]!, tool_execution: null }] });
+    expect(timeline.turnsById.job_2.response_items?.[0]?.tool_execution).toEqual(tool_execution);
+    timeline = upsertTurn(timeline, { ...incoming, source_view_id: "view_next", source_view_revision: 2,
+      response_items: [{ ...incoming.response_items[0]!, tool_execution: null }] });
+    expect(timeline.turnsById.job_2.response_items?.[0]).toMatchObject({ projection: "summary", arguments: null, tool_execution: null });
+  });
+
   test("同 revision 的不同读取快照整体替换，旧部件不借新 binding 展示", () => {
     const old = { ...detail("job_2", 2), final_response: "旧快照完整正文" };
     let timeline = upsertTurn(createSessionTurnTimeline(SCOPE_KEY), old);
@@ -536,8 +566,8 @@ describe("Turn timeline revision 合并", () => {
         status: "completed",
         created_at: "2026-07-28T00:00:01Z",
         updated_at: "2026-07-28T00:00:01Z",
-        display_parts: [],
-        response_parts: [],
+        display_items: [],
+        response_items: [],
       }],
       before_cursor: "older-internal",
       after_cursor: "newer-internal",
@@ -574,8 +604,8 @@ describe("Turn timeline revision 合并", () => {
       status,
       created_at: "2026-07-28T00:00:01Z",
       updated_at: "2026-07-28T00:00:02Z",
-      display_parts: [],
-      response_parts: [],
+      display_items: [],
+      response_items: [],
     });
     const page = (
       sourceViewId: string,
@@ -739,9 +769,9 @@ describe("Turn timeline revision 合并", () => {
   test("detail 的后端顺序和 identity 原样替换 summary，不按正文去重", () => {
     const summaryTurn = {
       ...summary("job_activity", 1),
-      response_parts: [
+      response_items: [
         {
-          part_id: "tool-call:5:0",
+          id: "tool-call:5:0",
           kind: "tool_call" as const,
           projection: "summary" as const,
           status: "completed" as const,
@@ -757,9 +787,9 @@ describe("Turn timeline revision 合并", () => {
     };
     const detailTurn = {
       ...detail("job_activity", 1),
-      response_parts: [
+      response_items: [
         {
-          part_id: "message:5:reasoning:0:0",
+          id: "message:5:reasoning:0:0",
           kind: "reasoning" as const,
           projection: "detail" as const,
           status: "completed" as const,
@@ -767,7 +797,7 @@ describe("Turn timeline revision 合并", () => {
           text: "执行工具",
         },
         {
-          part_id: "tool-call:5:0",
+          id: "tool-call:5:0",
           kind: "tool_call" as const,
           projection: "detail" as const,
           status: "completed" as const,
@@ -781,7 +811,7 @@ describe("Turn timeline revision 合并", () => {
           arguments: '{"path":"README.md"}',
         },
         {
-          part_id: "message:7:reasoning:0:0",
+          id: "message:7:reasoning:0:0",
           kind: "reasoning" as const,
           projection: "detail" as const,
           status: "completed" as const,
@@ -789,7 +819,7 @@ describe("Turn timeline revision 合并", () => {
           text: "确认结果",
         },
         {
-          part_id: "message:8:reasoning:0:0",
+          id: "message:8:reasoning:0:0",
           kind: "reasoning" as const,
           projection: "detail" as const,
           status: "completed" as const,
@@ -801,7 +831,7 @@ describe("Turn timeline revision 合并", () => {
 
     let timeline = upsertTurn(createSessionTurnTimeline(SCOPE_KEY), summaryTurn);
     timeline = upsertTurn(timeline, detailTurn);
-    const merged = timeline.turnsById.job_activity.response_parts ?? [];
+    const merged = timeline.turnsById.job_activity.response_items ?? [];
 
     expect(merged.map((part) => part.kind)).toEqual([
       "reasoning",
@@ -815,9 +845,9 @@ describe("Turn timeline revision 合并", () => {
   test("定点工具详情补丁不丢失同一 Turn 的其他部件", () => {
     const fullTurn = {
       ...detail("job_tool_patch", 1),
-      response_parts: [
+      response_items: [
         {
-          part_id: "reasoning:1",
+          id: "reasoning:1",
           kind: "reasoning" as const,
           projection: "detail" as const,
           status: "completed" as const,
@@ -825,7 +855,7 @@ describe("Turn timeline revision 合并", () => {
           text: "分析命令",
         },
         {
-          part_id: "tool-call:1",
+          id: "tool-call:1",
           kind: "tool_call" as const,
           projection: "summary" as const,
           status: "completed" as const,
@@ -835,7 +865,7 @@ describe("Turn timeline revision 合并", () => {
           arguments: null,
         },
         {
-          part_id: "final:1",
+          id: "final:1",
           kind: "final_text" as const,
           projection: "detail" as const,
           status: "completed" as const,
@@ -848,9 +878,9 @@ describe("Turn timeline revision 合并", () => {
     // 定点工具请求只返回被请求的工具部件（携带完整参数）。
     const pointPatchTurn = {
       ...detail("job_tool_patch", 1),
-      response_parts: [
+      response_items: [
         {
-          part_id: "tool-call:1",
+          id: "tool-call:1",
           kind: "tool_call" as const,
           projection: "detail" as const,
           status: "completed" as const,
@@ -864,14 +894,14 @@ describe("Turn timeline revision 合并", () => {
 
     let timeline = upsertTurn(createSessionTurnTimeline(SCOPE_KEY), fullTurn);
     timeline = upsertTurn(timeline, pointPatchTurn);
-    const merged = timeline.turnsById.job_tool_patch.response_parts ?? [];
+    const merged = timeline.turnsById.job_tool_patch.response_items ?? [];
 
-    expect(merged.map((part) => part.part_id)).toEqual([
+    expect(merged.map((part) => part.id)).toEqual([
       "reasoning:1",
       "tool-call:1",
       "final:1",
     ]);
-    const toolPart = merged.find((part) => part.part_id === "tool-call:1");
+    const toolPart = merged.find((part) => part.id === "tool-call:1");
     expect(toolPart?.arguments).toBe('{"cmd":"pwd"}');
     expect(toolPart?.projection).toBe("detail");
   });
@@ -1062,8 +1092,8 @@ describe("Turn timeline revision 合并", () => {
       logicalItemOrdinal: number,
       text: string,
       projection: "summary" | "detail",
-    ): InternalExecutionHistory["response_parts"][number] => ({
-      part_id: `${itemId}:part:0`,
+    ): InternalExecutionHistory["response_items"][number] => ({
+      id: `${itemId}:part:0`,
       kind: "text",
       projection,
       status: "completed",
@@ -1072,7 +1102,6 @@ describe("Turn timeline revision 合并", () => {
         item_id: itemId,
         item_sequence: itemSequence,
         logical_item_ordinal: logicalItemOrdinal,
-        part_ordinal: 0,
         created_at: "2026-07-28T00:00:01Z",
       },
       text,
@@ -1083,7 +1112,7 @@ describe("Turn timeline revision 合并", () => {
       status: InternalExecutionHistory["status"],
       itemSequence: number,
       logicalItemOrdinal: number,
-      responseParts: InternalExecutionHistory["response_parts"] = [],
+      responseItems: InternalExecutionHistory["response_items"] = [],
     ): InternalExecutionHistory => ({
       execution_id: executionId,
       job_id: `job-${executionId}`,
@@ -1092,8 +1121,8 @@ describe("Turn timeline revision 合并", () => {
       status,
       created_at: createdAt,
       updated_at: createdAt,
-      response_parts: responseParts,
-      display_parts: [
+      response_items: responseItems,
+      display_items: [
         {
           kind: "generated_session_result",
           text: "子任务已完成。",
@@ -1156,11 +1185,11 @@ describe("Turn timeline revision 合并", () => {
       ({ execution_id }) => execution_id === "execution-2",
     );
     expect(execution2?.status).toBe("completed");
-    expect(execution2?.display_parts.map(({ logical_item_ordinal }) => logical_item_ordinal))
+    expect(execution2?.display_items.map(({ logical_item_ordinal }) => logical_item_ordinal))
       .toEqual([40, 80]);
-    expect(execution2?.response_parts.map(({ part_id }) => part_id))
+    expect(execution2?.response_items.map(({ id }) => id))
       .toEqual(["tool-2:part:0", "output-2:part:0"]);
-    expect(execution2?.response_parts[1]?.text).toBe("补全后的文本");
+    expect(execution2?.response_items[1]?.text).toBe("补全后的文本");
   });
 
   test("重页 display identity 的物理坐标变化明确报 projection integrity", () => {
@@ -1172,7 +1201,7 @@ describe("Turn timeline revision 合并", () => {
       status: "completed",
       created_at: "2026-07-28T00:00:01Z",
       updated_at: "2026-07-28T00:00:01Z",
-      display_parts: [{
+      display_items: [{
         kind: "generated_session_result",
         text: "子任务已完成。",
         item_id: "item-display-1",
@@ -1181,7 +1210,7 @@ describe("Turn timeline revision 合并", () => {
         created_at: "2026-07-28T00:00:01Z",
         provenance: {},
       }],
-      response_parts: [],
+      response_items: [],
     };
     const timeline = applyTurnHistoryPage(
       createSessionTurnTimeline(SCOPE_KEY),
@@ -1202,7 +1231,7 @@ describe("Turn timeline revision 合并", () => {
         items: [],
         internal_executions: [{
           ...execution,
-          display_parts: [{ ...execution.display_parts[0], item_sequence: 11 }],
+          display_items: [{ ...execution.display_items[0], item_sequence: 11 }],
         }],
         thread_id: "thr_main",
         source_view_id: "view_history_fixture",
@@ -1214,8 +1243,8 @@ describe("Turn timeline revision 合并", () => {
   });
 
   test("重页 response part 的 membership 坐标变化明确报 projection integrity", () => {
-    const responsePart: InternalExecutionHistory["response_parts"][number] = {
-      part_id: "part-1",
+    const responsePart: InternalExecutionHistory["response_items"][number] = {
+      id: "part-1",
       kind: "text",
       projection: "summary",
       status: "completed",
@@ -1224,7 +1253,6 @@ describe("Turn timeline revision 合并", () => {
         item_id: "item-response-1",
         item_sequence: 10,
         logical_item_ordinal: 20,
-        part_ordinal: 0,
         created_at: "2026-07-28T00:00:01Z",
       },
       text: "输出",
@@ -1237,8 +1265,8 @@ describe("Turn timeline revision 合并", () => {
       status: "completed",
       created_at: "2026-07-28T00:00:01Z",
       updated_at: "2026-07-28T00:00:01Z",
-      display_parts: [],
-      response_parts: [responsePart],
+      display_items: [],
+      response_items: [responsePart],
     };
     const timeline = applyTurnHistoryPage(
       createSessionTurnTimeline(SCOPE_KEY),
@@ -1259,7 +1287,7 @@ describe("Turn timeline revision 合并", () => {
         items: [],
         internal_executions: [{
           ...execution,
-          response_parts: [{
+          response_items: [{
             ...responsePart,
             source: { ...responsePart.source, item_sequence: 11 },
           }],
@@ -1315,36 +1343,36 @@ describe("Turn timeline revision 合并", () => {
 });
 
 test("上下文续页合并元数据且不改变正文、统计或 Turn 游标", () => {
-  const marker: TurnResponsePart = { kind: "context_notice", part_id: "context-1", projection: "summary",
+  const marker: TurnResponseItem = { kind: "context_notice", id: "context-1", projection: "summary",
     source: { message_sequence: 0 }, context_content_ref: { kind: "item", item_id: "notice-1" },
     context_anchor: "before_user_message", context_cursor: "context-next" };
-  const first = { ...detail("turn-context", 1), response_parts: [marker] };
-  const short = { ...summary("turn-context", 1), response_parts: [marker] };
+  const first = { ...detail("turn-context", 1), response_items: [marker] };
+  const short = { ...summary("turn-context", 1), response_items: [marker] };
   const timeline = applyTurnHistoryPage({ ...createSessionTurnTimeline(SCOPE_KEY), threadId: THREAD_ID }, {
     thread_id: THREAD_ID, source_view_id: "view_history_fixture", source_view_revision: 1,
     items: [first], summaries: [short], projection_epoch: 1, before_cursor: "turn-before", has_before: true,
   }, "before");
-  const extra = { ...marker, part_id: "context-2", context_cursor: null };
+  const extra = { ...marker, id: "context-2", context_cursor: null };
   const page = { thread_id: THREAD_ID, source_view_id: "view_history_fixture", source_view_revision: 1,
-    items: [], projection_epoch: 1, context_notices: [{ owner_id: first.turn_id, owner_kind: "turn", parts: [extra] }] };
+    items: [], projection_epoch: 1, context_notices: [{ owner_id: first.turn_id, owner_kind: "turn", items: [extra] }] };
   const next = applyContextNoticePage(timeline, page, "context-next");
-  expect(next.turnsById[first.turn_id].response_parts?.map(part => part.part_id)).toEqual(["context-1", "context-2"]);
-  expect(next.summaryTurnsById[first.turn_id].response_parts?.map(part => part.part_id)).toEqual(["context-1", "context-2"]);
-  expect(next.turnsById[first.turn_id].response_parts?.[0].context_cursor).toBeNull();
+  expect(next.turnsById[first.turn_id].response_items?.map(part => part.id)).toEqual(["context-1", "context-2"]);
+  expect(next.summaryTurnsById[first.turn_id].response_items?.map(part => part.id)).toEqual(["context-1", "context-2"]);
+  expect(next.turnsById[first.turn_id].response_items?.[0].context_cursor).toBeNull();
   expect(next.beforeCursor).toBe(timeline.beforeCursor);
   expect(next.hasBefore).toBe(true);
   expect(next.orderedTurnIds).toEqual(timeline.orderedTurnIds);
   expect(next.turnsById[first.turn_id].revision).toBe(first.revision);
   expect(next.turnsById[first.turn_id].activity_stats).toBe(first.activity_stats);
-  expect(applyContextNoticePage(next, page, "context-next").turnsById[first.turn_id].response_parts).toHaveLength(2);
+  expect(applyContextNoticePage(next, page, "context-next").turnsById[first.turn_id].response_items).toHaveLength(2);
   const refreshed = applyTurnHistoryPage(next, {thread_id:THREAD_ID,source_view_id:"view_history_fixture",source_view_revision:1,
-    items:[{...first,response_parts:[marker,{part_id:"new-body",kind:"text",projection:"detail",text:"新读取的正文",
+    items:[{...first,response_items:[marker,{id:"new-body",kind:"text",projection:"detail",text:"新读取的正文",
       source:{message_sequence:1,item_id:"body-item",item_sequence:1,created_at:"2026-11-23T00:00:00Z"}}]}],
     summaries:[short],projection_epoch:1},"details");
-  expect(refreshed.turnsById[first.turn_id].response_parts?.map(part => part.part_id)).toContain(extra.part_id);
-  expect(refreshed.summaryTurnsById[first.turn_id].response_parts?.map(part => part.part_id)).toContain(extra.part_id);
-  const changed = {...first,source_view_revision:2,response_parts:[marker]};
+  expect(refreshed.turnsById[first.turn_id].response_items?.map(part => part.id)).toContain(extra.id);
+  expect(refreshed.summaryTurnsById[first.turn_id].response_items?.map(part => part.id)).toContain(extra.id);
+  const changed = {...first,source_view_revision:2,response_items:[marker]};
   const replaced = applyTurnHistoryPage(refreshed,{...page,source_view_revision:2,items:[changed]},"details");
-  expect(replaced.turnsById[first.turn_id].response_parts?.map(part => part.part_id)).not.toContain(extra.part_id);
+  expect(replaced.turnsById[first.turn_id].response_items?.map(part => part.id)).not.toContain(extra.id);
   expect(() => applyContextNoticePage(next, { ...page, thread_id: "other-thread" }, "context-next")).toThrow();
 });

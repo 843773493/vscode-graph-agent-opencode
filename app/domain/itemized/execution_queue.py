@@ -50,7 +50,7 @@ class ExecutionQueueInput:
         if not isinstance(self.execution_binding, (UserExecutionIdentity, InternalExecutionIntent)):
             raise TypeError("队列输入必须携带完整 execution binding")
         if (isinstance(self.execution_binding, InternalExecutionIntent)
-                and self.execution_binding.compaction_reference is not None):
+                and self.execution_binding.derived_reference is not None):
             raise ValueError("摘要派生 execution 不得进入普通 Agent Job 队列")
         for name in ("message_id", "agent_id", "created_at"):
             value = getattr(self, name)

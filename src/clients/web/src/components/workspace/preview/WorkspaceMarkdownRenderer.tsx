@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -57,7 +58,7 @@ export default function WorkspaceMarkdownRenderer({
   }, [fragment, content]);
   return (
     <div ref={root} className="workspace-markdown-document">
-    {anchorError ? <div role="alert">{anchorError}</div> : null}
+    {anchorError ? <div className="failure-summary" role="alert">{failureSummary(anchorError)}</div> : null}
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       rehypePlugins={[[rehypeSanitize, workspaceSchema], rehypeSlug]}

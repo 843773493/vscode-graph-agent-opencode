@@ -138,7 +138,7 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
     frozen = case.saver.accepted_internal_message(
         owner.session_id, thread_id=owner.thread_id, job_id=job_id,
         message_id=message.message_id, intent=intent,
-    )
+    )[1]
     assert frozen.content == prepared.content
     assert frozen.response_metadata["attachments"] == list(payload.attachments)
     assert frozen.response_metadata["attachment_blocks"] == list(payload.attachment_blocks)
@@ -175,7 +175,7 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
         assert cold.accepted_internal_message(
             owner.session_id, thread_id=owner.thread_id, job_id=job_id,
             message_id=message.message_id, intent=intent,
-        ) == frozen
+        )[1] == frozen
         admission = cold.execution_admission_for_job(owner.session_id, thread_id=owner.thread_id, job_id=job_id)
         manager = ContextSourceManager(owner=ContextSourceOwnerKey(owner.session_id, owner.thread_id), control_state_port=cold)
         key = f"internal-attachment:{target_format}"
@@ -243,7 +243,7 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
         assert private not in history.model_dump_json()
         assert "data:image/" not in history.model_dump_json()
         if kind == "generated_session_result":
-            assert [part.item_id for execution in history.internal_executions for part in execution.display_parts] == [notice.item_id]
+            assert [part.item_id for execution in history.internal_executions for part in execution.display_items] == [notice.item_id]
         if media_type == "image/png":
             without_vision = project_user_message_content(
                 result["messages"][-1].content, target_format=target_format, image_input=False,
@@ -411,7 +411,7 @@ async def test_message_http_retry_accepts_same_attachment_after_failed_upload(
         frozen = case.saver.accepted_user_message(
             session_id, thread_id=thread_id,
             job_id=accepted["job_id"], message_id=accepted["message_id"],
-        )
+        )[1]
         (attachment,) = frozen.response_metadata["attachments"]
         assert "data_url" not in attachment
         assert case.store.read(session_id, attachment["file_id"], owner_thread_id=thread_id).data == body
@@ -421,7 +421,7 @@ async def test_message_http_retry_accepts_same_attachment_after_failed_upload(
             assert cold.accepted_user_message(
                 session_id, thread_id=thread_id,
                 job_id=accepted["job_id"], message_id=accepted["message_id"],
-            ) == frozen
+            )[1] == frozen
 
 
 @pytest.mark.asyncio
@@ -471,7 +471,7 @@ async def test_thread_delete_drains_message_before_releasing_real_attachment(
         canonical = case.saver.accepted_user_message(
             session_id, thread_id=thread_id,
             job_id=execution_identity.job_id, message_id=message.message_id,
-        )
+        )[1]
         data = case.store.read(session_id, message.attachments[0].file_id).data
         accepted.append((message, canonical, data))
         return record
@@ -570,7 +570,7 @@ async def test_native_attachment_ingress_freezes_one_uri_for_dispatch_and_cold_h
         frozen = case.saver.accepted_user_message(
             case.owner.session_id, thread_id=case.owner.thread_id,
             job_id=accepted.job_id, message_id=prepared.message_id,
-        )
+        )[1]
         assert frozen.content[0] == {"type": "text", "text": text}
         generated = frozen.content[1:]
         assert generated[0]["metadata"]["file_id"] == expected_uri
@@ -583,7 +583,7 @@ async def test_native_attachment_ingress_freezes_one_uri_for_dispatch_and_cold_h
             restored = cold.accepted_user_message(
                 case.owner.session_id, thread_id=case.owner.thread_id,
                 job_id=accepted.job_id, message_id=prepared.message_id,
-            )
+            )[1]
             assert restored == frozen
     finally:
         reset_current_gateway_id(token)

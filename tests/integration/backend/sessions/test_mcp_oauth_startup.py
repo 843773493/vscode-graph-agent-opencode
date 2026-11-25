@@ -28,10 +28,10 @@ async def test_first_oauth_startup_keeps_sibling_and_status_api_available(
     case = recovery_case
     async with oauth_endpoint_factory() as secure, http_schema_endpoint_factory("sibling") as sibling:
         path = case.mount.workspace_root / ".boxteam/workspace.jsonc"
-        path.write_text(json.dumps({"mcp": {"servers": {
+        path.write_text(json.dumps({"config_version": 4, "extends": "builtin:workspace", "settings": {"workspace": {"mcp": {"servers": {
             "schema": {"enabled": True, "transport": "streamable_http", "url": sibling.url},
             "secure": secure.configuration(),
-        }}}), encoding="utf-8")
+        }}}}}), encoding="utf-8")
         async with case.process("recover") as (process, reports, base_url):
             startup = await ready(process, reports)
             assert startup["catalog_status"] == "available"

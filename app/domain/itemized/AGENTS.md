@@ -1,6 +1,6 @@
 # 目录用途
 
-`app/domain/itemized/` 是 v2 item、ContextRef、ToolSetRef、selection、hash 和 provenance 合同的领域 owner。
+`app/domain/itemized/` 是 canonical Item、ContextRef、ToolSetRef、selection、hash 和 provenance 合同的领域 owner；Item 格式版本由现行 schema 登记，不以目录旧称代替版本合同。
 
 子包按族划分：`hash/` 承载 plan/request 规范哈希投影，`identity/` 承载 ContextRef/ToolSetRef、
 DetailRef 与 provider 工具调用身份，`epoch/` 承载 prefix epoch/stable-prefix 状态机与新 epoch
@@ -9,10 +9,10 @@ root 编译，`serde/` 承载 registry 与 plan/assembly 序列化边界，
 
 # 可修改内容
 
-- 可以维护 v2 schema、枚举、JCS hash、不可变引用和 selection 校验。
+- 可以维护现行 schema、枚举、JCS hash、不可变引用和 selection 校验。
 - 可以维护 `hash/hash_projection.py` 中供 plan/request hash 共用的唯一哈希范围投影。
 - 可以维护 `epoch/prefix_epoch.py` 的 epoch 状态机与 `epoch/root_compilation.py` 的 root 投影。
-- 可以维护 content part 与 Turn/Execution identity 的纯值对象。
+- 可以维护独立语义 Item 与 Turn/Execution identity 的纯值对象；Provider block 来源仅用于协议还原，不新增通用 Part 定位身份。
 
 # 不可修改内容
 

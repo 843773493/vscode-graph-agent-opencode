@@ -15,7 +15,6 @@ from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 
 from app.abstractions.job_executor import JobRuntimeStateProtocol
 from app.abstractions.session_context import AgentContextState
-from app.agents.summarization.projection import apply_summarization_event
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
 from app.core.session_thread_context import session_thread_owner_scope
@@ -63,6 +62,7 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.message_channe
     acheckpoint_messages,
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    canonical_message_anchor,
     message_annotations,
 )
 from app.services.mapping.agent_state_messages import project_agent_state_records
@@ -251,10 +251,7 @@ class MessageService:
             raise RuntimeError("MessageService 缺少 Job input owner")
         binding = job.execution_binding
         if isinstance(binding, UserExecutionIdentity):
-            admission = saver.execution_admission_for_job(
-                job.session_id, thread_id=job.thread_id, job_id=job.job_id,
-            )
-            frozen = saver.accepted_user_message(
+            admission, frozen = saver.accepted_user_message(
                 job.session_id, thread_id=job.thread_id,
                 job_id=job.job_id, message_id=job.message_id,
             )
@@ -270,7 +267,7 @@ class MessageService:
             return saver.execution_queue_record(job.session_id, job.thread_id, job.job_id)
         if not isinstance(binding, InternalExecutionIntent):
             raise TypeError("Job input owner 只接受 typed execution binding")
-        if binding.compaction_reference is not None:
+        if binding.derived_reference is not None:
             raise ValueError("摘要派生 execution 不得作为普通 Agent Job 提交")
         if binding.input_reference_json is not None and job.attachments:
             raise ValueError("seed/reference 准入不得携带未登记的附件")
@@ -315,38 +312,25 @@ class MessageService:
         if saver is None:
             raise RuntimeError("MessageService 缺少 canonical input reader")
         binding = reference.execution_binding
-        admission = saver.execution_admission_for_job(
-            reference.session_id, thread_id=reference.thread_id, job_id=reference.job_id,
-        )
-        if (admission.admission_idempotency_key != binding.admission_idempotency_key
-                or admission.turn_id != reference.turn_id):
-            raise ValueError("待处理队列引用与权威 admission 不一致")
         if isinstance(binding, UserExecutionIdentity):
-            human = saver.accepted_user_message(
+            admission, human = saver.accepted_user_message(
                 reference.session_id, thread_id=reference.thread_id,
                 job_id=reference.job_id, message_id=reference.message_id,
             )
         else:
-            human = saver.accepted_internal_message(
+            admission, human = saver.accepted_internal_message(
                 reference.session_id, thread_id=reference.thread_id,
                 job_id=reference.job_id, message_id=reference.message_id, intent=binding,
             )
+        if (admission.admission_idempotency_key != binding.admission_idempotency_key
+                or admission.turn_id != reference.turn_id):
+            raise ValueError("待处理队列引用与权威 admission 不一致")
         dto = checkpoint_message_to_dto(reference.session_id, reference.thread_id, 0, human)
         if display or isinstance(binding, UserExecutionIdentity):
             return dto
         if not isinstance(human.content, str):
             raise TypeError("冻结内部输入必须投影为文本")
         return dto.model_copy(update={"content": human.content, "metadata": dict(human.response_metadata)})
-
-    def accepted_job_outcome(self, reference: PendingRequestControl) -> str:
-        """恢复只消费 canonical execution 终态，队列文件不维护第二套撤回状态。"""
-        self.accepted_job_message(reference, display=False)
-        admission = self._checkpointer.execution_admission_for_job(
-            reference.session_id, thread_id=reference.thread_id, job_id=reference.job_id,
-        )
-        return self._checkpointer.runtime_execution_outcome(
-            reference.session_id, reference.thread_id, admission.execution_id,
-        )
 
     async def list_agent_state_records(
         self,
@@ -370,7 +354,7 @@ class MessageService:
     async def get_agent_context_state(
         self, session_id: str, thread_id: str
     ) -> AgentContextState:
-        """读取应用压缩事件后，模型当前实际使用的消息上下文。"""
+        """读取 Saver 已提交的唯一消息选择，不再二次解释数组 offset。"""
         if self._checkpointer is None:
             raise RuntimeError("MessageService 未配置 checkpointer，无法读取 Agent Context")
 
@@ -397,35 +381,24 @@ class MessageService:
                 f"Agent Context messages 应为 list，实际类型: {type(raw_messages).__name__}"
             )
 
-        event = channel_values.get("_summarization_event")
-        compacted = event is not None
-        compaction_cutoff: int | None = None
-        effective_messages = list(raw_messages)
-        if event is not None:
-            if not isinstance(event, Mapping):
-                raise TypeError(
-                    "_summarization_event 应为 mapping，"
-                    f"实际类型: {type(event).__name__}"
-                )
-            summary_message = event.get("summary_message")
-            compaction_cutoff = event.get("cutoff_index")
-            if not isinstance(compaction_cutoff, int) or compaction_cutoff < 0:
-                raise TypeError(
-                    "_summarization_event.cutoff_index 应为非负整数，"
-                    f"实际值: {compaction_cutoff!r}"
-                )
-            if summary_message is None:
-                raise ValueError("_summarization_event 缺少 summary_message")
-            effective_messages = apply_summarization_event(raw_messages, event)
-
-        records = await run_sync_shielded(project_agent_state_records, effective_messages, context_name="Agent Context")
+        compacted = any(getattr(message, "response_metadata", {}).get("compaction_summary") is True for message in raw_messages)
+        raw_count: int | None = len(raw_messages)
+        if compacted:
+            count_original = getattr(self._checkpointer, "raw_message_count", None)
+            if not callable(count_original):
+                raise TypeError("MessageService 缺少 canonical 原消息计数 owner")
+            anchors = tuple(canonical_message_anchor(message) for message in raw_messages)
+            if any(anchor is None for anchor in anchors):
+                raise ValueError("compaction-source-unavailable: 消息投影缺少精确 canonical anchor")
+            raw_count = await run_sync_shielded(count_original, session_id, thread_id, item_ids=anchors)
+        records = await run_sync_shielded(project_agent_state_records, raw_messages, context_name="Agent Context")
 
         return {
             "records": records,
             "checkpoint_id": str(checkpoint.get("id") or ""),
-            "raw_message_count": len(raw_messages),
+            "raw_message_count": raw_count,
             "compacted": compacted,
-            "compaction_cutoff": compaction_cutoff,
+            "compaction_cutoff": None,
         }
 
     async def get_agent_state_messages(self, session_id: str) -> AgentStateMessagesDTO:

@@ -1,7 +1,6 @@
 """SDK错误callback关闭原展示活动，真实ToolMessage独占结果正文。"""
 
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -33,9 +32,12 @@ async def test_tool_error_closes_activity_without_fabricating_a_result(
     workspace_root: Path, tool_name: str, metadata: dict[str, object], kind: str,
     native_path: str, caplog: pytest.LogCaptureFixture,
     sink_fails: bool, diagnostic_sink: DiagnosticFailure,
+    stream_writer, tool_result_sink: AsyncMock,
 ) -> None:
-    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_tool_error")
-    runtime = MessageStreamRuntime(writer)
+    writer = stream_writer(turn_stream_id="stream_tool_error")
+    runtime = MessageStreamRuntime(
+        writer, canonical_item_sink=AsyncMock(), tool_result_sink=tool_result_sink,
+    )
     await runtime.start_model("model_error", "primary")
     await runtime.accept_message_chunk(AIMessageChunk(content="", tool_call_chunks=[{
         "index": 0, "id": "call_invalid", "name": tool_name, "args": '{"invalid":true}',
@@ -88,3 +90,11 @@ async def test_tool_error_closes_activity_without_fabricating_a_result(
     results = [call.args[1] for call in writer.commit.await_args_list if call.args[0] == "tool.completed"]
     assert len(results) == 1 and results[0]["result"] == message.content
     assert results[0]["tool_execution_id"] == "run_invalid" and results[0]["status"] == "failed"
+    tool_result_sink.assert_awaited_once()
+    completion = tool_result_sink.await_args.args[0]
+    assert completion.content == message.content and completion.tool_outcome == "failure"
+    evidence = completion.tool_execution
+    assert evidence is not None
+    assert (evidence.tool_execution_id, evidence.tool_attempt_id, evidence.turn_stream_id) == (
+        "run_invalid", "run_invalid", writer.turn_stream_id,
+    )

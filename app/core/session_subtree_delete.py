@@ -11,8 +11,8 @@
    逻辑可见性关闭点**，「正常导航/业务 reader 不得看到部分子树仍
    active」由该事务原子性保证）→ 出 gate。
 2. **drain（逐 session 按冻结顺序）**：对每个未记录进度的 session，先在
-   对应 ``SessionLifecycleGate`` exclusive 临界区内执行已绑定的运行时与
-   外部资源复合 drain 回调，再 CAS 关闭其 session-control fence（``(active, 1)`` →
+   Session gate 外执行已绑定的运行时与外部资源复合 drain 回调，再在
+   对应 ``SessionLifecycleGate`` exclusive 内 CAS 关闭其 session-control fence（``(active, 1)`` →
    ``(deleting, 2)``；已 deleting 幂等跳过；generation 不符 fail
    closed），再把日期桶目录原子 rename 到
    ``sessions_root/.deleting/<idempotency_key>/<session_id>/`` 并做目录
@@ -40,8 +40,8 @@
   （对齐 app/core/AGENTS.md「不得扫描磁盘并静默吸收改动」）。
 - **排空与跨进程锁**：topology/lifecycle gate 使用稳定 inode 的 OS 文件锁。
   catalog deleting 先拒绝新准入；drain 在 gate 外结算 retention/creation，
-  等旧 operation holder 退出，再取得单个 Session exclusive gate 等待读者
-  释放并执行资源排空、fence CAS 与目录隔离，不持等待者结算所需的 gate。
+  等旧 operation holder 退出并排空资源，再取得单个 Session exclusive gate
+  等待读者释放并执行 fence CAS 与目录隔离，不持等待者结算所需的 gate。
   **8.1-D**：整树 catalog
   deleting 提交前的 pinned ``ForkRetentionClaim`` 预检已落在
   ``SessionCatalogStore.mark_subtree_deleting`` 的单写事务内——冻结集合
@@ -140,7 +140,7 @@ class SessionSubtreeDeleteService:
        reason，换新 key 重试）；``preparing`` → 重入从 mark 继续；
        ``deleting``/``draining`` → 重入从 drain 继续。
     2. drain：对冻结集合内每个 session（folder 跳过——无物理目录）按冻结
-       顺序在 SessionLifecycleGate exclusive 临界区内执行运行时排空 →
+       顺序在 Session gate 外排空运行时，再在 exclusive 临界区内执行
        fence CAS → rename 隔离 → durability barrier → 进度记录；已在
        ``drained_session_ids`` → 跳过。
     3. gate exclusive 内 ``finish_subtree_delete``（全树 tombstone）→
@@ -222,8 +222,8 @@ class SessionSubtreeDeleteService:
         """绑定删除前的 Session 运行时与资源复合排空回调。
 
         回调属于共享删除协议的一部分，调用方负责在一个显式回调中按
-        固定顺序收敛各类 owner；它必须在对应
-        :class:`SessionLifecycleGate` exclusive 临界区内完成，且抛错时
+        固定顺序收敛各类 owner；回调在 Session gate 外执行，短写由各
+        owner 显式取得原 gate，不能持有等待者结算所需的 gate；抛错时
         删除流立即停止，绝不能继续 fence、物理隔离或 finish。生产装配
         在 NodeDebugService 与 SessionResourceService 都创建后绑定；未
         绑定时仅用于没有运行时/资源服务的低层存储测试。
@@ -452,8 +452,8 @@ class SessionSubtreeDeleteService:
         按冻结顺序（node_id 排序）遍历冻结 session 集合；folder 跳过
         （无物理目录，由 finish 的行删除承担）；已在
         ``drained_session_ids`` 的 session 跳过（崩溃重入定点继续）。
-        每个 session 在 SessionLifecycleGate exclusive 内完成复合资源回调、
-        lease 收敛与隔离（2.3-D：删除等待原 reader/收敛旧 lease 后才隔离目录）。
+        catalog deleting 先关闭准入，复合资源回调在 Session gate 外排空；
+        再在 exclusive 内收敛 fence 与隔离，等待原 reader 后才搬移目录。
         """
         for session_id in sorted(record.frozen_session_locators):
             if session_id in record.drained_session_ids:
@@ -518,12 +518,16 @@ class SessionSubtreeDeleteService:
                 # 结算；删除等待期间绝不持有它需要的 publish/write gate。
                 for holder in self._session_drain_holders:
                     await drain_scope.enter_async_context(holder.lock_for(session_id))
-                await drain_scope.enter_async_context(self._session_gate.exclusive(session_id))
+                # 先等已准入 reader 退出；catalog deleting 已拒绝后续 reader。
+                # 随后释放短 gate，让排空回调内的原操作能够取得它结算。
+                async with self._session_gate.exclusive(session_id):
+                    pass
                 # 复合资源回调必须先于 fence CAS 与物理 rename。回调失败时
                 # 保留源目录与 catalog deleting 状态，供同一 record 定点
                 # 重试；不得制造"目录已删但进程/claim 未收敛"的伪成功。
                 if self._session_drain_callback is not None:
                     await self._session_drain_callback(session_id)
+                await drain_scope.enter_async_context(self._session_gate.exclusive(session_id))
                 await self._drain_session(
                     idempotency_key=idempotency_key,
                     session_id=session_id,

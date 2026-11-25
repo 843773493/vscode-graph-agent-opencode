@@ -1,10 +1,10 @@
 # 目录用途
 
-`checkpoint/` 负责 v2 checkpoint persistence、view projection、fork 和 compaction adapter。
+`checkpoint/` 负责当前 canonical checkpoint persistence、view projection、fork 和 compaction adapter。
 
 # 可修改内容
 
-- 可以实现 checkpoint/view/branch 的 v2 adapter 和已提交 item anchor 操作。
+- 可以实现 checkpoint/view/branch 的 adapter 和已提交 Item anchor 操作。
 - 可以调用 rollout storage 与 domain identity。
 
 # 不可修改内容

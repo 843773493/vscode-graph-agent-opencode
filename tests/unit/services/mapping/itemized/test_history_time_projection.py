@@ -20,7 +20,7 @@ def history_projection() -> dict[str, object]:
         "created_at": "2026-10-04T12:00:00.123456+02:00",
         "user_created_at": "2026-10-04T12:00:00.123456+02:00",
         "updated_at": "2026-10-04T12:00:02.124456+02:00",
-        "activity_stats": {"item_count": 2, "first_item_sequence": 1, "last_item_sequence": 2},
+        "activity_stats": {"duration_ms": 9137, "item_count": 2, "first_item_sequence": 1, "last_item_sequence": 2},
     }
 
 
@@ -58,7 +58,7 @@ def test_detail_and_summary_keep_message_offset_and_projection_clock(
     assert detail.updated_at.utcoffset() == timedelta(hours=2)
     assert detail.completed_at == detail.updated_at
     assert detail.status == "running"
-    assert detail.activity_stats.duration_ms == 2001
+    assert detail.activity_stats.duration_ms == 9137
     projected = summary(detail)
     assert projected.created_at == detail.created_at
     assert projected.updated_at == detail.updated_at
@@ -111,7 +111,7 @@ def test_metadata_only_history_uses_projection_clock_and_keeps_source_text(
     assert detail.created_at.utcoffset() == timedelta(hours=2)
     assert detail.created_at.microsecond == 123456
     assert detail.updated_at == datetime.fromisoformat(str(original["updated_at"]))
-    assert detail.activity_stats.duration_ms == 2001
+    assert detail.activity_stats.duration_ms == 9137
     assert detail.user_messages == []
     assert history_projection == original
 
@@ -131,7 +131,7 @@ def test_rootless_history_keeps_frozen_turn_start_in_detail_and_summary(
     assert detail.created_at.microsecond == 121838
     assert detail.user_messages == []
     assert detail.assistant_text == ["压缩后仍保留的回答"]
-    assert detail.activity_stats.duration_ms == 2001
+    assert detail.activity_stats.duration_ms == 9137
     assert detail.updated_at == datetime.fromisoformat(str(original["updated_at"]))
     assert detail.completed_at == detail.updated_at
     projected = summary(detail)
@@ -165,11 +165,10 @@ def test_history_duration_rejects_projection_time_going_backwards(
     assert history_projection == original
 
 
-@pytest.mark.parametrize("microseconds", [0, 1, 2001])
-def test_history_duration_keeps_valid_zero_and_millisecond_precision(
-    history_detail, history_projection: dict[str, object], microseconds: int,
+@pytest.mark.parametrize("duration", [None, 0, 2])
+def test_history_keeps_owner_duration_including_unavailable_and_zero(
+    history_detail, history_projection: dict[str, object], duration: int | None,
 ) -> None:
-    start = datetime.fromisoformat(str(history_projection["created_at"]))
-    history_projection["updated_at"] = (start + timedelta(microseconds=microseconds)).isoformat()
+    history_projection["activity_stats"]["duration_ms"] = duration
     detail = history_detail([], history_projection)
-    assert detail.activity_stats.duration_ms == microseconds // 1000
+    assert detail.activity_stats.duration_ms == duration

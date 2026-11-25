@@ -141,7 +141,7 @@ def read_stable_config_file(path: Path, *, attempts: int = 3) -> StableConfigFil
         detail = f"配置文件读取失败: operation={operation}, error={type(error).__name__}, errno={error.errno}"
         if (winerror := getattr(error, "winerror", None)) is not None:
             detail += f", winerror={winerror}"
-        logger.exception("配置来源文件读取失败: operation=%s path=%s", operation, path)
+        report_failure(error, detail=f"配置来源文件读取失败: operation={operation} path={path}", diagnostic_logger=logger)
         raise type(error)(error.errno, detail) from error
 
     raise RuntimeError("配置文件在读取期间持续变化，无法建立稳定快照")

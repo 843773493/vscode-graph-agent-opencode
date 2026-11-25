@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from pathlib import Path
 from types import TracebackType
@@ -22,7 +22,6 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
 )
-from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.runtime import ProvenanceEdge
 from app.schemas.internal_v2.turn import (
@@ -137,7 +136,13 @@ if TYPE_CHECKING:
     from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 
 
+from app.services.infrastructure.rollout_context.checkpoint.owner.derived_execution import (
+    DerivedExecutionOwnerMixin,
+)
+
+
 class RolloutCheckpointSaver(
+    DerivedExecutionOwnerMixin,
     InternalExecutionControlOwnerMixin,
     RuntimeExecutionOwnerMixin,
     RolloutMutationIntentPortMixin,
@@ -315,29 +320,6 @@ class RolloutCheckpointSaver(
         return batch.commit_ids
 
 
-    def safe_compaction_prefix_cutoffs(
-        self,
-        session_id: str,
-        thread_id: str,
-        *,
-        checkpoint_ns: str,
-        state_messages: Sequence[object],
-        cutoff_indexes: Sequence[int],
-    ) -> frozenset[int]:
-        """把 model 任务命名空间交给同一持久 context owner 做只读 preflight。"""
-        return self._storage.checkpoints.safe_compaction_prefix_cutoffs(
-            session_id,
-            thread_id,
-            checkpoint_ns=(
-                self.context_owner_namespace(checkpoint_ns)
-                if isinstance(checkpoint_ns, str)
-                else checkpoint_ns
-            ),
-            state_messages=state_messages,
-            cutoff_indexes=cutoff_indexes,
-        )
-
-
     def get_context_assembly(
         self,
         session_id: str,
@@ -388,57 +370,6 @@ class RolloutCheckpointSaver(
         return self._storage.assemblies.list_context_assembly_summaries(session_id, thread_id)
 
 
-    def register_content_part(
-        self,
-        session_id: str,
-        *,
-        thread_id: str,
-        item_id: str,
-        part: ContentPart,
-        locator: Mapping[str, object],
-        checkpoint_ns: str = "",
-    ) -> None:
-        """通过 Saver 持久化 canonical item 的 content-part locator。"""
-        self._storage.storage.register_content_part(
-            session_id,
-            thread_id=thread_id,
-            item_id=item_id,
-            part=part,
-            locator=locator,
-            checkpoint_ns=checkpoint_ns,
-        )
-
-    def register_content_part_anchor(
-        self,
-        session_id: str,
-        anchor: ContentPartAnchor,
-        *,
-        thread_id: str,
-        checkpoint_ns: str = "",
-    ) -> None:
-        """通过 Saver 持久化可恢复的 content-part 操作锚点。"""
-        self._storage.storage.register_content_part_anchor(
-            session_id,
-            anchor,
-            thread_id=thread_id,
-            checkpoint_ns=checkpoint_ns,
-        )
-
-    def resolve_content_part_anchor(
-        self,
-        session_id: str,
-        *,
-        thread_id: str,
-        anchor_id: str,
-        checkpoint_ns: str = "",
-    ) -> ContentPartAnchor:
-        """通过 Saver 恢复并校验 durable content-part anchor。"""
-        return self._storage.storage.resolve_content_part_anchor(
-            session_id,
-            thread_id=thread_id,
-            anchor_id=anchor_id,
-            checkpoint_ns=checkpoint_ns,
-        )
 
     def register_provenance_edge(
         self,

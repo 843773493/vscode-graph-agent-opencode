@@ -34,9 +34,10 @@ def process_replay(
     ports = integration_ports_for_file(Path(request.node.path))
     config_path = Path(integration_workspace_root_path) / ".boxteam/workspace.jsonc"
     config = read_jsonc_object(config_path)
-    providers = cast(dict[str, dict[str, object]], cast(dict[str, object], config["llm"])["providers"])
+    workspace_settings = config["settings"]["workspace"]
+    providers = workspace_settings["llm"]["providers"]
     provider = providers["primary"]
-    provider["defaults"] = {
+    config["profiles"]["provider.primary"]["settings"]["model_options"] = {
         "endpoint": f"http://127.0.0.1:{ports.port(48)}/v1",
         "api_key": "", "custom_llm_provider": "openai",
         "api_mode": {
@@ -44,9 +45,9 @@ def process_replay(
             "supports_reasoning": {"reasoning_content": False},
         },
     }
-    cast(dict[str, dict[str, object]], provider["models"])["default"]["model"] = "e2e-stub-model"
-    for agent in cast(dict[str, dict[str, object]], config["agents"]).values():
-        cast(dict[str, object], agent["model"])["fallbacks"] = []
+    provider["models"]["default"]["model"] = "e2e-stub-model"
+    for agent in workspace_settings["agents"].values():
+        agent["model"]["fallbacks"] = []
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     with model_stream_replay(
         context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),

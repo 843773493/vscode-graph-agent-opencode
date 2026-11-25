@@ -74,9 +74,9 @@ try {
     await expect(target).toBeFocused();
     await page.keyboard.press('Enter');
   };
-  const markers = data => data.items.flatMap(turn => turn.response_parts.filter(part => part.kind === 'context_notice')
+  const markers = data => data.items.flatMap(turn => turn.response_items.filter(part => part.kind === 'context_notice')
     .map(part => ({ ...part, turn_id: turn.turn_id })));
-  const markerElement = part => surface().locator(`[data-context-marker~="${part.part_id}"]`);
+  const markerElement = part => surface().locator(`[data-context-marker~="${part.id}"]`);
   const beforeUser = async part => {
     const marker = markerElement(part);
     await expect(marker).toBeVisible({ timeout: 3000 });
@@ -128,7 +128,7 @@ try {
       const quick = page.locator('.quick-input-widget');
       await expect(quick).toBeVisible();
       expect(result.reads).toHaveLength(before);
-      await quick.locator('.monaco-list-row').nth(group.findIndex(value => value.part_id === part.part_id)).click();
+      await quick.locator('.monaco-list-row').nth(group.findIndex(value => value.id === part.id)).click();
     }
     const editor = page.locator('.editor-group-container.active .editor-instance .monaco-editor').filter({ visible: true });
     await expect(editor).toBeVisible({ timeout: 3000 });
@@ -188,7 +188,7 @@ try {
   result.copied.push({ reference: copiedSource.context_content_ref, text: await page.evaluate(() => navigator.clipboard.readText()) });
   await release(planned[0]);
   await testControl({ action: 'acknowledged', operation_id: planned[1], phase: 'model.response_ready' });
-  result.toolResultIds = (await history()).items.flatMap(turn => turn.response_parts.filter(part => part.kind === 'tool_result').map(part => part.source.item_id));
+  result.toolResultIds = (await history()).items.flatMap(turn => turn.response_items.filter(part => part.kind === 'tool_result').map(part => part.source.item_id));
   expect(result.toolResultIds.length).toBeGreaterThan(0);
   result.phase = 'interrupt';
   const interrupted = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `${base}/interrupt`);
@@ -205,7 +205,7 @@ try {
   const reminders = live.filter(part => part.context_kind === 'checkpoint_reminder');
   expect(reminders.length).toBeGreaterThan(0);
   expect(reminders.every(part => part.turn_id === second.turn_id && part.context_anchor === 'before_user_message')).toBe(true);
-  expect(live.filter(part => part.turn_id === first.turn_id).map(part => part.part_id)).toEqual(initial.map(part => part.part_id));
+  expect(live.filter(part => part.turn_id === first.turn_id).map(part => part.id)).toEqual(initial.map(part => part.id));
   await markerLatency(reminders[0], 2000);
   await verifyOrder(initial[0], reminders[0], first.turn_id, second.turn_id);
   await page.screenshot({ path: join(artifacts, '02-second-running.png') });
@@ -215,7 +215,7 @@ try {
     { timeout: 30_000 }).toBe('completed');
   const frozen = markers(await history());
   const finalPage = await history();
-  expect(finalPage.items.flatMap(turn => turn.response_parts.filter(part => part.kind === 'tool_result').map(part => part.source.item_id)))
+  expect(finalPage.items.flatMap(turn => turn.response_items.filter(part => part.kind === 'tool_result').map(part => part.source.item_id)))
     .toEqual(result.toolResultIds);
   const verifyHistory = async label => {
     const reads = result.reads.length;
@@ -273,7 +273,7 @@ try {
     await acceptMenu('查看上下文内容');
     const group = initial.filter(part => part.context_model_call_id === cancelledSource.context_model_call_id
       && part.context_anchor === cancelledSource.context_anchor && part.context_before_item_id === cancelledSource.context_before_item_id);
-    await page.locator('.quick-input-widget .monaco-list-row').nth(group.findIndex(part => part.part_id === cancelledSource.part_id)).click();
+    await page.locator('.quick-input-widget .monaco-list-row').nth(group.findIndex(part => part.id === cancelledSource.id)).click();
     const request = await arrived;
     const failed = page.waitForEvent('requestfailed', { predicate: value => value === request, timeout: 3000 });
     await command('workbench.action.closeActiveEditor');

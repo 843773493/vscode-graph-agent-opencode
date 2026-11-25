@@ -25,7 +25,7 @@ const methods = (index, name, names) => {
 const compile = source => ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
 let uuid = 0;
 const Editor = new Function('definitionObject', 'definitionValue', 'localProfilePath', 'generateUuid', 't', compile(`class Editor {
-${methods(0, 'ConfigurationEntityView', ['nodeKey', 'rememberNode', 'nodeReady', 'prepareNodes', 'prepareNode', 'editNode', 'editNodeFields', 'createModelNode', 'copyNode', 'copyProvider'])}
+${methods(0, 'ConfigurationEntityView', ['nodeKey', 'rememberNode', 'nodeReady', 'prepareNodes', 'prepareNode', 'editNode', 'editNodeFields', 'commitConnection', 'createModelNode', 'copyNode', 'copyProvider'])}
 }
 `) + '\nreturn Editor;')(definitionObject, definitionValue, localProfilePath, () => `uuid-${++uuid}`, t);
 const Source = new Function('parseTree', 'applyEdits', 'setProperty', 't', compile(`class Source {
@@ -61,7 +61,7 @@ function fixture({ shared = false, owner = 'workspace', document, modelId, paren
     async preflightDraft(_signal, selection) { selections.push(selection); return { candidate: parse(raw).settings.workspace,
       provider_options: inspection, model_options: inspection }; },
   });
-  Object.assign(editor, { source, nodeTargets: new Map(), connectionEdits: new Map(),
+  Object.assign(editor, { source, nodeTargets: new Map(), connectionEdits: new Map(), connectionCommits: new Map(),
     lifetime: { signal: new AbortController().signal }, check() {}, render() {}, input: async () => '复制服务' });
   source.inspectOptions = (...args) => source.preflightDraft(...args);
   return { editor, source, selector, inspection, history, selections, get value() { return parse(raw); },
@@ -121,6 +121,30 @@ test('父边可连续编辑，独立streaming写入同一Model节点', async () 
   expect(state.value.profiles.original.extends).toBe('user:workspace#/profiles/base');
   expect(state.value.profiles.original.settings.model_options.api_mode.streaming).toBe(false);
   expect(state.selections).toHaveLength(1);
+});
+
+test.each([undefined, 'main'])('目录自动获取只跟随Provider连接编辑，参数和Model覆盖不触发：%s', async modelId => {
+  const state = fixture({ modelId });
+  await state.editor.prepareNodes(state.selector, new AbortController().signal);
+  for (const [path, value] of [
+    [['model_options', 'request_options', 'parameters', 'temperature'], 0],
+    [['model_options', 'api_mode', 'streaming'], false],
+    [['model_options', 'api_mode', 'model_info', 'supports_reasoning'], false],
+    [['model_options', 'api_mode', 'supports_reasoning'], {}],
+  ]) state.editor.editNode(state.selector, path, value);
+  state.editor.commitConnection('service');
+  expect(state.editor.connectionCommits.get('service') ?? 0).toBe(0);
+  for (const [path, value] of [
+    [['model_options', 'endpoint'], 'https://next.example/v1'],
+    [['model_options', 'api_mode', 'protocol'], 'responses'],
+    [['model_options', 'request_options', 'default_headers'], { 'X-Catalog': 'next' }],
+    [['network', 'proxy'], { mode: 'direct' }],
+  ]) state.editor.editNode(state.selector, path, value);
+  state.editor.commitConnection('service');
+  expect(state.editor.connectionCommits.get('service') ?? 0).toBe(modelId === undefined ? 4 : 0);
+  const committed = state.editor.connectionCommits.get('service');
+  state.editor.commitConnection('service');
+  expect(state.editor.connectionCommits.get('service')).toBe(committed);
 });
 
 test('新Model有独立稳定profile并显式继承Provider上下文，不复制effective选项', () => {

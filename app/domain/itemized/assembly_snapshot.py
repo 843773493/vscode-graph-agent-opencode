@@ -178,7 +178,9 @@ class ContextAssemblySnapshot:
         for ref in self.refs:
             if not isinstance(ref, ContextRef):
                 raise ItemSchemaError("ContextAssemblySnapshot.refs 元素非法")
-            if ref.session_id != self.session_id or (
+            if (ref.session_id != self.session_id and not (
+                self.selection_policy == "derived_request" and ref.ref_type == "canonical_item"
+            )) or (
                 ref.ref_type == "request_only" and ref.plan_id != self.plan_id
             ):
                 raise ItemSchemaError("source-mismatch: ContextRef 与 assembly owner 不一致")

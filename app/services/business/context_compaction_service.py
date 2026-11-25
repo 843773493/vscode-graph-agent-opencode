@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.agents.manual_compaction_checkpoint import ManualCompactionCheckpointAdapter
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.runtime.context_compaction import AgentSummarizationCompactor
 from app.schemas.internal_v2.session import SessionCompactResultDTO
@@ -46,6 +47,7 @@ class ContextCompactionService:
         if snapshot is None:
             return SessionCompactResultDTO(
                 session_id=session_id,
+                thread_id=owner.thread_id,
                 status="skipped",
                 message="当前会话还没有可压缩的 checkpoint",
                 before_message_count=0,
@@ -56,42 +58,39 @@ class ContextCompactionService:
                 compacted_at=datetime.now(UTC),
             )
 
-        check = await self._summarization_compactor.check(
-            agent_id=session.current_agent_id,
-            raw_messages=snapshot.raw_messages,
-            event=snapshot.summarization_event,
-        )
-        if check.cutoff <= 0:
+        ids = await run_sync_shielded(self._summarization_compactor.source_item_ids, owner)
+        count = len(snapshot.raw_messages)
+        if not ids:
             return SessionCompactResultDTO(
                 session_id=session_id,
+                thread_id=owner.thread_id,
                 status="skipped",
                 message="当前上下文没有可安全摘要的旧消息",
-                before_message_count=len(check.messages),
-                effective_message_count_before=len(check.effective_messages),
-                effective_message_count_after=len(check.effective_messages),
+                before_message_count=count,
+                effective_message_count_before=count,
+                effective_message_count_after=count,
                 summarized_message_count=0,
-                retained_message_count=len(check.effective_messages),
+                retained_message_count=count,
                 compacted_at=datetime.now(UTC),
             )
 
-        # Thread 准入与 preparation 保护读取窗口；Session 短写只覆盖发布，
-        # 避免 main 的读取/判断阻塞 sibling 的 context-control lease。
-        async with self._session_service.session_write_admission(session_id):
-            await self._checkpoint_adapter.request_compaction(
-                snapshot=snapshot,
-            )
-
+        handle = await self._summarization_compactor.request(
+            owner, agent_id=session.current_agent_id, preferred_model=session.current_model, item_ids=ids, manual=True,
+        )
+        if handle is None:
+            raise RuntimeError("compaction-capacity-busy: 后台摘要额度已满，本次手动请求未受理")
         return SessionCompactResultDTO(
             session_id=session_id,
+            thread_id=owner.thread_id,
+            task_id=handle.task_id,
             status="scheduled",
             message=(
-                "已安排上下文压缩，将在下一次完整模型请求前执行；"
-                "优先保持缓存，找不到安全前缀时会替换旧前缀"
+                "已安排后台摘要；完整候选将在下一次模型请求通过预算核验后采用"
             ),
-            before_message_count=len(check.messages),
-            effective_message_count_before=len(check.effective_messages),
-            effective_message_count_after=len(check.effective_messages),
+            before_message_count=count,
+            effective_message_count_before=count,
+            effective_message_count_after=count,
             summarized_message_count=0,
-            retained_message_count=len(check.effective_messages),
+            retained_message_count=count,
             compacted_at=datetime.now(UTC),
         )

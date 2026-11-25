@@ -104,6 +104,7 @@ try {
     const panel = form.getByRole('region', { name: '发现与测试模型', exact: true });
     await expect(panel).toContainText(fixture.gatewayIds[index]);
     await expect(panel).toContainText(fixture.workspaceId);
+    await panel.locator('details.configuration-probe-more > summary').click();
     const started = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/config/llm/test');
     await panel.getByRole('button', { name: '测试配置模式', exact: true }).click();
     const response = await started;

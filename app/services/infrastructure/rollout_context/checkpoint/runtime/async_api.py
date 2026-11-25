@@ -18,6 +18,7 @@ from langgraph.checkpoint.base import (
 
 from app.core.session_thread_context import require_current_session_thread_owner
 from app.core.shielded_cleanup import run_sync_shielded
+from app.domain.itemized.compaction import ApplyCompactionCandidateIntent
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutTurnAnchor,
 )
@@ -28,6 +29,9 @@ class RolloutLangGraphAsyncMixin:
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         return await run_sync_shielded(self.get_tuple, config)
+
+    async def aadopt_candidate(self, config: RunnableConfig, intent: ApplyCompactionCandidateIntent) -> CheckpointTuple:
+        return await run_sync_shielded(self.adopt_candidate, config, intent)
 
     async def aget_delta_channel_history(
         self, *, config: RunnableConfig, channels: Sequence[str],

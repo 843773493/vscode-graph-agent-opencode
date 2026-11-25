@@ -26,7 +26,7 @@
 - 内置默认配置为仓库/发行包中的 `gateway_inline.jsonc` 与 `workspace_inline.jsonc`；用户级来源仍输出到 `${BOXTEAM_HOME:-~/.boxteams}/config/gateway.jsonc` 与 `workspace.jsonc`，各自 schema 与配置文件放在同一目录；同目录的 `gateway_local.jsonc` 是默认必需入口，`workspace_local.jsonc` 也是默认必需父节点，两者均为机器私有文件，必须被 Git 忽略。
 - 工作区级配置固定为 `${workspace_abs_path}/.boxteam/workspace.jsonc`；初始化时写入默认父链，运行时只沿该入口文档显式声明的 `extends` 解析，不按层级自动叠加；Gateway 不读取工作区配置。
 - Gateway v6 来源使用 `settings.gateway`／`settings.network` 节点信封，仅沿明确入口的 `extends` 父链解析。安装器生成 inline → user → local 默认链，默认入口 local 必须存在，不根据缺文件改投其它来源；自定义父链可以跳过原来源。Workspace v4 使用 `settings.workspace`／`settings.network`／`settings.model_options`，默认工作区入口明确继承 user_local → user → inline，只有显式初始化写入默认父链；普通读取不补缺失节点。Provider／Model 目录只保留 `config_ref`，共同选项与连接选项由同一节点解析。对象递归合并，标量和数组替换，schema 标记的原子块整体替换。
-- 配置来源必须记录实际加载的文件、层级、优先级和是否存在，并通过配置诊断接口暴露；不得只返回最终合并后的值。
+- 配置来源必须记录实际可达的文件、父边、字段定义来源和存在状态，并通过原配置诊断入口暴露；不得把固定文件顺序当成父链，也不得只返回最终值。
 - `logging.retention.inactive_max_bytes` 是 Gateway 旧实例日志预算的可选覆盖，缺省值来自共享日志合同；允许用户层覆盖，当前配置在下一轮后台维护生效。新增配置路径须同时维护 schema 与 `gateway_config_policy()` 策略清单。
 - `gateway_inline.jsonc` 的 `settings.gateway.runtime.workspace.default_skill_groups` 只声明发行包内置 Skill 组 ID；Skill 源码统一维护在 `resources/skills/`，不要把说明正文嵌入 Gateway 配置。
 - 使用 `uv run python -m configs.boxteam` 调用配置安装器，不从源码文件位置向上推导项目根目录。

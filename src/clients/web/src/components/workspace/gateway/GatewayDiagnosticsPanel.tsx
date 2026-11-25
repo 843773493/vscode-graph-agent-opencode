@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getGatewayDiagnostics, type GatewayLogTarget } from "../../../gatewayApi";
@@ -135,7 +136,7 @@ export default function GatewayDiagnosticsPanel({
           >
             <span className="codicon codicon-error" aria-hidden="true" />
             <strong>{diagnostics ? t("gateway.diagnostics.refreshFailed") : t("gateway.diagnostics.readFailedTitle")}</strong>
-            <span className="gateway-console-feedback-message">{errorSummary(error)}</span>
+            <span className="gateway-console-feedback-message failure-summary">{errorSummary(error)}</span>
             <button type="button" onClick={() => {
               void copyTextToClipboard(errorDiagnostic(error)).then(() => setCopyNotice(t('gateway.diagnostics.summaryCopied')))
                 .catch(cause => setCopyNotice(errorSummary(cause)));
@@ -195,7 +196,7 @@ export default function GatewayDiagnosticsPanel({
                       <><p>{t("gateway.diagnostics.logEntry")}{process.state.log_sink.log_id ?? t("gateway.diagnostics.noLogForScope")}</p><p>{t("gateway.diagnostics.processLogOwner", process.state.log_sink.owner_id)} · {t("gateway.diagnostics.source")}{process.state.log_sink.source}</p><p>{t("gateway.diagnostics.fileIdentity")}{process.state.log_sink.device}:{process.state.log_sink.inode}</p></>
                     ) : <p>{t("gateway.diagnostics.stdoutOnly", process.output_mode)}</p>}
                   </>
-                ) : <p role="alert">{process.error}</p>}
+                ) : <p className="failure-summary" role="alert">{errorSummary(process.error)}</p>}
                 {process.workspace_ids.length ? <p>{t("gateway.diagnostics.mountedWorkspaces")}{process.workspace_ids.join(", ")}</p> : null}
               </div>
             ))}
@@ -210,7 +211,7 @@ export default function GatewayDiagnosticsPanel({
               {plugin.instance ? <h4>{plugin.instance.package_id}/{plugin.instance.plugin_id}@{plugin.instance.package_version}
                 {` · ${plugin.instance.gateway_id} · ${plugin.instance.workspace_id ?? plugin.instance.instance_scope}`}</h4> : null}
               {plugin.observation ? <GatewayRuntimeObservation observation={plugin.observation} /> : null}
-              {plugin.error ? <p role="alert">{plugin.error}</p> : null}
+              {plugin.error ? <p className="failure-summary" role="alert">{failureSummary(plugin.error)}</p> : null}
             </div>)}
           </details>
 

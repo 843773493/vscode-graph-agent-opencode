@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.turn import (
-    InternalExecutionDisplayPartDTO,
+    InternalExecutionDisplayItemDTO,
     InternalExecutionHistoryDTO,
     TurnBaseDTO,
     TurnCursorDTO,
@@ -100,6 +100,7 @@ def test_turn_cursor_freezes_owner_and_both_ordinal_lanes() -> None:
     )
 
     assert cursor.direction == "before"
+    assert cursor.version == 3
     assert cursor.turn_ordinal == 2
     assert cursor.logical_item_ordinal == 0
 
@@ -149,7 +150,7 @@ def test_user_message_summary_has_no_content_metadata_or_data_url() -> None:
 
 def test_internal_execution_history_exposes_only_typed_display_projection() -> None:
     now = datetime.now(UTC)
-    display_part = InternalExecutionDisplayPartDTO(
+    display_part = InternalExecutionDisplayItemDTO(
         kind="generated_session_result",
         text="生成会话已返回结果。",
         item_id="item_return",
@@ -166,7 +167,7 @@ def test_internal_execution_history_exposes_only_typed_display_projection() -> N
         status="completed",
         created_at=now,
         updated_at=now,
-        display_parts=[display_part],
+        display_items=[display_part],
     )
 
     payload = execution.model_dump(mode="json")
@@ -178,10 +179,13 @@ def test_internal_execution_history_exposes_only_typed_display_projection() -> N
         "status",
         "created_at",
         "updated_at",
-        "display_parts",
-        "response_parts",
+        "display_items",
+        "response_items",
+        "failure",
+        "terminal_commit_id",
     }
-    assert payload["display_parts"] == [
+    assert payload["failure"] is None and payload["terminal_commit_id"] is None
+    assert payload["display_items"] == [
         {
             "kind": "generated_session_result",
             "text": "生成会话已返回结果。",
@@ -212,7 +216,7 @@ def test_internal_execution_history_exposes_only_typed_display_projection() -> N
             status="completed",
             created_at=now,
             updated_at=now,
-            display_parts=[display_part],
+            display_items=[display_part],
         )
 
 
@@ -226,7 +230,7 @@ def test_internal_execution_history_rejects_control_payload_and_duplicate_item_i
             status="completed",
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
-            display_parts=[],
+            display_items=[],
             metadata={"branch_result": "private branch body"},
         )
 
@@ -247,7 +251,7 @@ def test_internal_execution_history_rejects_control_payload_and_duplicate_item_i
         "status": "completed",
         "created_at": datetime.now(UTC),
         "updated_at": datetime.now(UTC),
-        "display_parts": [display_part],
+        "display_items": [display_part],
     }
     with pytest.raises(ValidationError, match="display item_id 不能重复"):
         TurnHistoryPageDTO(

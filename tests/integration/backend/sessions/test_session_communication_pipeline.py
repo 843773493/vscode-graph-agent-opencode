@@ -47,6 +47,10 @@ from tests.support.processes.workspace import (
     start_backend_process,
     terminate_process,
 )
+from tests.support.terminal_plugin import (
+    copy_prepared_developer_tools_package,
+    enable_developer_tools_plugins,
+)
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -63,7 +67,7 @@ async def _plan_communication_calls(
         assert main.status_code == 200, main.text
         thread_id = main.json()["data"]["thread_id"]
     config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-    endpoint = config["llm"]["providers"]["primary"]["defaults"]["endpoint"]
+    endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
     interactions = [build_cassette(
         asset_id="session-communication", model="e2e-stub-model", url=endpoint + "/chat/completions",
         frames=chat_completion_frames(
@@ -147,7 +151,9 @@ class CommunicationCase:
         self.backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(self.workspace), port=previous.port,
             log_name="communication-restarted", asgi_app="tests.support.e2e_control.communication_backend_app:app",
-            env_overrides={**self.replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true", "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{self.gateway.port}"},
+            env_overrides={**self.replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true",
+                           "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{self.gateway.port}",
+                           "BOXTEAM_RUNTIME_CONTROL_TOKEN": LOCAL_TOKEN_HEADERS["X-Local-Token"]},
         )
         assert self.backend.process.pid != previous.process.pid
 
@@ -162,9 +168,10 @@ def _prepare_workspace(context: TestRunContext, model_port: int, gateway_port: i
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
     )
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
-    provider = config["llm"]["providers"]["primary"]
-    provider["defaults"] = {
+    workspace_settings = config["settings"]["workspace"]
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
+    provider = workspace_settings["llm"]["providers"]["primary"]
+    config["profiles"]["provider.primary"]["settings"]["model_options"] = {
         "endpoint": f"http://127.0.0.1:{model_port}/v1",
         "api_key": "", "custom_llm_provider": "openai",
         "api_mode": {"protocol": "chat_completions", "model_info": {
@@ -172,7 +179,7 @@ def _prepare_workspace(context: TestRunContext, model_port: int, gateway_port: i
         }, "supports_reasoning": {"reasoning_content": True}},
     }
     provider["models"]["default"]["model"] = "e2e-stub-model"
-    for agent in config["agents"].values():
+    for agent in workspace_settings["agents"].values():
         agent["model"]["fallbacks"] = []
         agent.setdefault("execution", {})["require_delegated_report"] = False
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -185,11 +192,20 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
     ports = integration_ports_for_file(Path(request.node.path))
     workspace = getattr(request, "param", {}).get("prepare_workspace", _prepare_workspace)(context, ports.port(10), ports.port(1))
     reset_gateway_persistent_state(workspace_root=workspace)
+    resources = getattr(request, "param", {}).get("resources", False)
+    if resources:
+        await asyncio.to_thread(
+            copy_prepared_developer_tools_package,
+            request.getfixturevalue("prepared_developer_tools_package"), context.boxteam_home,
+        )
     artifacts = context.artifacts_dir / request.node.name
     artifacts.mkdir(parents=True, exist_ok=True)
     barrier = getattr(request, "param", {}).get("barrier", False)
     trace = getattr(request, "param", {}).get("trace", False)
-    environment = {"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(1)}"}
+    environment = {
+        "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(1)}",
+        "BOXTEAM_RUNTIME_CONTROL_TOKEN": LOCAL_TOKEN_HEADERS["X-Local-Token"],
+    }
     if barrier:
         environment["BOXTEAM_TEST_COMMUNICATION_BARRIER_DIR"] = str(artifacts)
         environment["BOXTEAM_TEST_COMMUNICATION_BARRIER_STAGE"] = "before_source" if barrier is True else barrier
@@ -224,6 +240,11 @@ async def communication_case(request: pytest.FixtureRequest) -> AsyncIterator[Co
                 health = await client.get("/api/gateway/health")
                 assert health.status_code == 200, health.text
                 gateway_id = health.json()["data"]["gateway_id"]
+                if resources:
+                    await enable_developer_tools_plugins(
+                        client, gateway_id=gateway_id, workspace_id=backend.workspace_id,
+                        plugin_ids=("terminal", "browser"),
+                    )
                 case = CommunicationCase(client, replay, workspace, artifacts, backend, gateway, gateway_id, environment.get("BOXTEAM_TEST_COMMUNICATION_BARRIER_STAGE"))
                 try:
                     yield case

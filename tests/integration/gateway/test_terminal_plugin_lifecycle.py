@@ -57,7 +57,7 @@ def _cas_workspace_binding(
     if not isinstance(document, dict):
         raise TypeError("Workspace 配置来源没有 data 对象")
     source = commentjson.loads(str(document["jsonc"]))
-    source.setdefault("plugins", {})["runtime"] = {
+    source["settings"]["workspace"].setdefault("plugins", {})["runtime"] = {
         "entries": [{
             "package_id": PACKAGE_ID,
             "package_version": PACKAGE_VERSION,
@@ -238,7 +238,7 @@ def test_terminal_package_runs_through_gateway_owner_and_exact_instance_routes(
         )
         config_path = root / ".boxteam/workspace.jsonc"
         config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+        config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
             "url"
         ] = f"http://127.0.0.1:{unused_tcp_port}"
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

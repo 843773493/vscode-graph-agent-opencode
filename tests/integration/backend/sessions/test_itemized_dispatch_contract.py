@@ -1495,8 +1495,14 @@ def nonagent_tool_probe_service(native_http_server, native_dispatch_workspace, m
         config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
     config = read_jsonc_object(config_path)
-    providers = cast(dict, config["llm"])["providers"]
-    providers["nonagent-probe"] = {"defaults": {
+    workspace_settings = config["settings"]["workspace"]
+    providers = workspace_settings["llm"]["providers"]
+    providers["nonagent-probe"] = {
+        "config_ref": "#/profiles/provider.nonagent-probe",
+        "models": {"default": {"model": "openai/gpt-4.1", "config_ref": "context:provider/nonagent-probe"}},
+    }
+    config["profiles"]["provider.nonagent-probe"] = {
+        "extends": "context:workspace", "settings": {"model_options": {
         "endpoint": endpoint,
         "api_key": "${BOXTEAM_TEST_NONAGENT_MODEL_KEY}",
         "custom_llm_provider": "openai",
@@ -1505,8 +1511,8 @@ def nonagent_tool_probe_service(native_http_server, native_dispatch_workspace, m
             "model_info": {"supports_function_calling": True},
             "supports_reasoning": {},
         },
-    }, "models": {"default": {"model": "openai/gpt-4.1"}}}
-    cast(dict, config["agents"])["default"]["model"] = {
+    }}}
+    workspace_settings["agents"]["default"]["model"] = {
         "primary": {"provider_id": "nonagent-probe", "model_id": "default"}, "fallbacks": [],
     }
     config_path.write_text(json.dumps(config), encoding="utf-8")

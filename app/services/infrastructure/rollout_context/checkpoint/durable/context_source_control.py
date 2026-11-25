@@ -205,7 +205,7 @@ class ContextSourceControlStorageMixin:
         connection: sqlite3.Connection,
     ) -> None:
         """控制状态只允许访问 active 的 v2 rollout，且不触发恢复副作用。"""
-        self._storage._require_v2_readable(connection)
+        self._storage._require_rollout_readable(connection)
         row = connection.execute(
             "SELECT database_state FROM database_meta WHERE singleton_id = 1"
         ).fetchone()

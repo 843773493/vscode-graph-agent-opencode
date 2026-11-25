@@ -986,7 +986,7 @@ test("子 Thread 手动压缩传递精确目标，回执保留 scheduled 与原�
     if (method !== "POST" || path !== COMPACT_PATH) return undefined;
     targets.push(new URL(url, "http://localhost").searchParams.get("thread_id"));
     return apiSuccessResponse({
-      session_id: SESSION_ID, status: "scheduled", message: "已安排",
+      session_id: SESSION_ID, thread_id: child, task_id: "compaction-child", status: "scheduled", message: "已安排",
       before_message_count: 10, effective_message_count_before: 10, effective_message_count_after: 10,
       summarized_message_count: 0, retained_message_count: 10,
     });
@@ -995,12 +995,13 @@ test("子 Thread 手动压缩传递精确目标，回执保留 scheduled 与原�
   const result = await actions.compactSession();
   expect(targets).toEqual([child]);
   expect(result.status).toBe("scheduled");
-  expect(mirror.current().status).toBe("已安排上下文压缩，将在下一条消息发送前执行");
+  expect(mirror.current().status).toBe("已安排后台摘要，完整候选通过下一次模型请求的预算核验后采用");
   expect(mirror.current().lastCompactResult).toEqual(result);
   const event = mirror.current().eventQueuesBySession.get(cacheKey)?.at(-1);
   expect(event?.kind).toBe("frontend");
   if (event?.kind !== "frontend") throw new Error("缺少压缩登记事件");
   expect(event.payload?.thread_id).toBe(child);
+  expect(event.payload?.task_id).toBe("compaction-child");
   expect(mirror.current().currentSession?.thread_id).toBe("thr_run_actions");
 });
 

@@ -321,7 +321,7 @@ class ResourceActivationStore(ResourceActivationReadMixin):
         ), self._storage.storage._connect(
             thread_id, checkpoint_ns, session_id=session_id
         ) as connection:
-            self._storage.storage._require_v2_runtime(connection)
+            self._storage.storage._require_current_rollout_format(connection)
             self.require_schema(connection)
             self._require_execution(connection, snapshot)
             existing = self._select_existing(
@@ -344,7 +344,7 @@ class ResourceActivationStore(ResourceActivationReadMixin):
         ), self._storage.storage._connect(
             thread_id, checkpoint_ns, session_id=session_id
         ) as connection:
-            self._storage.storage._require_v2_runtime(connection)
+            self._storage.storage._require_current_rollout_format(connection)
             self.require_schema(connection)
             connection.execute("BEGIN IMMEDIATE")
             self.persist_snapshot(

@@ -98,17 +98,19 @@ def shutdown_environment(
     config_path = Path(integration_workspace_config_path)
     before = config_path.read_bytes()
     config = read_jsonc_object(config_path)
-    primary = config["llm"]["providers"]["primary"]
-    target = config["llm"]["providers"]["primary" if model_protocol == "chat_completions" else "backup_3"]
+    workspace_settings = config["settings"]["workspace"]
+    primary = workspace_settings["llm"]["providers"]["primary"]
+    target_profile = "provider.primary" if model_protocol == "chat_completions" else "provider.backup_3"
+    target_options = config["profiles"][target_profile]["settings"]["model_options"]
     endpoint_suffix = "/responses" if model_protocol == "responses" else "/chat/completions"
-    primary["defaults"].update({
+    config["profiles"]["provider.primary"]["settings"]["model_options"].update({
         "endpoint": shutdown_cassette.interactions[0].request.url.removesuffix(endpoint_suffix),
         "api_key": "",
-        "api_mode": target["defaults"]["api_mode"],
+        "api_mode": target_options["api_mode"],
     })
-    primary["models"] = {"default": {"model": shutdown_cassette.metadata["model"]}}
-    config["agents"]["default"]["model"]["fallbacks"] = []
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+    primary["models"] = {"default": {"model": shutdown_cassette.metadata["model"], "config_ref": "context:provider/primary"}}
+    workspace_settings["agents"]["default"]["model"]["fallbacks"] = []
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
         "url"
     ] = f"http://127.0.0.1:{integration_ports_for_file(Path(request.node.path)).port(21)}"
     validate_config(config, schema_path=Path.cwd() / "configs/workspace_schema.jsonc")

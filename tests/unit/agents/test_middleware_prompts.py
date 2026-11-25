@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 import pytest
 from deepagents.backends.state import StateBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware
-from deepagents.middleware.summarization import SummarizationToolMiddleware
 from langchain.agents.middleware import TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -35,12 +34,12 @@ from app.agents.skill_context import (
 from app.agents.structured_prompt_validation_middleware import (
     StructuredPromptValidationMiddleware,
 )
-from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
+from app.agents.summarization.tool_middleware import CompactionToolsMiddleware
 from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
 )
-from app.domain.context_compaction import CompactionPolicy
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
@@ -89,8 +88,7 @@ def _build_middleware(
         backend=StateBackend(),
         resolved_skills=resolved_skill_catalog,
         context_source_manager=context_source_manager or ContextSourceManager(),
-        compaction_preflight=NoDurableOwnerCompactionPreflight(),
-        compaction_policy=CompactionPolicy(), automatic_compaction_enabled=True,
+        compaction_runtime=None, compaction_owner=MutationIntentOwner("session-prompts", "thread-prompts"), agent_id="default",
         resolved_tool_denylist=set(denylist or set()),
         interrupt_on=None,
         runtime_middleware=[],
@@ -140,8 +138,8 @@ def test_middleware_uses_project_prompts_without_upstream_demo_agents(tmp_path):
         "timeout_ms",
     }
 
-    compact = _find_middleware(middleware, SummarizationToolMiddleware)
-    assert compact.system_prompt is None
+    compact = _find_middleware(middleware, CompactionToolsMiddleware)
+    assert {tool.name for tool in compact.tools} == {"compact_conversation", "read_compaction_history"}
 
 
 def test_workspace_skills_uses_compact_project_template(
@@ -206,7 +204,7 @@ def test_denylist_removes_tool_specific_middleware_and_prompts(
     )
 
     assert not any(isinstance(item, TodoListMiddleware) for item in middleware)
-    compact = _find_middleware(middleware, SummarizationToolMiddleware)
+    compact = _find_middleware(middleware, CompactionToolsMiddleware)
     assert {tool.name for tool in compact.tools} == (
         set() if deny_history else {"read_compaction_history"}
     )

@@ -120,15 +120,18 @@ def distribution_gateway(request: pytest.FixtureRequest,
         config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
         schema_path=application / "configs/workspace_schema.jsonc")
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = config["llm"]["providers"]["primary"]
+    workspace_settings = config["settings"]["workspace"]
+    provider = workspace_settings["llm"]["providers"]["primary"]
     provider["models"]["default"]["model"] = "distribution-session"
-    provider["defaults"].update(endpoint="http://distribution-model.invalid/v1", custom_llm_provider="openai")
-    for item in config["llm"]["providers"].values():
-        if "api_key" in item["defaults"]:
-            item["defaults"]["api_key"] = ""
-    for agent in config["agents"].values():
+    primary_options = config["profiles"]["provider.primary"]["settings"]["model_options"]
+    primary_options.update(endpoint="http://distribution-model.invalid/v1", custom_llm_provider="openai")
+    for profile in config["profiles"].values():
+        options = profile["settings"].get("model_options", {})
+        if "api_key" in options:
+            options["api_key"] = ""
+    for agent in workspace_settings["agents"].values():
         agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(config), encoding="utf-8")
     (workspace / "distribution-debug.mjs").write_text(
         "const state = { counter: 1 };\nstate.counter += 2;\nstate.counter += 3;\n"
@@ -262,7 +265,12 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         path = f"/api/v1/workspaces/{workspace_id}/config/sources/{source_key}" if workspace else f"/api/gateway/config/sources/{source_key}"
         document = exchange("GET", path).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
-        source.setdefault("plugins", {})["workspace_defaults" if scope == "defaults" else "runtime"] = {"entries": entries}
+        if workspace:
+            source["settings"]["workspace"].setdefault("plugins", {})["runtime"] = {"entries": entries}
+        else:
+            source.setdefault("settings", {}).setdefault("gateway", {}).setdefault("plugins", {})[
+                "workspace_defaults" if scope == "defaults" else "runtime"
+            ] = {"entries": entries}
         reply = exchange("PUT", path, {"gateway_id": gateway_id,
             **({"workspace_id": workspace_id} if workspace else {}), "source_key": source_key,
             "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],

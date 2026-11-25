@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ITheme, Terminal } from "@xterm/xterm";
 import { t } from "../../../../../shared/core/i18n/index.js";
@@ -56,7 +57,7 @@ export function TerminalOutput({ apiPort, workspaceId, resourceId }: {
     if (terminalRef.current) terminalRef.current.options.theme = terminalTheme;
   }, [terminalTheme]);
   return <section className="terminal-panel-final-output panel-feedback-host" ref={viewport} aria-label={t("bottom.terminal.content")} aria-busy={state === "loading"}>
-    {typeof state === "object" ? <span className="panel-feedback" role="alert">{state.error}</span> : null}
+    {typeof state === "object" ? <span className="panel-feedback failure-summary" role="alert">{failureSummary(state.error)}</span> : null}
     <div className="terminal-panel-output-screen" ref={host} />
   </section>;
 }

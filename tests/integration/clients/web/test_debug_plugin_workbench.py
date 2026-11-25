@@ -94,19 +94,25 @@ def test_workbench_debug_ui_and_agent_share_plugin_run(
         schema_path=context.project_root / "configs/workspace_schema.jsonc")
     configuration = workspace / ".boxteam/workspace.jsonc"
     source = commentjson.loads(configuration.read_text(encoding="utf-8"))
-    source["llm"]["providers"] = {"debug-ui": {
-        "defaults": {"endpoint": "https://opencode.ai/zen/v1", "api_key": "", "custom_llm_provider": "openai",
-            "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
-                "supports_reasoning": {"reasoning_content": False}}},
-        "models": {"default": {"model": "debug-ui-model"}},
+    workspace_settings = source["settings"]["workspace"]
+    workspace_settings["llm"]["providers"] = {"debug-ui": {
+        "config_ref": "#/profiles/provider.debug-ui",
+        "models": {"default": {"model": "debug-ui-model", "config_ref": "context:provider/debug-ui"}},
     }}
-    for agent in source["agents"].values():
+    source["profiles"]["provider.debug-ui"] = {
+        "extends": "context:workspace",
+        "settings": {"model_options": {"endpoint": "https://opencode.ai/zen/v1", "api_key": "",
+            "custom_llm_provider": "openai",
+            "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
+                "supports_reasoning": {"reasoning_content": False}}}},
+    }
+    for agent in workspace_settings["agents"].values():
         if "model" in agent:
             agent["model"] = {"primary": {"provider_id": "debug-ui", "model_id": "default"}, "fallbacks": []}
         if "custom" in agent["tools"]:
             agent["tools"]["custom"] = [tool for tool in agent["tools"]["custom"]
                 if tool.get("name") in {"get_variables_values", "evaluate_expression"}]
-    source.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {"url": base_url, "timeout_seconds": 5}
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {"url": base_url, "timeout_seconds": 5}
     configuration.write_text(json.dumps(source, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (workspace / "debug-ui.mjs").write_text(
         "const state = { counter: 1 };\nstate.counter += 2;\nstate.counter += 3;\nconsole.log('debug-result', state.counter);\nsetInterval(() => {}, 1000);\n",

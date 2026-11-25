@@ -12,7 +12,7 @@ mapping tests/
 │   ├── test_agent_content_mapper.py
 │   ├── test_user_message_content_projection.py
 │   ├── test_message_content.py 原生 Agent State 记录与轻量内容的边界
-│   └── test_turn_response_parts.py
+│   └── test_turn_response_items.py
 ├── 运行事件
 │   └── test_trace_event_mapper.py（Trace DTO身份、时间、工具状态与Skill字段）
 ├── 工具管理目录

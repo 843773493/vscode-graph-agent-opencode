@@ -76,13 +76,13 @@ async def test_fork_retains_context_metadata_and_frozen_body_after_source_deleti
     source_thread = container.session_service.path_resolver.main_thread_id(source.session_id)
     page_request = TurnHistoryLoadRequest(direction="tail")
     original = container.checkpointer.load_history(source.session_id, source_thread, page_request)
-    markers = [part for turn in original.items for part in turn.response_parts if part.kind == "context_notice"]
+    markers = [part for turn in original.items for part in turn.response_items if part.kind == "context_notice"]
     assert markers
     frozen = {}
     for marker in markers:
         reference = marker.context_content_ref
         assert reference.kind == "sealed_contribution"
-        frozen[marker.part_id] = container.checkpointer.read_context_contribution(
+        frozen[marker.id] = container.checkpointer.read_context_contribution(
             source.session_id, source_thread, historical_owner=(reference.session_id, reference.thread_id),
             assembly_id=reference.assembly_id, contribution_id=reference.contribution_id,
         )
@@ -95,7 +95,7 @@ async def test_fork_retains_context_metadata_and_frozen_body_after_source_deleti
     )
     with RolloutCheckpointSaver(container.session_service.path_resolver.sessions_root) as cold:
         restored = cold.load_history(result.session.session_id, result.thread_id, page_request)
-        inherited = [part for turn in restored.items for part in turn.response_parts if part.kind == "context_notice"]
+        inherited = [part for turn in restored.items for part in turn.response_items if part.kind == "context_notice"]
         assert inherited == markers
         for marker in inherited:
             reference = marker.context_content_ref
@@ -104,7 +104,7 @@ async def test_fork_retains_context_metadata_and_frozen_body_after_source_deleti
                 result.session.session_id, result.thread_id,
                 historical_owner=(reference.session_id, reference.thread_id),
                 assembly_id=reference.assembly_id, contribution_id=reference.contribution_id,
-            ) == frozen[marker.part_id]
+            ) == frozen[marker.id]
 
 
 async def test_inspect_frozen_contribution_from_real_dispatched_request(
@@ -127,7 +127,7 @@ async def test_inspect_frozen_contribution_from_real_dispatched_request(
         snapshot = case.model_dispatches[-1].snapshot
         history = await notice_client.post(base + "/history", json={"direction": "tail"})
         assert history.status_code == 200, history.text
-        parts = [part for turn in history.json()["data"]["items"] for part in turn["response_parts"]
+        parts = [part for turn in history.json()["data"]["items"] for part in turn["response_items"]
                  if part["kind"] == "context_notice"]
         assert parts
         assert all(part["context_model_call_id"] == snapshot.model_call_id for part in parts)
@@ -199,7 +199,7 @@ async def test_pending_reminders_are_displayed_once_at_the_consuming_request(
         return response.json()["data"]
 
     def markers(page):
-        return [(turn, part) for turn in page["items"] for part in turn["response_parts"]
+        return [(turn, part) for turn in page["items"] for part in turn["response_items"]
                 if part["kind"] == "context_notice" and "notice-ui-" in part["context_source_id"]]
 
     with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
@@ -281,7 +281,7 @@ async def test_context_metadata_continuation_keeps_turn_page_and_does_not_read_b
         assert response.status_code == 200, response.text
         page = response.json()["data"]
         assert [turn["turn_id"] for turn in page["items"]] == [consumed["turn_id"]]
-        markers = [part for turn in page["items"] for part in turn["response_parts"] if part["kind"] == "context_notice"]
+        markers = [part for turn in page["items"] for part in turn["response_items"] if part["kind"] == "context_notice"]
         assert len(markers) == 128
         cursor = markers[-1]["context_cursor"]
         assert cursor and not any(part["truncated"] for part in markers)
@@ -301,10 +301,10 @@ async def test_context_metadata_continuation_keeps_turn_page_and_does_not_read_b
         assert more["source_view_revision"] == page["source_view_revision"]
         assert more["context_notices"][0]["owner_id"] == consumed["turn_id"]
         assert more["context_notices"][0]["owner_kind"] == "turn"
-        remaining = [part for batch in more["context_notices"] for part in batch["parts"]]
+        remaining = [part for batch in more["context_notices"] for part in batch["items"]]
         assert len(remaining) == 5
         assert all(part["context_cursor"] is None for part in remaining)
-        assert len({part["part_id"] for part in [*markers, *remaining]}) == 133
+        assert len({part["id"] for part in [*markers, *remaining]}) == 133
         assert [part["context_plan_ordinal"] for part in markers] + [part["context_plan_ordinal"] for part in remaining] == sorted(
             part["context_plan_ordinal"] for part in [*markers, *remaining])
         assert page["before_cursor"] and page["has_before"]
@@ -376,7 +376,7 @@ async def test_context_marker_after_metadata_first_page_is_located_in_original_h
         response = await notice_client.post(base + "/history", json=window)
         assert response.status_code == 200, response.text
         original = response.json()["data"]
-        markers = [part for turn in original["items"] for part in turn["response_parts"] if part["kind"] == "context_notice"]
+        markers = [part for turn in original["items"] for part in turn["response_items"] if part["kind"] == "context_notice"]
         assert len(markers) == 128 and markers[-1]["context_cursor"]
         assert all(part["context_model_call_id"] == calls[0] for part in markers)
 
@@ -385,7 +385,7 @@ async def test_context_marker_after_metadata_first_page_is_located_in_original_h
         response = await notice_client.post(base + "/history", json={**window, "anchor_context": reference})
         assert response.status_code == 200, response.text
         located = response.json()["data"]
-        target = [part for turn in located["items"] for part in turn["response_parts"] if part["kind"] == "context_notice"]
+        target = [part for turn in located["items"] for part in turn["response_items"] if part["kind"] == "context_notice"]
         assert len(target) == 1
         assert target[0]["context_model_call_id"] == calls[1]
         assert target[0]["context_anchor"] == "before_user_message"
@@ -405,9 +405,9 @@ async def test_context_marker_after_metadata_first_page_is_located_in_original_h
             "model_call_id": calls[0], "anchor": "before_user_message",
         }})
         assert response.status_code == 200, response.text
-        first = [part for turn in response.json()["data"]["items"] for part in turn["response_parts"] if part["kind"] == "context_notice"]
+        first = [part for turn in response.json()["data"]["items"] for part in turn["response_items"] if part["kind"] == "context_notice"]
         response = await notice_client.post(base + "/history", json={"context_cursor": first[-1]["context_cursor"]})
         assert response.status_code == 200, response.text
-        remaining = [part for batch in response.json()["data"]["context_notices"] for part in batch["parts"]]
+        remaining = [part for batch in response.json()["data"]["context_notices"] for part in batch["items"]]
         assert len(remaining) == 5
         assert all(part["context_model_call_id"] == calls[0] and part["context_cursor"] is None for part in remaining)

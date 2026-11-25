@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import replace
 from typing import cast
 
 from app.domain.itemized.assembly_snapshot import (
@@ -146,14 +147,20 @@ class ContextPlanComposer:
         omitted_ref_identities: Iterable[tuple[str, ...]] = (),
         request_detail_refs: Mapping[tuple[str, ...], DetailRef] | None = None,
         seal_binding: ContextSealBinding | None = None,
+        additional_refs: Sequence[ContextRef] = (),
+        additional_contributions: Sequence[ContextContribution] = (),
     ) -> ContextAssemblySnapshot:
         if (plan.session_id, plan.thread_id) != (session_id, thread_id):
             raise ValueError("source-mismatch: plan 与 assembly session/thread 不一致")
+        if (plan.plan_state == "sealed" or additional_refs or additional_contributions) and not assembly_id.startswith("preview:"):
+            raise ValueError("sealed 计划与未登记来源只允许进入纯内存预算 preview")
         # source_ordinal 是 context_contributions 表的独立 registry 排序列，
         # 不是 contribution provenance metadata。它只在 ledger 重建时参与
         # 排序，不能复制进 sealed snapshot；否则 snapshot 与 registry 的
         # metadata_json 会发生虚假的 source-mismatch。
-        registry_refs = tuple(plan.refs)
+        registry_refs = tuple({selection_ref_identity(ref): ref for ref in (*plan.refs, *additional_refs)}.values())
+        source_contributions = tuple({source.contribution_id: source for source in
+                                     (*plan.contributions, *additional_contributions)}.values())
         detail_refs = dict(request_detail_refs) if request_detail_refs is not None else {}
         omitted_identities = frozenset(omitted_ref_identities)
         known_identities = {
@@ -181,7 +188,7 @@ class ContextPlanComposer:
                 raise TypeError("source-mismatch: final detail 必须是 typed DetailRef")
             detail_ref.require_owner(session_id, thread_id, assembly_id)
 
-        contribution_resolver = ContributionResolver(plan.contributions)
+        contribution_resolver = ContributionResolver(source_contributions)
         selected_contribution_ids = {
             contribution.contribution_id
             for ref in registry_refs
@@ -192,7 +199,7 @@ class ContextPlanComposer:
         }
         assembly_contributions = tuple(
             contribution
-            for contribution in plan.contributions
+            for contribution in source_contributions
             if contribution.contribution_id in selected_contribution_ids
         )
         contributions = tuple(
@@ -356,10 +363,11 @@ class ContextPlanComposer:
             )
             next_ordinal += 1
         validate_sealed_selection(selection_refs)
-        sealed_plan = plan.seal_for_assembly(
-            assembly_id,
-            selection=selection_refs,
-        )
+        # 本方法已经完成全部 source/selection 绑定；直接校验同一个 sealed 值，
+        # 预算预览也无需为尚未登记的来源补造 registry ordinal。
+        sealed_plan = replace(plan, refs=registry_refs, contributions=contributions,
+            tool_set_refs=tuple(replace(ref, assembly_id=assembly_id) for ref in plan.tool_set_refs),
+            plan_state="sealed", assembly_id=assembly_id, selection=tuple(selection_refs))
         # 同次组装直接使用唯一 preimage 已算出的 plan 摘要；恢复仍独立重算。
         hash_preimage = context_request_hash_preimage(
             sealed_plan,

@@ -52,7 +52,6 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     copy_rollout_snapshot,
 )
-from tests.support.messages import compaction_summary_message
 from tests.support.rollout.view_mutations import mutate_view_members
 
 
@@ -178,7 +177,10 @@ def fenced_checkpoint(notice_case, request):
     case = notice_case
     if request.param == "user_turn":
         _accepted, admission = case.user("fence-reader")
-        root = case.saver._storage.executions.accepted_user_input(admission)
+        stored_admission, root = case.saver._storage.executions.accepted_user_input(
+            admission.session_id, thread_id=admission.thread_id, job_id=admission.job_id,
+        )
+        assert stored_admission == admission
     else:
         admission, intent = case.internal("fence-reader")
         root, = case.saver._storage.storage.read_items(case.session, case.thread, item_ids=(intent.notice_item_id,))
@@ -363,7 +365,7 @@ def test_seal_failure_then_unknown_restart_retains_acceptance_owner(notice_case)
         assert connection.execute("SELECT COUNT(*) FROM context_assemblies WHERE execution_id=?", (user.execution_id,)).fetchone() == (1,)
 
 
-@pytest.mark.parametrize("reason", ["rewind", "compaction"])
+@pytest.mark.parametrize("reason", ["rewind"])
 def test_source_boundary_keeps_primary_reason_and_confirms_notice_in_same_seal(notice_case, reason):
     case = notice_case
     internal, _intent = case.internal("source")
@@ -372,17 +374,11 @@ def test_source_boundary_keeps_primary_reason_and_confirms_notice_in_same_seal(n
     checkpoint = empty_checkpoint()
     checkpoint["id"] = "checkpoint-source-boundary"
     checkpoint["channel_values"] = {"messages": [HumanMessage(content="真正的用户输入", id=accepted["root_input_item_id"].removeprefix("item-"))]}
-    if reason == "compaction":
-        checkpoint["channel_values"]["_summarization_event"] = {
-            "cutoff_index": 1, "cutoff_message_id": checkpoint["channel_values"]["messages"][-1].id,
-            "summary_message": compaction_summary_message(content="已完成的对话摘要", id="summary-notice-source"),
-        }
     checkpoint["channel_versions"] = {key: checkpoint["id"] for key in checkpoint["channel_values"]}
     with case.scope(user):
         config = case.saver.put({"configurable": {"thread_id": case.thread, "checkpoint_ns": ""}}, checkpoint,
-            {"source": "compaction" if reason == "compaction" else "loop", "step": 1}, checkpoint["channel_versions"])
-        if reason == "rewind":
-            case.saver.rewind(config, checkpoint_id=checkpoint["id"])
+            {"source": "loop", "step": 1}, checkpoint["channel_versions"])
+        case.saver.rewind(config, checkpoint_id=checkpoint["id"])
     sealed = case.prepare(user, "source-user-first")
     assert sealed.seal_binding.prefix.state.epoch.reason.value == reason
     rows = case.rows()

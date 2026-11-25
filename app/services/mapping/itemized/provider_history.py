@@ -11,6 +11,8 @@ import hashlib
 from collections.abc import Mapping
 from typing import Any
 
+from app.domain.itemized.records import CanonicalItemRecord
+from app.services.mapping.itemized.canonical_langchain import project_reasoning_carrier
 from app.services.mapping.itemized.content_blocks import (
     iter_direct_content_blocks,
     reasoning_content_rows,
@@ -209,4 +211,28 @@ def reasoning_projection_rows(content: Any) -> list[dict[str, object]]:
     return merged
 
 
-__all__ = ["public_message_record", "reasoning_projection_rows", "visible_text"]
+def canonical_reasoning_projection(item: CanonicalItemRecord) -> dict[str, object]:
+    """单个思考 Item 的安全视图；不同 Item 不按匿名正文或 Provider ID 合并。"""
+    if item.semantic_kind != "reasoning":
+        raise ValueError(f"不是 reasoning Item: {item.item_id}")
+    carrier = project_reasoning_carrier(item)
+    rows = reasoning_content_rows([carrier]) if carrier is not None else []
+    reasoning = "".join(row.reasoning_text or "" for row in rows)
+    summary = "".join(row.summary_text or "" for row in rows)
+    encrypted = "".join(row.encrypted or "" for row in rows)
+    kind = "reasoning" if reasoning else "reasoning_summary" if summary else (
+        "reasoning_encrypted" if encrypted or carrier is None else "reasoning"
+    )
+    return {
+        "item_id": item.item_id,
+        "kind": kind,
+        "reasoning_text": reasoning or None,
+        "summary_text": summary or None,
+        "signature_present": any(row.signature_present for row in rows),
+        "encrypted_length": len(encrypted) if encrypted else None,
+        "encrypted_hash": hashlib.sha256(encrypted.encode("utf-8")).hexdigest() if encrypted else None,
+        "carrier_type": carrier["type"] if carrier is not None else item.payload_kind,
+    }
+
+
+__all__ = ["canonical_reasoning_projection", "public_message_record", "reasoning_projection_rows", "visible_text"]

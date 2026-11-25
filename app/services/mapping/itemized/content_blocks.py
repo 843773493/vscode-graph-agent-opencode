@@ -1,17 +1,78 @@
 """已接受消息内容的无 I/O block view。
 
-这里仅把已有消息内容展开为可遍历的 block，不执行 provider 响应归一化、
-schema 选择或外部请求编码。provider 响应的归一化仍归
+这里遍历已有消息并映射单块语义 payload，不执行 provider 响应归一化
+或外部请求编码。provider 响应的归一化仍归
 ``app.agents.providers``。
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from app.domain.itemized.identity.item_projection import ReasoningCarrier
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
+
+REASONING_CARRIER_TYPES = frozenset({
+    "reasoning", "reasoning_content", "reasoning_items", "thinking", "redacted_thinking",
+})
+
+
+def semantic_content_payload(
+    part: object,
+) -> tuple[str, str, object, ReasoningCarrier | None]:
+    """将一个已接受内容块映射为语义 payload，流式与 checkpoint 共用。"""
+    kind = "assistant_output"
+    payload_kind = "text" if isinstance(part, str) else "structured_content"
+    payload = part if isinstance(part, str) else [part]
+    carrier: dict[str, object] = {}
+    if isinstance(part, Mapping) and part.get("type") in REASONING_CARRIER_TYPES:
+        kind = "reasoning"
+        text_key = next(
+            (
+                key
+                for key in ("reasoning", "reasoning_content", "text", "thinking")
+                if isinstance(part.get(key), str)
+            ),
+            None,
+        )
+        if text_key is not None and set(part) <= {"type", text_key, "id", "index"}:
+            payload_kind, payload = "text", part[text_key]
+            carrier = {key: value for key, value in part.items() if key != text_key}
+            carrier["text_key"] = text_key
+        else:
+            # 有保护字段的 carrier 使用 domain 允许的 extension envelope。
+            payload_kind = "extension"
+            payload = {
+                "extension_schema": "boxteam.checkpoint.reasoning-carrier",
+                "extension_version": "1",
+                "encoding": "json",
+                "wire_type": str(part["type"]),
+                "schema_version": "1",
+                "value": dict(part),
+                "protection": {"visibility": "protected"},
+            }
+    elif not isinstance(part, (str, Mapping)):
+        raise TypeError("assistant content block 必须是字符串或 object")
+    return kind, payload_kind, payload, ReasoningCarrier.from_dict(carrier) if carrier else None
+
+
+def has_assistant_output(content: Sequence[Mapping[str, object]]) -> bool:
+    """判断已接受内容中是否有输出；媒体不要求同时携带文本。"""
+    for block in content:
+        block_type = block.get("type")
+        if block_type in REASONING_CARRIER_TYPES:
+            continue
+        if block_type in {"text", "output_text"}:
+            if block.get("text"):
+                return True
+        elif block_type == "refusal":
+            if block.get("refusal"):
+                return True
+        else:
+            return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,4 +187,4 @@ def reasoning_content_rows(content: object) -> list[ReasoningContentRow]:
     return rows
 
 
-__all__ = ["ReasoningContentRow", "iter_direct_content_blocks", "reasoning_content_rows", "reasoning_content_text"]
+__all__ = ["REASONING_CARRIER_TYPES", "ReasoningContentRow", "has_assistant_output", "iter_direct_content_blocks", "reasoning_content_rows", "reasoning_content_text"]

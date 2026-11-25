@@ -400,7 +400,7 @@ class ResourceActivationOwnerMixin:
             session_id=session_id,
             read_only=True,
         ) as connection:
-            self._storage.storage._require_v2_runtime(connection)
+            self._storage.storage._require_current_rollout_format(connection)
             self._activation_store().require_schema(connection)
             row = connection.execute(
                 "SELECT session_id, thread_id, activation_snapshot_id, "

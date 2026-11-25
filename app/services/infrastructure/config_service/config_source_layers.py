@@ -8,6 +8,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from jsonschema import Draft202012Validator, SchemaError
+
 from app.core.config_migration_guard import require_settled_config_migration
 from app.core.config_sources import (
     ConfigSource,
@@ -102,9 +104,14 @@ class ConfigSourceLayersMixin:
 
     def _load_schema(self, schema_path: Path | None = None) -> dict[str, Any]:
         if self._schema is None:
-            self._schema = read_jsonc_object(
+            schema = read_jsonc_object(
                 schema_path if schema_path is not None else self._resolve_schema_path()
             )
+            try:
+                Draft202012Validator.check_schema(schema)
+            except SchemaError as error:
+                raise ValueError("配置验证失败: stage=schema") from error
+            self._schema = schema
         return self._schema
 
     def _get_workspace_config_path(self) -> Path:
@@ -199,11 +206,13 @@ class ConfigSourceLayersMixin:
             raise
         ordered = list(dict.fromkeys([node.location.path for node in scope.chain] + list(graph.dependencies)))
         details = []
+        source_configs: dict[Path, dict[str, object]] = {}
         for precedence, path in enumerate(ordered):
             uri = self._source_uri_for_path(path)
             key, layer = self._source_identity(path)
             file = graph.dependencies[path]
             document = cast(dict[str, object], thaw(graph.source_documents[uri]))
+            source_configs[path] = document
             business = cast(dict[str, object], document["settings"]).get("workspace", {})
             if layer in {"user", "user_local"} and workspace_plugin_entries(business):
                 raise ValueError("plugins.runtime.entries 只能写入明确工作区的配置来源")
@@ -238,7 +247,7 @@ class ConfigSourceLayersMixin:
         config = {**settings["workspace"], "network": settings["network"], "config_version": 4}
         if not operation_only:
             self._validate_agent_tool_policies(config)
-        return config, tuple(ordered), tuple(details), self._resolve_schema_path(), graph
+        return config, tuple(ordered), tuple(details), self._resolve_schema_path(source_configs=source_configs), graph
 
     @staticmethod
     def _graph_origins(graph: ConfigGraph) -> list[dict[str, object]]:

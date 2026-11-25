@@ -22,6 +22,7 @@ from app.api.artifacts import router as artifacts_router
 from app.api.config import router as config_router
 from app.api.context import router as context_router
 from app.api.deps import get_workspace_container, workspace_container_scope
+from app.api.derived_executions import router as derived_executions_router
 from app.api.errors import client_error_message
 from app.api.jobs import router as jobs_router
 from app.api.mcp import router as mcp_router
@@ -263,6 +264,7 @@ workspace_routers = (
     context_router,
     mcp_router,
     jobs_router,
+    derived_executions_router,
     agents_router,
     tools_router,
     artifacts_router,

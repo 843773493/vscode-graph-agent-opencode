@@ -99,9 +99,16 @@ def plugin_model(request: pytest.FixtureRequest) -> Iterator[ModelCase]:
 
 def _configure_model(path: Path, gateway_url: str) -> None:
     config = commentjson.loads(path.read_text())
-    config["llm"]["providers"] = {
+    workspace_settings = config["settings"]["workspace"]
+    workspace_settings["llm"]["providers"] = {
         "plugin-skill": {
-            "defaults": {
+            "config_ref": "#/profiles/provider.plugin-skill",
+            "models": {"default": {"model": MODEL, "config_ref": "context:provider/plugin-skill"}},
+        }
+    }
+    config["profiles"]["provider.plugin-skill"] = {
+        "extends": "context:workspace",
+        "settings": {"model_options": {
                 "endpoint": ENDPOINT,
                 "api_key": "",
                 "custom_llm_provider": "openai",
@@ -114,14 +121,12 @@ def _configure_model(path: Path, gateway_url: str) -> None:
                     "supports_reasoning": {"reasoning_content": False},
                 },
             },
-            "models": {"default": {"model": MODEL}},
-        }
-    }
-    for agent in config["agents"].values():
+        }}
+    for agent in workspace_settings["agents"].values():
         if "model" in agent:
             agent["model"] = {'primary': {'provider_id': 'plugin-skill', 'model_id': 'default'}, 'fallbacks': []}
         agent["tools"]["custom"] = [{"tool_id": "test_tool_2", "skills": [NAME]}]
-    config.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {
         "url": gateway_url, "timeout_seconds": 5,
     }
     path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
@@ -153,7 +158,7 @@ async def _bind(client: httpx.AsyncClient, gateway_id: str, workspace_id: str,
     path = f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override"
     document = await _data(await client.get(path, headers=headers))
     source = commentjson.loads(document["jsonc"])
-    source.setdefault("plugins", {})["runtime"] = {"entries": [] if version is None else [{
+    source["settings"]["workspace"].setdefault("plugins", {})["runtime"] = {"entries": [] if version is None else [{
         "package_id": PACKAGE, "package_version": version, "plugin_id": PLUGIN, "enabled": enabled,
     }]}
     result = await _data(await client.put(path, headers=headers, json={
@@ -443,7 +448,7 @@ async def test_plugin_skill_tracked_version_switch_untrack_and_cold_uninstalled_
                 history = await _data(await client.post(f"{path}/history", headers=headers,
                     json={"direction": "tail", "turns": 20, "include": ["metadata"]}))
                 assert history["has_before"] is False
-                markers = [part for turn in history["items"] for part in turn["response_parts"]
+                markers = [part for turn in history["items"] for part in turn["response_items"]
                     if part["kind"] == "context_notice"]
                 assert markers and all(not marker.get("context_cursor") for marker in markers)
                 contents = [(await _data(await client.post(f"{path}/items/inspect", headers=headers,

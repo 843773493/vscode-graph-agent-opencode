@@ -80,13 +80,15 @@ export interface MessageStreamBlock extends MessageStreamLifecycle {
 }
 
 export interface MessageStreamToolExecution extends MessageStreamLifecycle {
+  /** 真实完成观察；completed_at 仍是事件镜像发布时间。 */
+  execution_completed_at?: string;
   tool_execution_id: string;
   tool_call_id: string;
   tool_invocation_id?: string;
   tool_attempt_id?: string;
   tool_name: string;
   status: "running" | "completed" | "failed";
-  outcome?: "success" | "provider_error" | "execution_lost" | "outcome_unknown";
+  outcome?: "success" | "provider_error" | "execution_lost" | "outcome_unknown" | "cancelled";
   completion_reason?: string;
   result?: string;
   error?: string;

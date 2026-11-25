@@ -256,7 +256,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                 # 同一回滚边界内，绝不留下「assembly 已 dispatch 但无
                 # provenance」或反之的半发布状态。
                 activation_binding(connection)
-            if snapshot.selection_policy != "summary_candidate":
+            if snapshot.selection_policy != "derived_request":
                 previous = self._latest_context_assembly_connection(
                     connection, session_id, thread_id, checkpoint_ns=checkpoint_ns,
                     excluding_assembly_id=snapshot.assembly_id,

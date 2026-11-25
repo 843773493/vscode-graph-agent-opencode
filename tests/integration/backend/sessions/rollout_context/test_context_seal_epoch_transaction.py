@@ -49,7 +49,6 @@ from app.services.mapping.itemized.prefix_frames import project_canonical_prefix
 from tests.integration.backend.sessions.rollout_context.test_context_epoch_transition import (
     epoch_db as registry_db,
 )
-from tests.support.messages import compaction_summary_message
 
 __all__ = ["registry_db"]
 
@@ -85,7 +84,7 @@ def seal_inputs(registry_db):
 
     def build(name, *, previous=None, reason=None, selected_tools=tools):
         transition = None
-        if previous is not None and reason in {None, EpochReason.COMPACTION, EpochReason.REWIND}:
+        if previous is not None and reason in {None, EpochReason.REWIND}:
             checkpoint = empty_checkpoint()
             checkpoint["id"] = "checkpoint:" + name
             messages = [HumanMessage(
@@ -94,12 +93,6 @@ def seal_inputs(registry_db):
             if reason is None:
                 messages.append(AIMessage(content="下一次请求前的真实回答", id="seal-input:" + name))
             checkpoint["channel_values"] = {"messages": messages}
-            if reason == EpochReason.COMPACTION:
-                checkpoint["channel_values"]["_summarization_event"] = {
-                    "cutoff_index": len(messages),
-                    "cutoff_message_id": messages[-1].id,
-                    "summary_message": compaction_summary_message(content="已完成对话的真实摘要", id="summary:" + name),
-                }
             checkpoint["channel_versions"] = {
                 key: checkpoint["id"] for key in checkpoint["channel_values"]
             }
@@ -472,7 +465,7 @@ def test_prepared_competing_assembly_uses_exact_predecessor_cas(registry_db, sea
     ).fetchone() == ("unsealed", None)
 
 
-@pytest.mark.parametrize("reason", [EpochReason.COMPACTION, EpochReason.REWIND])
+@pytest.mark.parametrize("reason", [EpochReason.REWIND])
 def test_rebuild_consumes_transition_only_in_successful_seal(registry_db, seal_inputs, reason):
     saver, session, connection, _accepted = registry_db
     first = _seal(registry_db, seal_inputs("first"))

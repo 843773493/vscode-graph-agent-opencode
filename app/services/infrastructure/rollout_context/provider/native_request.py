@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 
 from langchain_core.messages import BaseMessage
 
+from app.domain.itemized.compaction import CanonicalTextRange
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.model_source import ModelSource
@@ -22,7 +23,10 @@ from app.services.infrastructure.rollout_context.provider.toolset_request_bridge
 )
 from app.services.mapping.itemized.canonical_langchain import project_reasoning_carrier
 from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
-from app.services.mapping.itemized.prefix_frames import project_sealed_prefix
+from app.services.mapping.itemized.prefix_frames import (
+    project_sealed_prefix,
+    project_text_range,
+)
 from app.services.mapping.itemized.provider_request import (
     project_ai_message_content,
     project_responses_tool_content,
@@ -41,11 +45,18 @@ def _summary_message_inputs(
     target_capabilities: frozenset[str],
 ) -> tuple[list[dict[str, object]], list[str]]:
     """候选正文来自同一封存 frame；直接按其声明角色编码 Responses。"""
-    if not isinstance(body, Mapping) or set(body) != {"message", "item_ids", "retry_source_item_ids"}:
+    if not isinstance(body, Mapping) or set(body) != {"message", "result_ref", "output_refs", "dispatch_ref", "coverage"}:
         raise ValueError("source-mismatch: 摘要候选缺少精确 message manifest")
     message = body["message"]
+    return project_message_inputs(message, target_source=target_source, target_capabilities=target_capabilities)
+
+
+def project_message_inputs(
+    message: object, *, target_source: ModelSource | None, target_capabilities: frozenset[str],
+) -> tuple[list[dict[str, object]], list[str]]:
+    """完整封存 frame 与稳定增量共用 Responses 的安全消息编码。"""
     if not isinstance(message, Mapping) or not isinstance(message.get("data"), Mapping):
-        raise TypeError("source-mismatch: 摘要候选 message 非法")
+        raise TypeError("source-mismatch: Responses message 非法")
     data = message["data"]
     role = {"human": "user", "ai": "assistant", "tool": "tool"}.get(message.get("type"))
     if role is None:
@@ -179,7 +190,7 @@ def project_native_context(
             body = resolve_selected_request_body(contributions, entry, request_only_content)
             source = contributions.get(entry.contribution_id)
             if source is not None and source.contribution_kind == "model_message":
-                if plan.selection_policy != "summary_candidate":
+                if plan.selection_policy != "derived_request":
                     raise ValueError("source-mismatch: model_message 只能属于摘要候选")
                 summary_inputs, summary_losses = _summary_message_inputs(
                     body, target_source=target_source, target_capabilities=target_capabilities,
@@ -202,6 +213,13 @@ def project_native_context(
         else:
             item = resolve_selected_item(entry, items)
             if ref_identity(ref) in superseded:
+                continue
+            frame = frame_by_ref.get(selection_ref_identity(ref))
+            if frame is not None and isinstance(frame.content, Mapping) and "text_range" in frame.content:
+                part = CanonicalTextRange.from_dict(frame.content["text_range"])
+                message = project_text_range(item, part)
+                inputs.append({"role": frame.role, "content": _text_blocks(message.content, role=frame.role)})
+                wire_sources.append({"input_index": start, "plan_ordinal": entry.plan_ordinal, "ref_id": ref.ref_id})
                 continue
             kind = item.semantic_kind
             if kind in {"user_input", "assistant_output", "reasoning"}:

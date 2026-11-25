@@ -39,10 +39,11 @@ async def observe(client: httpx.AsyncClient, operation_id: str, statuses: set[st
 @pytest.fixture
 def configured_case(recovery_case: RecoveryCase):
     def configure(secure, sibling) -> RecoveryCase:
-        (recovery_case.mount.workspace_root / ".boxteam/workspace.jsonc").write_text(json.dumps({"mcp": {"servers": {
+        (recovery_case.mount.workspace_root / ".boxteam/workspace.jsonc").write_text(json.dumps({
+            "config_version": 4, "extends": "builtin:workspace", "settings": {"workspace": {"mcp": {"servers": {
             "schema": {"enabled": True, "transport": "streamable_http", "url": sibling.url},
             "secure": secure.configuration(),
-        }}}), encoding="utf-8")
+        }}}}}), encoding="utf-8")
         return recovery_case
     return configure
 

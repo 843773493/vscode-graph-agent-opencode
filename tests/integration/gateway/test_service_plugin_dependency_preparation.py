@@ -181,7 +181,7 @@ def dependency_plugin_gateway(request: pytest.FixtureRequest, integration_worksp
     config_path = gateway_workspace / ".boxteam/workspace.jsonc"
     payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
     clear_test_provider_api_keys(payload)
-    payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+    payload["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     gateway = start_gateway_process(
         workspace_root=gateway_workspace,

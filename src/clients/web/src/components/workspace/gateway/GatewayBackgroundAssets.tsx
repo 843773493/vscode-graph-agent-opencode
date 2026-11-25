@@ -3,7 +3,7 @@ import { formatNumber, t } from '../../../../../shared/core/i18n/index.js';
 import { deleteGatewayUiAsset, listGatewayUiAssets, uploadGatewayUiAsset } from '../../../gatewayApi';
 import type { GatewayUiAsset } from '../../../types/backend';
 import type { AppearanceBackground } from '../../../theme/theme';
-import { errorMessage } from '../../../utils/errorMessage';
+import { errorMessage, errorSummary } from '../../../utils/errorMessage';
 import { copyTextToClipboard } from '../../../utils/clipboard';
 
 /** Gateway 只持有背景图片资产；应用到窗口仍写原生用户设置。 */
@@ -11,19 +11,19 @@ export default function GatewayBackgroundAssets({ apiPort, background, onUpdateB
   apiPort: number; background: AppearanceBackground; onUpdateBackground: (value: AppearanceBackground) => Promise<void>;
 }) {
   const [assets, setAssets] = useState<GatewayUiAsset[]>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<unknown>();
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let active = true;
     void listGatewayUiAssets(apiPort).then(value => { if (active) setAssets(value); })
-      .catch(cause => { if (active) setError(errorMessage(cause)); });
+      .catch(cause => { if (active) setError(cause); });
     return () => { active = false; };
   }, [apiPort]);
   const run = async (action: () => Promise<void>) => {
     setBusy(true); setError(undefined); setNotice(undefined);
     try { await action(); }
-    catch (cause) { setError(errorMessage(cause)); }
+    catch (cause) { setError(cause); }
     finally { setBusy(false); }
   };
   const reload = async () => { setAssets(await listGatewayUiAssets(apiPort)); };
@@ -42,7 +42,7 @@ export default function GatewayBackgroundAssets({ apiPort, background, onUpdateB
   };
   return <section className="gateway-theme-section panel-feedback-host" aria-label={t('gateway.theme.backgroundImage')}>
     <p>{t('gateway.settings.assetScope')}</p>
-    {error ? <p role="alert">{t('gateway.theme.settingsFailed')} · {error}</p> : null}
+    {error ? <p className="failure-summary" role="alert">{errorSummary(error, t('gateway.theme.settingsFailed'))}</p> : null}
     {notice ? <p role="status">{notice}</p> : null}
     <div className="gateway-control-actions">
       <label className="gateway-theme-upload"><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={busy} onChange={upload} />{t('gateway.theme.importLocalImage')}</label>

@@ -9,7 +9,7 @@ export interface ThreadHistoryOwner {
 }
 
 interface HistorySnapshot {
-  version: 2;
+  version: 3;
   owner: ThreadHistoryOwner;
   timeline: SessionTurnTimeline;
   savedAt: number;
@@ -74,7 +74,7 @@ export class ThreadHistoryCache {
       console.debug("会话历史展示缓存未命中", { owner, source });
       return null;
     }
-    if (snapshot.version !== 2) {
+    if (snapshot.version !== 3) {
       // 镜像可由 canonical history 重建；只失效此条，草稿及其它恢复记录不参与淘汰。
       await this.remove(owner);
       console.warn("会话历史展示缓存格式已失效，将重新同步", { owner, version: snapshot.version });
@@ -99,7 +99,7 @@ export class ThreadHistoryCache {
       && previous.timeline.internalExecutions === timeline.internalExecutions
       && previous.timeline.beforeCursor === timeline.beforeCursor && previous.timeline.afterCursor === timeline.afterCursor
       && previous.timeline.historyViewRevision === timeline.historyViewRevision && previous.timeline.projectionEpoch === timeline.projectionEpoch) return;
-    const snapshot: HistorySnapshot = { version: 2, owner, savedAt: Date.now(), bytes: 0,
+    const snapshot: HistorySnapshot = { version: 3, owner, savedAt: Date.now(), bytes: 0,
       timeline: { ...timeline, phase: "bootstrapping", restoredFromCache: true, generation: 0,
         bodyWindowTurnIds: undefined,
         activeJobs: [], eventCursor: null, loadingBefore: false, loadingAfter: false, loadingDetailIds: [], error: null } };

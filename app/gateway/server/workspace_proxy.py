@@ -102,7 +102,7 @@ WORKSPACE_RUNTIME_READY_WAIT_SECONDS = 120.0
 def _registry(request: HTTPConnection) -> GatewayWorkspaceRegistry:
     registry = getattr(request.app.state, "registry", None)
     if not isinstance(registry, GatewayWorkspaceRegistry):
-        raise RuntimeError("Gateway registry 尚未初始化")
+        raise RuntimeError("Gateway registry 尚未初始化")  # noqa: TRY004 - 运行时装配错误，保留既有异常类型。
     return registry
 
 
@@ -112,7 +112,7 @@ def _http_client(request: Request, *, streaming: bool = False) -> httpx.AsyncCli
         client = getattr(request.app.state, "streaming_http_client", None)
     if not isinstance(client, httpx.AsyncClient):
         client_name = "streaming_http_client" if streaming else "http_client"
-        raise RuntimeError(f"Gateway {client_name} 尚未初始化")
+        raise RuntimeError(f"Gateway {client_name} 尚未初始化")  # noqa: TRY004 - 运行时装配错误，保留既有异常类型。
     return client
 
 
@@ -779,11 +779,12 @@ async def proxy_context_search(
 @router.api_route(
     "/api/v1/{path:path}",
     methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    include_in_schema=False,
 )
 async def proxy_workspace_api(
     path: str,
     request: Request,
-    auth: GatewayAuthContext = Depends(verify_gateway_access),
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
 ) -> Response:
     return await _proxy_workspace_request(
         path,

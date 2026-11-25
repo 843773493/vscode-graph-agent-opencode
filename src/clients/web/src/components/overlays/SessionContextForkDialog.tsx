@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { t } from '../../../../shared/core/i18n/index.js';
 import { useContext } from "react";
 import { OverlayRootContext } from "./OverlayRootContext";
@@ -190,7 +191,7 @@ export default function SessionContextForkDialog({
                 <span>{resource.retention_scope === "workspace" ? t('navigation.fork.workspaceRetained') : t('navigation.fork.sourceThreadOnly')} · {resource.status} · {resource.reconciliation_status}</span>
                 <span>{t('navigation.fork.source')}{resource.source_thread.session_id} / {resource.source_thread.thread_id}</span>
                 <span>{t('navigation.fork.currentAssociations')}{resource.thread_associations.map((ref) => `${ref.session_id} / ${ref.thread_id}`).join(t('navigation.listSeparator')) || t('navigation.fork.none')}</span>
-                {resource.error ? <span role="status">{resource.error}</span> : null}
+                {resource.error ? <span className="failure-summary" role="status">{failureSummary(resource.error)}</span> : null}
               </label>;
             })}
           </fieldset>
@@ -201,7 +202,7 @@ export default function SessionContextForkDialog({
             </label> : null}
           </> : null}
         </> : null}
-        {state.error ? <div className="session-name-error" role="alert">{state.error}</div> : null}
+        {state.error ? <div className="session-name-error failure-summary" role="alert">{failureSummary(state.error)}</div> : null}
         </div>
         <div className="session-name-actions">
           <button type="button" disabled={state.submitting} onClick={onCancel}>{t('navigation.cancel')}</button>

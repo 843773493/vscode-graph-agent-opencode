@@ -7,13 +7,27 @@ import { chatTurnProps, conversation } from "./chatTurnTestFixtures";
 import { ChatItemMenuContext, type ChatItemMenuRequest } from "../itemContextMenu";
 
 describe("ChatTurn memo 比较", () => {
+  test("同revision的执行证据或结果更新不会被正文复用挡住", () => {
+    const previous = conversation("done");
+    previous.turnRevision = 2;
+    previous.responseItems = [{id: "call", kind: "tool_call", projection: "summary", status: "completed",
+      tool_call_id: "call", source: {message_sequence: 1}}];
+    const execution = {session_id: "s", thread_id: "t", turn_stream_id: "stream", tool_invocation_id: "inv",
+      tool_attempt_id: "attempt", tool_execution_id: "attempt", started_seq: 1,
+      started_at: undefined, execution_completed_at: undefined, status: "running"};
+    for (const update of [{tool_execution: execution}, {tool_outcome: "failure" as const}]) {
+      const next = {...previous, responseItems: [{...previous.responseItems[0]!, ...update}]};
+      expect(areChatTurnPropsEqual(chatTurnProps(previous), chatTurnProps(next))).toBe(false);
+    }
+  });
+
   test("同 revision 新增来源标记不会被复用挡住，标记位于真实用户消息前", () => {
     const previous = conversation("done");
     previous.turnId = "turn-context";
     previous.threadId = "thread-context";
     previous.turnRevision = 1;
-    const next = { ...previous, responseParts: [...previous.responseParts!, {
-      part_id: "context-first", kind: "context_notice" as const, projection: "summary" as const,
+    const next = { ...previous, responseItems: [...previous.responseItems!, {
+      id: "context-first", kind: "context_notice" as const, projection: "summary" as const,
       source: { message_sequence: 0 }, context_model_call_id: "call-context",
       context_content_ref: { kind: "sealed_contribution", session_id: "session", thread_id: "thread",
         assembly_id: "assembly", contribution_id: "prompt" },
@@ -38,7 +52,7 @@ describe("ChatTurn memo 比较", () => {
     value.sourceViewId = "view-display";
     value.sourceViewRevision = 8;
     value.userMessage = null;
-    value.responseParts![0].source = {
+    value.responseItems![0].source = {
       message_sequence: 2,
       item_id: "item-visible-final",
       logical_item_ordinal: 12,
@@ -144,10 +158,10 @@ describe("ChatTurn memo 比较", () => {
     previous.turnItemsView = "full";
     const next = {
       ...previous,
-      responseParts: [
-        ...previous.responseParts!,
+      responseItems: [
+        ...previous.responseItems!,
         {
-          part_id: "tool-call:call-1",
+          id: "tool-call:call-1",
           kind: "tool_call" as const,
           projection: "detail" as const,
           status: "completed" as const,

@@ -113,7 +113,7 @@ class RuntimeWakeupStorageMixin:
         """按准入键读取首次冻结的 wakeup，不从当前配置补造执行参数。"""
         try:
             with self._storage.read_connection(session_id, thread_id, "") as connection:
-                self._storage._require_v2_runtime(connection)
+                self._storage._require_current_rollout_format(connection)
                 row = connection.execute(
                     f"SELECT {','.join(_COLUMNS)} FROM runtime_execution_wakeups "
                     "WHERE session_id=? AND thread_id=? AND admission_idempotency_key=?",
@@ -153,7 +153,7 @@ class RuntimeWakeupStorageMixin:
 
     def runtime_wakeup_input(self, wakeup: RuntimeExecutionWakeup) -> CanonicalItemRecord:
         with self._storage.read_connection(wakeup.session_id, wakeup.thread_id, "") as connection:
-            self._storage._require_v2_runtime(connection)
+            self._storage._require_current_rollout_format(connection)
             return self._storage._read_canonical_item_from_catalog(
                 connection, session_id=wakeup.session_id, thread_id=wakeup.thread_id,
                 checkpoint_ns="", item_id=wakeup.source_item_id,
@@ -178,7 +178,7 @@ class RuntimeWakeupStorageMixin:
 
     def execution_output(self, session_id: str, thread_id: str, execution_id: str, *, final_only: bool = False) -> tuple[str, InternalDisplayProvenance]:
         with self._storage.read_connection(session_id, thread_id, "") as connection:
-            self._storage._require_v2_runtime(connection)
+            self._storage._require_current_rollout_format(connection)
             execution = connection.execute(
                 "SELECT last_model_call_id FROM executions WHERE session_id=? AND thread_id=? AND execution_id=?",
                 (session_id, thread_id, execution_id),
@@ -200,7 +200,10 @@ class RuntimeWakeupStorageMixin:
         items = tuple(item for item in items if item.item_id not in superseded)
         codec = self._storage._codec()
         return (
-            "\n".join(codec.visible_text(codec.project_message((item,))) for item in items),
+            # 只投影所选输出的正文；组内单项不作为完整消息重建，也不补读思考／工具。
+            "\n".join(codec.visible_text({"data": {"content":
+                item.payload["content"] if isinstance(item.payload, Mapping) and "invalid_tool_calls" in item.payload
+                else item.payload}}) for item in items),
             InternalDisplayProvenance(
                 source_session_id=session_id, source_thread_id=thread_id,
                 source_execution_id=execution_id,
@@ -209,30 +212,11 @@ class RuntimeWakeupStorageMixin:
         )
 
     def cold_execution_observations(self, session_id: str, thread_id: str, *, job_ids: list[str] | None = None, turn_id: str | None = None) -> list[dict[str, str]]:
-        """只读当前 owner 的可观察执行；显式导入的合成历史不伪装成待运行 Job。"""
+        """只读当前 owner 的可观察执行。"""
         root = self._storage.root(session_id, thread_id=thread_id)
         if not (root / "index.sqlite").is_file():
             return []
-        clauses = [
-            "execution.session_id=?", "execution.thread_id=?",
-            (
-                "NOT EXISTS(SELECT 1 FROM turn_acceptances acceptance "
-                "JOIN turn_records turn ON turn.session_id=acceptance.session_id "
-                "AND turn.thread_id=acceptance.thread_id AND turn.turn_id=acceptance.turn_id "
-                "WHERE acceptance.session_id=execution.session_id "
-                "AND acceptance.thread_id=execution.thread_id "
-                "AND acceptance.identity_origin='legacy_synthetic' "
-                "AND turn.initial_execution_id=execution.execution_id)"
-            ),
-            (
-                "NOT EXISTS(SELECT 1 FROM item_catalog notice "
-                "JOIN json_each(notice.projection_manifest_json,'$.provenance_relations') source "
-                "WHERE execution.execution_origin='internal' "
-                "AND notice.execution_id=execution.execution_id AND notice.semantic_kind='runtime_notice' "
-                "AND json_extract(source.value,'$.relation')='derived_from' "
-                "AND json_extract(source.value,'$.target_kind')='legacy_message')"
-            ),
-        ]
+        clauses = ["execution.session_id=?", "execution.thread_id=?"]
         params: list[object] = [session_id, thread_id]
         if job_ids is not None:
             if not job_ids:
@@ -243,7 +227,7 @@ class RuntimeWakeupStorageMixin:
             clauses.append("execution.turn_id=?")
             params.append(turn_id)
         with self._storage._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
-            self._storage._require_v2_runtime(connection)
+            self._storage._require_current_rollout_format(connection)
             rows = connection.execute(
                 "SELECT execution.job_id,execution.execution_id,execution.outcome,"
                 "execution.updated_at,execution.last_model_call_id FROM executions execution WHERE "
@@ -283,8 +267,6 @@ class RuntimeWakeupStorageMixin:
             if admission.execution_id != execution_id:
                 raise RuntimeError("runtime 进度与原准入 identity 不一致")
             # 元数据来自原 canonical catalog；计量不必重新载入工具结果和长正文。
-            # TODO：摘要候选不进入普通消息 checkpoint，尚缺同一 ModelCall owner 的持久用量；
-            # 补齐该来源后统一计量，不能从可裁剪 Trace 推断预算或另存一套调用历史。
             usage_path = '$.extensions."boxteam.checkpoint.annotations".value.model_token_usage'
             rows = connection.execute(
                 "SELECT json_extract(projection_manifest_json,'$.projection_identity.model_call_id'),"

@@ -141,7 +141,7 @@ async def test_boundary_fixtures_have_distinct_copilot_style_web_states(
             for kind in ("tool_call", "tool_result"):
                 assert [
                     (part["tool_name"], part["tool_call_id"])
-                    for part in item["response_parts"] if part["kind"] == kind
+                    for part in item["response_items"] if part["kind"] == kind
                 ] == expected
 
     port_block = integration_ports_for_file(Path(request.node.fspath))

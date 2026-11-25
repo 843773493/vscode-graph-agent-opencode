@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { nodeKey, nodeAttributes } from "../../../state/timeline/transcriptNodes";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
@@ -261,7 +262,7 @@ export function ChatTurnUserSection({
           <div className="chat-user-raw-status" role="status">{t("chat.turn.loadingRaw")}</div>
         ) : null}
         {canInspectRawMessage && rawMessageError ? (
-          <div className="chat-user-raw-error" role="alert">{rawMessageError}</div>
+          <div className="chat-user-raw-error failure-summary" role="alert">{failureSummary(rawMessageError)}</div>
         ) : null}
         {canInspectRawMessage && rawMessageContent !== null ? (
           <div className="chat-user-raw-details">

@@ -18,7 +18,7 @@ from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
 )
 from app.services.infrastructure.rollout_context.storage.format_dispatch import (
-    require_v2_runtime,
+    require_current_rollout_format,
 )
 from app.services.infrastructure.rollout_context.storage.migrations.v19_sqlite_to_v20_sqlite import (
     validate_legacy_channel_values,
@@ -36,7 +36,6 @@ from app.services.infrastructure.rollout_context.storage.migrations.v29_sqlite_t
     migrate_response_outlines,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
-    MessageCodec,
     RolloutManifest,
     _storage_failure,
     _storage_io,
@@ -118,7 +117,6 @@ def migrate_schema_snapshot(
     connection: sqlite3.Connection, *, current_version: int, to_version: int,
     migration_name: str, migration_sql: str, jsonl_path: Path,
     transaction_id: str, timestamp: str,
-    message_codec: MessageCodec | None = None,
 ) -> None:
     """在调用方持有的候选事务内沿唯一 SQL／审计合同执行一阶迁移。"""
     checksum = _hash_bytes(migration_sql.encode("utf-8"))
@@ -162,13 +160,12 @@ def migrate_schema_snapshot(
     if (current_version, to_version) == (28, 29) and migration_sql != EXECUTION_PAUSE_SCHEMA_SQL:
         raise ValueError("schema migration 28→29 必须使用登记的 Thread 暂停 SQL")
     if (current_version, to_version) == (29, 30) and (
-        migration_sql != RESPONSE_OUTLINE_MIGRATION_SQL or message_codec is None
+        migration_sql != RESPONSE_OUTLINE_MIGRATION_SQL
     ):
-        raise ValueError("schema migration 29→30 必须使用登记的轮廓 SQL 和原消息 codec")
+        raise ValueError("schema migration 29→30 必须使用登记的v30轮廓 SQL")
     execute_atomic_schema_sql(connection, migration_sql)
     if (current_version, to_version) == (29, 30):
-        assert message_codec is not None
-        migrate_response_outlines(connection, jsonl_path, message_codec)
+        migrate_response_outlines(connection, jsonl_path)
         execute_atomic_schema_sql(connection, load_sql(__package__, "migrations/checkpoint/message_projections_029_030_finish.sql"))
     if (current_version, to_version) == (27, 28):
         migrate_team_source_observations(connection)
@@ -209,7 +206,7 @@ def migrate_schema_snapshot(
     if control_result.rowcount != 1:
         raise RuntimeError("SQLite migration control sequence 更新失败")
     RolloutSchemaIntrospectionMixin._validate_schema_state(connection, expected_version=to_version)
-    RolloutSchemaIntrospectionMixin._validate_v2_commit_offsets(
+    RolloutSchemaIntrospectionMixin._validate_commit_offsets(
         connection, jsonl_path,
     )
 
@@ -246,8 +243,8 @@ class RolloutMaintenanceOwner(
             thread_id, checkpoint_ns, session_id=session_id, read_only=read_only
         )
 
-    def _require_v2_runtime(self, connection: sqlite3.Connection) -> None:
-        self._host._require_v2_runtime(connection)
+    def _require_current_rollout_format(self, connection: sqlite3.Connection) -> None:
+        self._host._require_current_rollout_format(connection)
 
     def migrate_schema(
         self,
@@ -294,7 +291,7 @@ class RolloutMaintenanceOwner(
                 session_id=session_id,
                 read_only=True,
             ) as source:
-                self._host._require_v2_readable(source)
+                self._host._require_rollout_readable(source)
                 row = source.execute(
                     "SELECT schema_version, message_format_version, session_id, thread_id "
                     "FROM database_meta WHERE singleton_id = 1"
@@ -311,7 +308,7 @@ class RolloutMaintenanceOwner(
                     )
                 if (to_version > storage_version.ROLLOUT_SCHEMA_VERSION
                         or (to_version != storage_version.ROLLOUT_SCHEMA_VERSION
-                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (23, 24), (24, 25), (25, 26), (26, 27), (27, 28), (28, 29)})):
+                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (23, 24), (24, 25), (25, 26), (26, 27), (27, 28), (28, 29), (29, 30)})):
                     raise RuntimeError(
                         "当前程序尚未声明目标 SQLite schema 版本: "
                         f"target={to_version}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"
@@ -319,7 +316,7 @@ class RolloutMaintenanceOwner(
                 if row[1] != storage_version.MESSAGE_FORMAT_VERSION:
                     raise RuntimeError("schema-incompatible: migration source message format 不一致")
                 validate_schema_journal(source, current_version)
-                self._host._validate_v2_commit_offsets(
+                self._host._validate_commit_offsets(
                     source,
                     self._host.jsonl_path(
                         session_id, checkpoint_ns, thread_id=thread_id
@@ -348,7 +345,6 @@ class RolloutMaintenanceOwner(
                         migration_name=migration_name, migration_sql=migration_sql,
                         jsonl_path=self._host.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id),
                         transaction_id=transaction_id, timestamp=timestamp,
-                        message_codec=self._host._codec() if (current_version, to_version) == (29, 30) else None,
                     )
                     connection.commit()
             except BaseException as error:
@@ -409,7 +405,7 @@ class RolloutMaintenanceOwner(
                 root.mkdir(parents=True, exist_ok=True)
                 if self._is_removed_rollout_layout(root):
                     raise _storage_failure(root, RuntimeError("rollout 使用了已移除的旧布局"), "layout_validation", artifact="rollout_layout")
-            # 正常 runtime 只接收显式声明的 v2 rollout；旧格式必须重建。
+            # 只接受当前格式；旧数据在写入前明确拒绝，保留原件。
             existing_index = root / "index.sqlite"
             needs_schema = True
             if existing_index.is_file() and existing_index.stat().st_size > 0:
@@ -475,16 +471,14 @@ class RolloutMaintenanceOwner(
                                 )
                     if "rollout_format_version" not in meta_columns:
                         raise FormatDispatchError(
-                            "unsupported_legacy_rollout: 缺少 v2 format dispatch"
+                            "unsupported_legacy_rollout: 缺少 rollout_format_version；原件保留"
                         )
                     format_row = existing_connection.execute(
                         "SELECT rollout_format_version FROM database_meta WHERE singleton_id = 1"
                     ).fetchone()
                     if format_row is None:
-                        # schema.py 先创建空的 v2 表，再由本方法原子创建
-                        # database_meta。这个窗口不是 v1 artifact；只有已经
-                        # 存在业务行却没有 v2 meta 时才是不可恢复的半成品。
-                        v2_rows = sum(
+                        # 空结构可继续初始化；已有业务行却缺少 meta 时必须拒绝。
+                        business_rows = sum(
                             strict_non_negative_int(
                                 existing_connection.execute(
                                     f"SELECT COUNT(*) FROM {table}"
@@ -505,15 +499,15 @@ class RolloutMaintenanceOwner(
                                 "tool_set_snapshots",
                             )
                         )
-                        if v2_rows:
+                        if business_rows:
                             raise RuntimeError(
-                                "v2 rollout database_meta 缺失但已有业务数据，"
-                                "拒绝猜测半成品恢复: v2_migration_repair_required"
+                                "rollout database_meta 缺失但已有业务数据，"
+                                "拒绝猜测半成品恢复: recovery_required；原件保留"
                             )
-                        # 空的、已创建 v2 schema 继续走下面的 meta 初始化。
+                        # 空结构继续走下面的 meta 初始化。
                     else:
                         needs_schema = False
-                        require_v2_runtime(
+                        require_current_rollout_format(
                             strict_non_negative_int(
                                 format_row[0],
                                 field="database_meta.rollout_format_version",
@@ -637,7 +631,7 @@ class RolloutMaintenanceOwner(
                     )
                 # 先验证 meta、提交链及 catalog 的同一边界；损坏的 meta
                 # 不能成为截断依据，否则会在报错前删除已提交 item。
-                self._host._validate_v2_commit_offsets(
+                self._host._validate_commit_offsets(
                     connection,
                     path,
                     validate_jsonl_items=validate_jsonl_items,

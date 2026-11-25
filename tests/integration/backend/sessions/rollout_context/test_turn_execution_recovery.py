@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import sqlite3
@@ -44,7 +43,6 @@ from app.domain.itemized.identity.item_projection import (
 )
 from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
@@ -124,6 +122,7 @@ def _register_provider_model_call(
     frozen_provider_wire,
     *,
     key: str,
+    attempt: int = 1,
 ) -> str:
     """经真实 provider prepare 与 ModelCall 登记把已接受 Turn 推进 active。"""
     execution_id = str(accepted["initial_execution_id"])
@@ -151,7 +150,7 @@ def _register_provider_model_call(
         thread_id=thread,
         execution_id=execution_id,
         model_call_id=model_call_id,
-        attempt=1,
+        attempt=attempt,
         provider="test-provider",
         assembly_id=str(prepared["assembly_id"]),
     )
@@ -284,7 +283,7 @@ def test_item_commit_rejects_non_canonical_locator_metadata(
 
 
 @pytest.mark.parametrize("structured", [False, True])
-def test_item_commit_uses_canonical_writer_for_block_part_projection(
+def test_item_commit_keeps_provider_block_in_canonical_item_locator(
     tmp_path: Path,
     session_bundle_factory,
     structured: bool,
@@ -310,34 +309,26 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
     )
     db_path = _rollout_db(sessions_dir, SESSION_ID)
     with sqlite3.connect(db_path) as connection:
-        part = connection.execute(
-            "SELECT item_id, part_id, part_ordinal, content_hash, line_hash "
-            "FROM item_parts WHERE item_id = ?",
-            (item.item_id,),
-        ).fetchone()
         locator = connection.execute(
-            "SELECT jsonl_offset, jsonl_length, commit_id FROM item_catalog "
-            "WHERE item_id = ?",
-            (item.item_id,),
+            "SELECT jsonl_offset,jsonl_length,commit_id,payload_length,projection_manifest_json "
+            "FROM item_catalog WHERE item_id=?", (item.item_id,),
         ).fetchone()
-        part_locator = json.loads(connection.execute(
-            "SELECT locator_json FROM item_parts WHERE item_id=?", (item.item_id,),
-        ).fetchone()[0])
-        catalog_length = connection.execute(
-            "SELECT payload_length FROM item_catalog WHERE item_id=?", (item.item_id,),
-        ).fetchone()[0]
-    assert part[:4] == (item.item_id, "block-1", 0, item.content_hash)
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(item_catalog)")}
+    assert not tables.intersection({"item_parts", "operation_anchors"})
+    assert "operation_anchor_capable" not in columns
     assert locator[2] == commit_id
+    assert json.loads(locator[4])["projection_identity"]["block_id"] == "block-1"
     raw = saver._storage.storage.jsonl_path(SESSION_ID).read_bytes()
-    stored = raw[locator[0] : locator[0] + locator[1]]
+    stored = raw[locator[0]:locator[0] + locator[1]]
     persisted = json.loads(stored)
-    assert persisted["item_id"] == item.item_id
-    assert persisted["payload"] == payload
+    assert persisted["item_id"] == item.item_id and persisted["payload"] == payload
     assert canonical_json_bytes(persisted) + b"\n" == stored
-    assert catalog_length == part_locator["length"] == payload_content_length(payload_kind, payload)
-    assert (
-        part[4] == hashlib.sha256(raw[locator[0] : locator[0] + locator[1]]).hexdigest()
-    )
+    assert locator[3] == payload_content_length(payload_kind, payload)
+    with RolloutCheckpointSaver(sessions_dir) as cold:
+        assert cold._storage.storage.read_items(SESSION_ID, thread, item_ids=[item.item_id]) == [
+            replace(item, item_sequence=persisted["item_sequence"]),
+        ]
 
 
 def test_commit_rejects_changed_nested_payload_before_jsonl_append(
@@ -985,7 +976,7 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
 
 
 @pytest.mark.asyncio
-async def test_partial_stream_item_and_anchor_survive_runtime_restart(frozen_provider_activation,
+async def test_partial_stream_item_and_provider_source_survive_runtime_restart(frozen_provider_activation,
     tmp_path: Path,
     session_bundle_factory,
     execution_scope,
@@ -1079,69 +1070,21 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(frozen_pro
         f"item-{model_call_id}-model-{model_call_id}-block-"
         f"{model_call_id}:block:answer-partial"
     )
-    assert partial_item.payload == "流式前半流式后半"
+    assert partial_item.payload_kind == "structured_content"
+    assert partial_item.payload == [{
+        "id": "answer-partial", "index": 0, "type": "text", "text": "流式前半流式后半",
+    }]
     assert partial_item.producer_ref == {
         "producer_kind": "provider",
         "producer_id": model_call_id,
         "invocation_id": model_call_id,
     }
 
-    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
-        view_id, branch_id = connection.execute(
-            "SELECT v.view_id, v.branch_id FROM context_views AS v "
-            "JOIN branches AS b ON b.head_view_id = v.view_id "
-            "WHERE b.status = 'active'"
-        ).fetchone()
-        part_row = connection.execute(
-            "SELECT part_id, part_ordinal, content_hash, locator_json "
-            "FROM item_parts WHERE item_id = ?",
-            (partial_item.item_id,),
-        ).fetchone()
-    assert part_row is not None
-    part_id, part_ordinal, content_hash, locator_json = part_row
-    # item_parts.part_id 直接使用 canonical 的 scoped block_id，provider 原始
-    # part id 只是其中的后缀。
-    assert (part_id, part_ordinal, content_hash) == (
-        f"{model_call_id}:block:answer-partial",
-        0,
-        partial_item.content_hash,
-    )
-    assert locator_json == canonical_json_bytes(
-        {
-            "encoding": "jcs:v1",
-            "json_pointer": "/payload",
-            "length": len("流式前半流式后半".encode()),
-            "offset": 0,
-        }
-    ).decode("utf-8")
-    anchor = ContentPartAnchor(
-        anchor_id="anchor-partial-restart",
-        item_id=partial_item.item_id,
-        part_id=part_id,
-        mode="inclusive",
-        view_id=view_id,
-        branch_id=branch_id,
-        capability="content_part",
-        content_hash=content_hash,
-    )
-    saver.register_content_part_anchor(
-        SESSION_ID, anchor, thread_id=saver._storage.storage.main_thread_id(SESSION_ID)
-    )
-
+    assert partial_item.projection_identity.block_id == f"{model_call_id}:block:answer-partial"
+    assert partial_item.projection_identity.block_index == 0
     restarted_saver = RolloutCheckpointSaver(sessions_dir)
-    restarted_items = restarted_saver._storage.storage.read_items(SESSION_ID, thread)
-    restored_item = next(
-        item for item in restarted_items if item.item_id == partial_item.item_id
-    )
-    assert restored_item == partial_item
-    assert (
-        restarted_saver.resolve_content_part_anchor(
-            SESSION_ID,
-            thread_id=restarted_saver._storage.storage.main_thread_id(SESSION_ID),
-            anchor_id=anchor.anchor_id,
-        )
-        == anchor
-    )
+    restarted_items = restarted_saver._storage.storage.read_items(SESSION_ID, thread, item_ids=[partial_item.item_id])
+    assert restarted_items == [partial_item]
 
     restarted_stream_store = MessageStreamStore(path_resolver=resolver)
     restarted_writer = await restarted_stream_store.open_existing(
@@ -2025,169 +1968,32 @@ def test_replay_as_new_turn_is_idempotent_after_saver_restart(
     assert (turn_count, root_count, acceptance_count, lineage_count) == (2, 2, 2, 1)
 
 
-def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_view(
-    tmp_path: Path,
-    session_bundle_factory,
-    execution_scope,
+def test_item_reference_survives_restart_and_rejects_corrupt_canonical_line(
+    tmp_path: Path, session_bundle_factory,
 ) -> None:
+    """Item locator 唯一负责重启定位与正文校验，不注册另一层持久 Part。"""
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
-    root = "请检查当前状态"
-    part = ContentPart.create(
-        part_id="part-user-1",
-        part_ordinal=0,
-        part_semantic_kind="user_input",
-        content=root,
-    )
-    saver.register_content_part(
-        SESSION_ID,
-        thread_id=saver._storage.storage.main_thread_id(SESSION_ID),
-        item_id=str(accepted["root_input_item_id"]),
-        part=part,
-        locator={
-            "json_pointer": "/payload",
-            "encoding": "jcs:v1",
-            "offset": 0,
-            "length": len(canonical_json_bytes(root)),
-        },
-    )
-    checkpoint = empty_checkpoint()
-    checkpoint["id"] = "checkpoint-anchor"
-    checkpoint["channel_values"] = {
-        "messages": [HumanMessage(content=root, id="user-1")]
-    }
-    checkpoint["channel_versions"] = {"messages": "1"}
-    checkpoint["updated_channels"] = ["messages"]
-    with execution_scope(saver, accepted) as (thread, _manager):
-        saver.put(
-            build_checkpoint_config(thread),
-            checkpoint,
-            {"source": "anchor-test", "step": 1, "parents": {}},
-            {"messages": "1"},
-        )
-    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
-        view_id, branch_id = connection.execute(
-            "SELECT v.view_id, v.branch_id FROM context_views AS v "
-            "JOIN branches AS b ON b.head_view_id = v.view_id "
-            "WHERE b.status = 'active'"
-        ).fetchone()
-    anchor = ContentPartAnchor(
-        anchor_id="anchor-user-part-1",
-        item_id=str(accepted["root_input_item_id"]),
-        part_id=part.part_id,
-        mode="inclusive",
-        view_id=view_id,
-        branch_id=branch_id,
-        capability="content_part",
-        content_hash=sha256_jcs(root),
-    )
-    saver.register_content_part_anchor(
-        SESSION_ID, anchor, thread_id=saver._storage.storage.main_thread_id(SESSION_ID)
-    )
-
+    thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    item_id = str(accepted["root_input_item_id"])
+    original_item, = saver._storage.storage.read_items(SESSION_ID, thread, item_ids=[item_id])
     restarted = RolloutCheckpointSaver(sessions_dir)
-    resolved = restarted.resolve_content_part_anchor(
-        SESSION_ID,
-        thread_id=restarted._storage.storage.main_thread_id(SESSION_ID),
-        anchor_id=anchor.anchor_id,
-    )
-    assert resolved == anchor
-    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
-        persisted = connection.execute(
-            "SELECT item_id, part_id, part_ordinal, line_hash FROM item_parts"
-        ).fetchone()
-        raw_line = (
-            _rollout_db(sessions_dir, SESSION_ID).parent / "rollout.jsonl"
-        ).read_bytes()
-        item_offset, item_length = connection.execute(
-            "SELECT jsonl_offset, jsonl_length FROM item_catalog WHERE item_id = ?",
-            (accepted["root_input_item_id"],),
-        ).fetchone()
-    assert persisted[:3] == (accepted["root_input_item_id"], part.part_id, 0)
-    assert (
-        persisted[3]
-        == hashlib.sha256(raw_line[item_offset : item_offset + item_length]).hexdigest()
-    )
-    assert (
-        restarted._storage.storage.read_items(SESSION_ID, thread)[0].item_id
-        == accepted["root_input_item_id"]
-    )
-
-    unreachable = ContentPartAnchor(
-        anchor_id="anchor-unreachable-view",
-        item_id=str(accepted["root_input_item_id"]),
-        part_id=part.part_id,
-        mode="before",
-        view_id="view-not-in-lineage",
-        branch_id=branch_id,
-        capability="content_part",
-        content_hash=part.content_hash,
-    )
-    with pytest.raises(ValueError, match="不在指定 view"):
-        restarted.register_content_part_anchor(
-            SESSION_ID,
-            unreachable,
-            thread_id=restarted._storage.storage.main_thread_id(SESSION_ID),
-        )
-
-    inactive_view_id = "view-inactive-anchor"
-    inactive_branch_id = "branch-inactive-anchor"
-    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
-        connection.execute(
-            "INSERT INTO branches(branch_id, branch_kind, status, head_view_id, "
-            "head_checkpoint_id, parent_branch_id, created_at, updated_at) "
-            "VALUES (?, 'fork', 'active', ?, NULL, NULL, ?, ?)",
-            (
-                inactive_branch_id,
-                inactive_view_id,
-                "2026-09-07T00:00:00+00:00",
-                "2026-09-07T00:00:00+00:00",
-            ),
-        )
-        connection.execute(
-            "INSERT INTO context_views(view_id, branch_id, parent_view_id, view_kind, "
-            "head_turn_id, head_message_sequence, logical_turn_count, created_at) "
-            "VALUES (?, ?, NULL, 'checkpoint', 'turn-user-1', 1, 1, ?)",
-            (
-                inactive_view_id,
-                inactive_branch_id,
-                "2026-09-07T00:00:00+00:00",
-            ),
-        )
-        mutate_view_members(connection,
-            "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, "
-            "visible, source_kind, context_selected, context_ordinal) VALUES (?, ?, 1, 1, 'canonical', 1, 0)",
-            (inactive_view_id, accepted["root_input_item_id"]),
-        )
-        connection.commit()
-    inactive_anchor = ContentPartAnchor(
-        anchor_id="anchor-inactive-branch",
-        item_id=str(accepted["root_input_item_id"]),
-        part_id=part.part_id,
-        mode="inclusive",
-        view_id=inactive_view_id,
-        branch_id=inactive_branch_id,
-        capability="content_part",
-        content_hash=part.content_hash,
-    )
-    with pytest.raises(ValueError, match="active branch lineage"):
-        restarted.register_content_part_anchor(
-            SESSION_ID,
-            inactive_anchor,
-            thread_id=restarted._storage.storage.main_thread_id(SESSION_ID),
-        )
-
-    jsonl_path = _rollout_db(sessions_dir, SESSION_ID).parent / "rollout.jsonl"
+    assert restarted._storage.storage.read_items(SESSION_ID, thread, item_ids=[item_id]) == [original_item]
+    db_path = _rollout_db(sessions_dir, SESSION_ID)
+    with sqlite3.connect(db_path) as connection:
+        before = tuple(connection.iterdump())
+    jsonl_path = restarted._storage.storage.jsonl_path(SESSION_ID, thread_id=thread)
     original = jsonl_path.read_bytes()
-    jsonl_path.write_bytes(original.replace(b"user-1", b"user-2", 1))
-    with pytest.raises(ValueError, match="line hash 不匹配"):
-        restarted.resolve_content_part_anchor(
-            SESSION_ID,
-            thread_id=restarted._storage.storage.main_thread_id(SESSION_ID),
-            anchor_id=anchor.anchor_id,
-        )
+    corrupted = original.replace(item_id.encode(), b"x" * len(item_id.encode()), 1)
+    assert corrupted != original
+    jsonl_path.write_bytes(corrupted)
+    with pytest.raises(RuntimeError, match="catalog 与 JSONL identity 不一致"):
+        restarted._storage.storage.read_items(SESSION_ID, thread, item_ids=[item_id])
+    with sqlite3.connect(db_path) as connection:
+        assert tuple(connection.iterdump()) == before
+    assert jsonl_path.read_bytes() == corrupted
 
 
 def test_sealed_selection_drives_langchain_and_provider_projection_after_restart(frozen_provider_activation,
@@ -2622,6 +2428,9 @@ async def test_post_commit_tool_observer_failure_keeps_result_and_converges_exec
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
     thread = saver._storage.storage.main_thread_id(SESSION_ID)
+    admission = saver.execution_admission_for_job(
+        SESSION_ID, thread_id=thread, job_id=str(accepted["job_id"]),
+    )
     resolver = get_session_path_resolver(sessions_dir)
     stream_store = MessageStreamStore(path_resolver=resolver)
     writer = await stream_store.open(
@@ -2771,8 +2580,7 @@ async def test_post_commit_tool_observer_failure_keeps_result_and_converges_exec
                     session_id=SESSION_ID,
                     thread_id=thread,
                     job_id=str(accepted["job_id"]),
-                    turn_id="turn-user-1",
-                    execution_id=str(accepted["initial_execution_id"]),
+                    admission=admission,
                     checkpoint_ns="",
                     publish=publish,
                     logger=logging.getLogger(__name__),

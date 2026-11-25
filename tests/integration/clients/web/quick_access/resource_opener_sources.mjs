@@ -4,6 +4,7 @@ import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
 import { newOperationId } from '../../../../support/operation_ids.mjs';
+import { confirmContentCategories } from './default_interactions.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
@@ -78,12 +79,12 @@ try {
   }, { timeout: 30_000 }).toBe('completed');
   const history = await api(`/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/history`,
     { turn_ids: [accepted.turn_id], include: ['tool_result'] }, owner);
-  const tool = history.items.flatMap(turn => turn.response_parts).find(part => part.kind === 'tool_result'
+  const tool = history.items.flatMap(turn => turn.response_items).find(part => part.kind === 'tool_result'
     && part.result?.includes('/tool-results/'));
   // 使用原执行历史真正返回的引用，不按 Session 或工具调用 ID 拼造 URI。
   const toolUri = tool?.result.match(/boxteam:\/\/[^\s]+\/tool-results\/tool_[0-9a-f]{24}\.txt/)?.[0];
   expect(toolUri).toBeTruthy();
-  result.tool = { uri: toolUri, turnId: accepted.turn_id, partId: tool.part_id };
+  result.tool = { uri: toolUri, turnId: accepted.turn_id, partId: tool.id };
   const command = (id, ...args) => page.evaluate(async ({ id, args }) => {
     await globalThis.workbench.commands.executeCommand(id, ...args);
   }, { id, args });
@@ -222,6 +223,45 @@ try {
   expect(result.sources.every(read => read.gatewayId === owner.gatewayId && read.workspaceId === owner.workspaceId)).toBe(true);
   expect(result.addressRequests.every(request => request.body.local_gateway_id === owner.gatewayId)).toBe(true);
   result.noExecutionOrFileFallback = true;
+
+  result.phase = 'search-original-item';
+  const query = process.env.BOXTEAM_SOURCE_SEARCH_QUERY;
+  expect(query).toBeTruthy();
+  await command('workbench.action.quickOpen', `content ${query}`);
+  await quick.locator('[data-quick-input-id="content-category-tool"]').click();
+  await confirmContentCategories(quick, ['tool']);
+  const threadUri = `boxteam-thread://${owner.gatewayId}/${owner.workspaceId}/${owner.sessionId}/${owner.threadId}`;
+  const hit = quick.locator(`[data-quick-input-id^="${threadUri}#${tool.id}/"]`);
+  await expect(hit).toHaveCount(1);
+  const around = page.waitForResponse(response => new URL(response.url()).pathname
+    === `/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/history`
+    && response.request().postDataJSON()?.anchor_message?.item_id === tool.id);
+  await hit.click();
+  const aroundResponse = await around;
+  const located = await aroundResponse.json();
+  result.searchLocation = { status: aroundResponse.status(), payload: located, request: aroundResponse.request().postDataJSON() };
+  expect(aroundResponse.status()).toBe(200);
+  expect(located.data.located_message.reference.item_id).toBe(tool.id);
+  const thread = page.locator(`section.boxteam-thread[data-thread-id="${owner.threadId}"]:visible`);
+  await expect(thread.locator('.chat-message-location mark')).toHaveText(query);
+  await expect(thread.locator('textarea')).toBeEditable();
+  result.searchItemLocated = true;
+
+  result.phase = 'open-original-item-uri';
+  const itemAddress = await api('/api/gateway/resource-addresses/thread', {
+    local_gateway_id: owner.gatewayId, resource_gateway_id: owner.gatewayId,
+    workspace_id: owner.workspaceId, session_id: owner.sessionId, thread_id: owner.threadId, item_id: tool.id,
+  });
+  expect(itemAddress.item_id).toBe(tool.id);
+  await command('workbench.action.closeAllEditors');
+  await open(itemAddress.reference_uri);
+  const row = thread.locator(`.chat-tool-row[data-response-sources*='"item_id":"${tool.id}"']`);
+  await expect(row.locator('.chat-tool-details')).toBeVisible();
+  await row.locator('.chat-tool-summary').click();
+  await expect(row.locator('.chat-tool-details')).toHaveCount(0);
+  await open(itemAddress.reference_uri);
+  await expect(row.locator('.chat-tool-details')).toBeVisible();
+  result.itemUriLocated = true;
   expect(result.pageErrors).toEqual([]);
   result.phase = 'passed';
 } catch (error) {

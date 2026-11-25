@@ -25,6 +25,7 @@ import portalocker
 from app.core.atomic_fs import native_io_path
 from app.core.failures import report_failure
 from app.core.sqlite_state import sqlite_file_uri, validate_sqlite_path_budget
+from app.domain.itemized.identity.item_projection import ToolExecutionEvidence
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
@@ -89,9 +90,7 @@ class MessageCodec(Protocol):
 
     def visible_text(self, message: Mapping[str, object]) -> str: ...
 
-    def activity_outline(self, items: Sequence[CanonicalItemRecord]) -> dict[str, list[dict[str, object]]]: ...
-
-    def reasoning_rows(self, message: Mapping[str, object]) -> list[dict[str, object]]: ...
+    def reasoning_rows(self, items: Sequence[CanonicalItemRecord]) -> list[dict[str, object]]: ...
 
     def from_dict(self, value: object) -> object: ...
 
@@ -173,8 +172,10 @@ class InternalExecutionHistoryEntry:
     item: CanonicalItemRecord | None
     failure: dict[str, object] | None = None
     activity: dict[str, object] | None = None
-    coordinates: dict[int, dict[str, object]] | None = None
+    coordinates: dict[str, object] | None = None
     terminal_commit_id: int | None = None
+    tool_execution: ToolExecutionEvidence | None = None
+    tool_outcome: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

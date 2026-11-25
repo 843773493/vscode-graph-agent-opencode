@@ -75,7 +75,7 @@ def _canonical_pairs(
             "WHERE i.semantic_kind IN ('tool_call','tool_result') ORDER BY i.item_sequence",
         ).fetchall()
         assert all(row[3:] == (session_id, thread_id, job_id) for row in rows)
-        raw_items = [RolloutCanonicalReadMixin._read_v2_item_at(
+        raw_items = [RolloutCanonicalReadMixin._read_item_at(
             connection, stream, sequence=row[0], offset=row[1], length=row[2],
         ) for row in rows]
     superseded = superseded_item_ids(raw_items)

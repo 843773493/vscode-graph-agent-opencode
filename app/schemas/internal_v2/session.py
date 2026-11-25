@@ -427,6 +427,8 @@ class SessionInterruptResultDTO(BaseModel):
 
 class SessionCompactResultDTO(BaseModel):
     session_id: str
+    thread_id: str
+    task_id: str | None = None
     status: Literal["scheduled", "compacted", "skipped"]
     message: str
     before_message_count: int

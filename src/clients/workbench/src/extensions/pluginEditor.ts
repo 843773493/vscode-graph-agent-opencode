@@ -1,3 +1,5 @@
+import { errorDiagnostic, errorMessage, errorSummary } from '../../../web/src/utils/errorMessage.js';
+import { failureSummary } from '../../../shared/core/failurePresentation.js';
 import { t } from '../../../shared/core/i18n/index.js';
 import { append, $, clearNode, type Dimension } from '../../upstream/src/vs/base/browser/dom.js';
 import { DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
@@ -93,7 +95,7 @@ class PluginEditorPane extends EditorPane {
       if (!route) throw new Error(t('plugins.managementTargetChanged'));
       const target: PluginTarget = { gateway_id: route.gateway_id, gateway_connection_id: route.gateway_connection_id };
       const workspace = input.workspace ? { ...input.workspace, gateway_connection_id: target.gateway_connection_id } : undefined;
-      const state = this.presentation.add(new PluginScope(input.scope, target, workspace, this.notifications));
+      const state = this.presentation.add(new PluginScope(input.scope, target, workspace));
       access.dispose();
       const inventory = await gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory', {
         method: 'POST', body: JSON.stringify(state.target), signal: state.lifecycle.signal,
@@ -156,6 +158,7 @@ class PluginEditorPane extends EditorPane {
       const diagnostics = append(overview, $('details.service-plugin-diagnostics'));
       append(diagnostics, $('summary')).textContent = t('plugins.diagnosticDetails');
       const technicalIdentity = append(diagnostics, $('p.service-plugin-owner'));
+      const failureDetail = append(diagnostics, $('pre'));
       const handoff = append(diagnostics, $('p'));
       handoff.setAttribute('aria-label', t('plugins.workspaceHandoffAria'));
       handoff.dataset.pluginWorkspaceHandoff = 'true';
@@ -182,16 +185,19 @@ class PluginEditorPane extends EditorPane {
         const fullStatus = input.scope === 'defaults'
           ? t('plugins.defaultRuntimeValue', binding?.enabled ? t('plugins.enabledOnCreate') : binding ? t('plugins.disabledOnCreate') : t('plugins.notInDefaults'), binding ? ` @${binding.package_version}` : '')
           : `${t('plugins.configurationPrefix', state.configurationLabel(input.packageId, input.pluginId))}${state.actualLabel(status, Boolean(plugin.runtime))}`;
-        versions.title = fullStatus;
+        versions.title = failureSummary(fullStatus);
         versions.textContent = binding && binding.package_version !== input.version
           ? t('plugins.otherVersion', binding.package_version) : state.summary(input.packageId, input.pluginId, Boolean(plugin.runtime));
         failure.hidden = !(status?.error || state.error);
-        failure.textContent = status?.error ?? state.error ?? '';
+        failure.textContent = status?.error || state.error ? errorSummary(status?.error ?? state.error) : '';
+        failureDetail.hidden = failure.hidden;
+        failureDetail.textContent = [status?.error, state.error].filter(error => error !== undefined).map(error => errorDiagnostic(error)).join('\n');
         logActions.hidden = !status?.log_id;
         const handoffState = state.runtime?.workspace_configurations.find(item => item.workspace_id === input.workspace?.workspace_id);
-        handoff.textContent = input.workspace ? t('plugins.workspaceHandoff', input.workspace.workspace_id,
-          handoffState ? pluginStateLabel(handoffState.state) : t('plugins.notReceived'), handoffState?.error ? ` · ${handoffState.error}` : '') : '';
-        const key = JSON.stringify([binding?.enabled, binding?.package_version, status?.revision]);
+        handoff.textContent = input.workspace ? failureSummary(t('plugins.workspaceHandoff', input.workspace.workspace_id,
+          handoffState ? pluginStateLabel(handoffState.state) : t('plugins.notReceived'), handoffState?.error ? ` · ${handoffState.error}` : '')) : '';
+        const key = JSON.stringify([binding?.enabled, binding?.package_version, status?.revision, status?.error,
+          state.error === undefined ? undefined : errorMessage(state.error)]);
         if (key !== actionKey) {
           actionKey = key; actions.clear(); actionLifetime.clear();
           const items = pluginActions(state, manifest, plugin, this.quickInput, this.notifications);

@@ -13,6 +13,11 @@ from app.core.config_sources import ConfigSourceLayer
 from app.schemas.gateway.config import GatewayConfigSourceDTO
 from app.schemas.internal_v2.config import ConfigSourceDTO, ConfigSourcesDTO
 from app.services.infrastructure.config_service import ConfigService
+from configs.installer import (
+    install_user_configuration,
+    install_workspace_configuration,
+)
+from configs.runtime import read_jsonc_object
 
 
 def test_config_source_dtos_share_the_closed_logical_layer_set() -> None:
@@ -22,6 +27,7 @@ def test_config_source_dtos_share_the_closed_logical_layer_set() -> None:
         "user_local",
         "workspace",
         "runtime_override",
+        "source",
     )
     assert get_args(ConfigSourceLayer) == expected_layers
 
@@ -45,48 +51,42 @@ def test_config_source_dtos_share_the_closed_logical_layer_set() -> None:
 
 def _base_config() -> dict[str, object]:
     return {
-        "config_version": 3,
-        "llm": {
-            "providers": {
-                "primary": {"defaults": {
-                    "endpoint": "https://example.com/v1",
-                    "api_key": "${TEST_API_KEY}",
-                    "custom_llm_provider": "openai",
-                }, "models": {"default": {"model": "model-a"}}}
-            }
-        },
-        "default_agent": "default",
-        "agents": {
-            "default": {
+        "config_version": 4,
+        "extends": "builtin:workspace",
+        "settings": {"workspace": {
+            "llm": {"providers": {"primary": {
+                "config_ref": "#/profiles/primary",
+                "models": {"default": {"model": "model-a", "config_ref": "context:provider/primary"}},
+            }}},
+            "default_agent": "default",
+            "agents": {"default": {
                 "name": "Default Agent",
                 "instructions": {"system_prompt": "hello"},
                 "model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []},
-            }
-        },
+            }},
+        }},
+        "profiles": {"primary": {"extends": "context:workspace", "settings": {"model_options": {
+                    "endpoint": "https://example.com/v1",
+                    "api_key": "${TEST_API_KEY}",
+                    "custom_llm_provider": "openai",
+                    "api_mode": {"protocol": "chat_completions", "model_info": {}, "supports_reasoning": {}},
+        }}}},
     }
 
 
+def _write_config(tmp_path: Path, config: dict[str, object]) -> Path:
+    install_user_configuration(config_root=tmp_path, profile="default")
+    path = tmp_path / "workspace.jsonc"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    return path
+
+
 def test_user_config_cannot_fan_out_workspace_plugin_bindings(tmp_path: Path) -> None:
-    user_config = tmp_path / "workspace.jsonc"
-    user_config.write_text(
-        json.dumps(
-            {
-                "plugins": {
-                    "runtime": {
-                        "entries": [
-                            {
-                                "package_id": "sample",
-                                "plugin_id": "sample-tool",
-                                "package_version": "1.0.0",
-                                "enabled": True,
-                            }
-                        ]
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    config = _base_config()
+    config["settings"]["workspace"]["plugins"] = {"runtime": {"entries": [{
+        "package_id": "sample", "plugin_id": "sample-tool", "package_version": "1.0.0", "enabled": True,
+    }]}}
+    user_config = _write_config(tmp_path, config)
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=user_config,
@@ -100,13 +100,12 @@ def test_user_config_cannot_fan_out_workspace_plugin_bindings(tmp_path: Path) ->
 async def test_config_sources_endpoint_exposes_layers_and_schema(
     tmp_path: Path,
 ) -> None:
-    config_path = tmp_path / "workspace.jsonc"
-    config_path.write_text(json.dumps(_base_config()), encoding="utf-8")
+    config_path = _write_config(tmp_path, _base_config())
     local_path = tmp_path / "workspace_local.jsonc"
-    local_path.write_text(
-        json.dumps({"development": {"test_tools": True}}),
-        encoding="utf-8",
-    )
+    local_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace",
+        "settings": {"workspace": {"development": {"test_tools": True}}},
+    }), encoding="utf-8")
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=config_path,
@@ -136,8 +135,7 @@ async def test_config_sources_endpoint_never_exposes_real_path(
 ) -> None:
     """响应体只含 nullable URI locator 与来源兄弟字段，不泄漏真实路径。"""
 
-    config_path = tmp_path / "workspace.jsonc"
-    config_path.write_text(json.dumps(_base_config()), encoding="utf-8")
+    config_path = _write_config(tmp_path, _base_config())
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=config_path,
@@ -157,8 +155,8 @@ async def test_config_sources_endpoint_never_exposes_real_path(
     assert str(Path.cwd() / "configs") not in dumped
     assert response.data.sources[0].uri.startswith("boxteam://inline/")
     assert response.data.sources[0].uri.endswith("/resources/config/workspace_inline")
-    assert response.data.sources[1].uri is None
-    assert response.data.sources[2].uri is None
+    assert response.data.sources[1].uri.startswith("boxteam://")
+    assert response.data.sources[2].uri.startswith("boxteam://")
     assert response.data.sources[0].layer == "inline"
     assert response.data.sources[0].precedence == 0
     assert response.data.sources[0].source_key == "inline"
@@ -181,13 +179,6 @@ _REAL_PATH_PATTERN = re.compile(
 )
 
 
-_CUSTOM_SCHEMA = {
-    "type": "object",
-    "properties": {"config_version": {"type": "integer"}},
-    "required": ["config_version"],
-}
-
-
 @pytest.mark.asyncio
 async def test_config_sources_schema_uri_only_for_release_inline_schema(
     tmp_path: Path,
@@ -201,13 +192,15 @@ async def test_config_sources_schema_uri_only_for_release_inline_schema(
 
     for schema_name in ("my.company.schema.jsonc", "custom_schema.jsonc"):
         schema_file = tmp_path / schema_name
-        schema_file.write_text(json.dumps(_CUSTOM_SCHEMA), encoding="utf-8")
+        schema = read_jsonc_object(Path("configs/workspace_schema.jsonc"))
+        schema["description"] = "自定义 Workspace schema"
+        schema_file.write_text(json.dumps(schema), encoding="utf-8")
         workspace_dir = tmp_path / schema_name.replace(".", "_")
         workspace_dir.mkdir()
         config_path = workspace_dir / "workspace.jsonc"
         payload = dict(_base_config())
         payload["$schema"] = f"../{schema_name}"
-        config_path.write_text(json.dumps(payload), encoding="utf-8")
+        config_path = _write_config(workspace_dir, payload)
         service = ConfigService(
             config_dir=Path.cwd() / "configs",
             config_path=config_path,
@@ -232,19 +225,19 @@ async def test_config_endpoint_metadata_never_exposes_real_path(
 ) -> None:
     """缺陷1：``/api/v1/config`` 响应体与 metadata 不得含任何真实路径。"""
 
-    config_path = tmp_path / "workspace.jsonc"
-    config_path.write_text(json.dumps(_base_config()), encoding="utf-8")
+    config_path = _write_config(tmp_path, _base_config())
     local_path = tmp_path / "workspace_local.jsonc"
-    local_path.write_text(
-        json.dumps({"development": {"test_tools": True}}), encoding="utf-8"
-    )
+    local_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace",
+        "settings": {"workspace": {"development": {"test_tools": True}}},
+    }), encoding="utf-8")
     workspace_root = tmp_path / "workspace"
-    workspace_path = workspace_root / ".boxteam" / "workspace.jsonc"
-    workspace_path.parent.mkdir(parents=True)
-    workspace_path.write_text(
-        json.dumps({"agents": {"default": {"name": "Workspace Agent"}}}),
-        encoding="utf-8",
-    )
+    workspace_root.mkdir()
+    workspace_path = install_workspace_configuration(workspace_root=workspace_root)
+    workspace_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace_local",
+        "settings": {"workspace": {"agents": {"default": {"name": "Workspace Agent"}}}},
+    }), encoding="utf-8")
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=config_path,
@@ -267,8 +260,8 @@ async def test_config_endpoint_metadata_never_exposes_real_path(
     for leaked in (str(tmp_path), str(Path.cwd() / "configs"), ".sqlite"):
         assert leaked not in dumped
     assert _REAL_PATH_PATTERN.search(dumped) is None
-    # 来源位置仍以 URI 兄弟字段对外，且只有可寻址层带值。
+    # 来源位置仍以 URI 兄弟字段对外，不暴露原生路径。
     sources = metadata["source_details"]
     assert sources[0]["uri"].startswith("boxteam://inline/")
     assert sources[0]["uri"].endswith("/resources/config/workspace_inline")
-    assert all(source["uri"] is None for source in sources[1:])
+    assert all(source["uri"].startswith("boxteam://") for source in sources[1:])

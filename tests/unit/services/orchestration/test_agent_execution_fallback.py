@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+import threading
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
@@ -14,18 +15,21 @@ from langgraph.types import StateSnapshot
 
 from app.abstractions.tool_selection import ToolSelectionSnapshot
 from app.abstractions.turn_terminal_status import ToolResultCompletion
+from app.agents.execution_checkpoint import AcceptedExecutionInput
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING, GraphBindingStorePort
 from app.agents.policy import ToolPolicyResolver
 from app.agents.tools.testing import create_test_tool
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.model_delta_context import (
     AgentRunLifecycleCallbackHandler,
+    AgentToolExecutionCallbackHandler,
     get_current_model_delta_sink,
     model_tool_invocation_scope,
 )
-from app.core.path_utils import get_session_catalog_components
+from app.core.path_utils import get_session_catalog_components, workspace_context
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import ScopeCancelledError
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
@@ -41,6 +45,7 @@ from app.services.business.resource_derivations.agents import (
     WORKSPACE_AGENTS_RESOURCE_ID,
 )
 from app.services.infrastructure.config.snapshot import build_config_snapshot
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -85,7 +90,7 @@ from app.services.orchestration.execution_step.reminders import (
 )
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
-from configs.runtime import read_jsonc_object
+from tests.harness.python.run_context import TestRunContext
 from tests.support.communication.probe import (
     SOURCE_SESSION,
     SOURCE_THREAD,
@@ -95,10 +100,33 @@ from tests.support.mcp.session_doubles import (
     FakeMcpSessionFactory,
     drain_pending_relists,
 )
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
+)
 
 pytestmark = pytest.mark.usefixtures("workspace_scope")
 
 _SKILL_CATALOG_RESOURCE_ID = "skill-entry:workspace:catalog:catalog"
+
+
+@pytest.fixture
+def workspace_scope(request: pytest.FixtureRequest) -> Iterator[tuple[str, Path]]:
+    """为执行装配提供真实工作区身份与隔离的默认模板。"""
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    root = context.runtime_root_for_node(request.node.nodeid) / "workspace"
+    prepare_default_test_workspace(
+        workspace_root=root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+    )
+    install_test_workspace_config(
+        workspace_root=root,
+        config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
+        schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
+    )
+    workspace_id = load_or_create_workspace_id(root)
+    with workspace_context(workspace_id, root):
+        yield workspace_id, root
 
 
 @pytest.fixture
@@ -157,7 +185,7 @@ class _AcceptedUserInputStore:
         job_id: str,
         message_id: str,
         checkpoint_ns: str = "",
-    ) -> HumanMessage:
+    ) -> tuple[ExecutionAdmission, HumanMessage]:
         if checkpoint_ns:
             raise KeyError(f"测试已接受输入没有该 checkpoint namespace: {checkpoint_ns}")
         key = (session_id, thread_id, job_id, message_id)
@@ -167,7 +195,7 @@ class _AcceptedUserInputStore:
             raise KeyError(f"没有精确匹配的已接受用户输入: {key}") from error
         if message.id != message_id:
             raise ValueError(f"已接受用户输入 message identity 不一致: {key}")
-        return message.model_copy(deep=True)
+        return self.read_admission(session_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns), message.model_copy(deep=True)
 
     def read_admission(
         self,
@@ -250,15 +278,18 @@ def agent_execution_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     workspace_scope: tuple[str, Path],
     extension_catalog_policy_resolver,
+    stream_writer,
 ):
     """创建一组共用的 mock 依赖。"""
     config_service = MagicMock()
-    config_service.get_snapshot.return_value = build_config_snapshot(
-        {"context": read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")["context"]},
-        source_paths=(),
-    )
+    workspace_id, workspace_root = workspace_scope
+    config_service.get_snapshot.return_value = ConfigService(
+        config_dir=Path.cwd() / "configs", workspace_root=workspace_root,
+    ).get_snapshot()
     config_service.get_revision.return_value = config_service.get_snapshot.return_value.revision
     config_service.use_snapshot.side_effect = lambda _snapshot: nullcontext()
+    config_service.prepare_llm_credentials = AsyncMock(return_value={})
+    config_service.use_llm_credentials.side_effect = lambda _credentials: nullcontext()
     config_service.resolve_agent_id.return_value = "test_agent"
     config_service.resolve_agent_model.return_value = ModelReferenceDTO(
         provider_id="test-service", model_id="primary",
@@ -327,7 +358,7 @@ def agent_execution_dependencies(
             "execution_admission_for_job",
             "execution_admission",
             "internal_execution_interrupt",
-            "get_canonical_item",
+            "read_canonical_items",
             "converge_execution",
             "mark_execution_lost",
             "accepted_user_message",
@@ -396,7 +427,6 @@ def agent_execution_dependencies(
 
     saver.execution_for_turn.return_value = "execution_test"
     saver.register_execution_retry_source.return_value = None
-    saved_items: dict[str, CanonicalItemRecord] = {}
 
     def commit_tool_result(
         *, session_id: str, thread_id: str, job_id: str,
@@ -436,49 +466,26 @@ def agent_execution_dependencies(
             message_group_id=f"message-{completion.tool_attempt_id}",
             wire_role="tool",
         )
-        saved_items[item.item_id] = item
         return item
 
     saver.commit_tool_result.side_effect = commit_tool_result
 
-    def persist_final(
-        *, message_id, turn_id, final_text, before_persist=None, **_kwargs
-    ):
-        if not final_text:
-            return False
-        if before_persist is not None:
-            before_persist(
-                AIMessage(
-                    id=message_id,
-                    content=final_text,
-                    response_metadata={"phase": "final_answer"},
-                )
-            )
-        item = CanonicalItemRecord.create(
-            item_sequence=1,
-            item_id=f"item-{message_id}",
-            semantic_kind="assistant_output",
-            wire_role="assistant",
-            payload_kind="text",
-            status="completed",
-            producer_ref={"producer_kind": "provider", "producer_id": "model_test"},
-            payload=final_text,
-            turn_id=turn_id,
-            turn_scope="turn_member",
-        )
-        saved_items[item.item_id] = item
-        return True
+    def finalize_original(*, checkpointer, thread_id, message_id, on_finalize):
+        # 此夹具只检查编排；原组持久化和冷读在真实 Saver 集成测试中验收。
+        assert checkpointer is saver
+        assert message_id
+        on_finalize(AIMessage(id=message_id, content="已提交的原输出"))
 
-    saver.get_canonical_item.side_effect = (
-        lambda _session_id, *, item_id, checkpoint_ns: saved_items.get(item_id)
-    )
     monkeypatch.setattr(
         "app.services.orchestration.execution_step.runner.checkpoint_accepted_execution_input",
-        MagicMock(return_value=True),
+        MagicMock(side_effect=lambda **kwargs: AcceptedExecutionInput(
+            *saver.accepted_user_message(kwargs["session_id"], thread_id=kwargs["thread_id"], job_id=kwargs["job_id"], message_id=kwargs["message_id"]),
+            checkpointed=True,
+        )),
     )
     monkeypatch.setattr(
-        "app.services.orchestration.execution_step.runner.persist_final_assistant_checkpoint",
-        persist_final,
+        "app.services.orchestration.execution_step.runner.finalize_assistant_checkpoint",
+        finalize_original,
     )
     dependency_provider.get_checkpointer.return_value = saver
     workspace_id, workspace_root = workspace_scope
@@ -488,9 +495,7 @@ def agent_execution_dependencies(
         watch_service=WorkspaceFileWatchService(workspace_root=workspace_root),
     )
 
-    message_stream_writer = MagicMock()
-    message_stream_writer.turn_stream_id = "strm_test"
-    message_stream_writer.commit = AsyncMock()
+    message_stream_writer = stream_writer(turn_stream_id="strm_test")
     message_stream_writer.close_from_execution = AsyncMock()
     message_stream_store = MagicMock()
     message_stream_store.open = AsyncMock(return_value=message_stream_writer)
@@ -647,10 +652,10 @@ async def test_run_step_pins_snapshot_through_async_tool_stage(
     agent_execution_dependencies,
 ):
     service = _build_agent_execution_service(agent_execution_dependencies)
-    snapshot = build_config_snapshot({
-        "test": "pinned",
-        "context": agent_execution_dependencies["config_service"].get_snapshot.return_value.to_dict()["context"],
-    }, source_paths=())
+    base = agent_execution_dependencies["config_service"].get_snapshot.return_value
+    payload = base.to_dict()
+    payload["context"]["source_messages"]["grouping"] = "separate"
+    snapshot = build_config_snapshot(payload, source_paths=base.source_paths, graph=base.graph)
     active_snapshot: ContextVar[object | None] = ContextVar(
         "test_config_snapshot", default=None
     )
@@ -686,6 +691,7 @@ async def test_run_step_pins_snapshot_through_async_tool_stage(
         # 模拟模型返回后进入异步工具阶段，snapshot 仍必须固定。
         assert active_snapshot.get() is snapshot
         return AgentEventStreamResult(
+            final_message_id="test-original-message",
             final_text="ok",
             latest_model_content_blocks=({"type": "text", "text": "ok"},),
             last_tool_result_text="",
@@ -777,6 +783,7 @@ def test_session_question_reply_requires_matching_communication_id():
 async def test_delegated_report_is_not_enforced_by_default(agent_execution_dependencies):
     service = _build_agent_execution_service(agent_execution_dependencies)
     stream_result = AgentEventStreamResult(
+            final_message_id="test-original-message",
         final_text="普通文本结果",
         latest_model_content_blocks=(),
         last_tool_result_text="",
@@ -821,6 +828,7 @@ async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
     service = _build_agent_execution_service(agent_execution_dependencies)
     stream_results = [
         AgentEventStreamResult(
+            final_message_id="test-original-message",
             final_text=f"普通文本 {index}",
             latest_model_content_blocks=(),
             last_tool_result_text="",
@@ -875,6 +883,7 @@ async def test_delegated_progress_only_cannot_replace_final_result(
     )
     stream_results = [
         AgentEventStreamResult(
+            final_message_id="test-original-message",
             final_text=f"普通结论 {index}",
             latest_model_content_blocks=(),
             last_tool_result_text="accepted",
@@ -918,11 +927,13 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
     input_messages: list[object] = []
     stream_results = [
         AgentEventStreamResult(
+            final_message_id="test-original-message",
             final_text="普通回答",
             latest_model_content_blocks=(),
             last_tool_result_text="",
         ),
         AgentEventStreamResult(
+            final_message_id="test-original-message",
             final_text="已通过会话工具回复",
             latest_model_content_blocks=(),
             last_tool_result_text="accepted",
@@ -1002,6 +1013,12 @@ async def test_primary_success_no_fallback(stream_agent, agent_execution_depende
                         index=0,
                     )
                 },
+                "metadata": stream_metadata(),
+            }
+
+            yield {
+                "event": "on_chat_model_end", "name": "ChatOpenAI",
+                "data": {"output": AIMessage(id="test-original-message", content="")},
                 "metadata": stream_metadata(),
             }
 
@@ -1091,6 +1108,12 @@ async def test_reasoning_stream_not_mixed_into_final_text(stream_agent, agent_ex
                 "metadata": stream_metadata(),
             }
 
+            yield {
+                "event": "on_chat_model_end", "name": "ChatOpenAI",
+                "data": {"output": AIMessage(id="test-original-message", content="")},
+                "metadata": stream_metadata(),
+            }
+
         mock_agent = stream_agent
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
@@ -1150,6 +1173,12 @@ async def test_model_event_stream_does_not_recreate_legacy_text_events(
                         index=0,
                     )
                 },
+                "metadata": stream_metadata(),
+            }
+
+            yield {
+                "event": "on_chat_model_end", "name": "ChatOpenAI",
+                "data": {"output": AIMessage(id="test-original-message", content="")},
                 "metadata": stream_metadata(),
             }
 
@@ -1247,6 +1276,12 @@ async def test_reasoning_only_response_retries_with_system_reminder(stream_agent
                 "metadata": stream_metadata(),
             }
 
+            yield {
+                "event": "on_chat_model_end", "name": "ChatOpenAI",
+                "data": {"output": AIMessage(id="test-original-message", content="")},
+                "metadata": stream_metadata(),
+            }
+
         mock_agent = stream_agent
         mock_agent.astream_events = mock_events
         mock_build.return_value = mock_agent
@@ -1321,6 +1356,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
     input_messages: list[object] = []
     stream_results = [
         AgentEventStreamResult(
+            final_message_id="test-original-message",
             final_text="根据 AG",
             latest_model_content_blocks=(
                 {
@@ -1334,6 +1370,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
             completed_custom_tool_names=(),
         ),
         AgentEventStreamResult(
+            final_message_id="test-original-message",
             final_text="4568",
             latest_model_content_blocks=(
                 {
@@ -1428,6 +1465,12 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(
                 "event": "on_chat_model_stream",
                 "name": "ChatOpenAI",
                 "data": {"chunk": create_chunk(content_blocks)},
+                "metadata": stream_metadata(),
+            }
+
+            yield {
+                "event": "on_chat_model_end", "name": "ChatOpenAI",
+                "data": {"output": AIMessage(id="test-original-message", content="")},
                 "metadata": stream_metadata(),
             }
 
@@ -1528,6 +1571,9 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
             await delta_sink.prepare_tool_execution(model_run_id)
             lifecycle_callback = AgentRunLifecycleCallbackHandler(delta_sink)
             with model_tool_invocation_scope(model_run_id, "call_1"):
+                AgentToolExecutionCallbackHandler(delta_sink).on_tool_start(
+                    run_id="run_python_exec", tool_call_id="call_1",
+                )
                 tool_callback = asyncio.create_task(
                     lifecycle_callback.on_tool_start(
                         run_id="run_python_exec",
@@ -1542,6 +1588,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
                 "metadata": stream_metadata(),
             }
             await tool_callback
+            AgentToolExecutionCallbackHandler(delta_sink).on_tool_end(run_id="run_python_exec")
             yield {
                 "event": "on_tool_end",
                 "run_id": "run_python_exec",
@@ -1582,7 +1629,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
                 "event": "on_chat_model_end",
                 "name": "ChatOpenAI",
                 "run_id": final_model_run_id,
-                "data": {"output": AIMessage(content="完成")},
+                "data": {"output": AIMessage(id="test-original-message", content="完成")},
                 "metadata": event_metadata,
             }
 
@@ -1678,6 +1725,12 @@ async def test_execution_builds_single_agent_runtime_without_model_override(
                         "metadata": stream_metadata(),
                     }
 
+                    yield {
+                        "event": "on_chat_model_end", "name": "ChatOpenAI",
+                        "data": {"output": AIMessage(id="test-original-message", content="")},
+                        "metadata": stream_metadata(),
+                    }
+
                 mock_agent.astream_events = mock_events
 
                 return mock_agent
@@ -1752,6 +1805,12 @@ async def test_successful_agent_stream_publishes_agent_start_once(stream_agent, 
                         "metadata": stream_metadata(),
                     }
 
+                    yield {
+                        "event": "on_chat_model_end", "name": "ChatOpenAI",
+                        "data": {"output": AIMessage(id="test-original-message", content="")},
+                        "metadata": stream_metadata(),
+                    }
+
                 mock_agent.astream_events = mock_events
 
                 return mock_agent
@@ -1784,11 +1843,13 @@ async def test_agent_loop_retry_keeps_model_attempt_boundaries(
     service = _build_agent_execution_service(agent_execution_dependencies)
     stream_results = [
         AgentEventStreamResult(
+            final_message_id="test-original-message",
             final_text="",
             latest_model_content_blocks=(),
             last_tool_result_text="",
         ),
         AgentEventStreamResult(
+            final_message_id="test-original-message",
             final_text="最终答案",
             latest_model_content_blocks=(),
             last_tool_result_text="",
@@ -1873,6 +1934,7 @@ async def test_committed_success_wins_when_interrupt_arrives_before_stream_mirro
         await message_stream_runtime.start_model("model_race", "primary")
         await message_stream_runtime.finish_model()
         return AgentEventStreamResult(
+            final_message_id="test-original-message",
             final_text="竞态结果",
             latest_model_content_blocks=(),
             last_tool_result_text="",
@@ -2213,6 +2275,46 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
 
 
 @pytest.mark.asyncio
+async def test_runtime_generation_reuses_authoritative_selector_read_in_worker(
+    agent_execution_dependencies,
+):
+    """真实 acquire 与装配只读一次 catalog，代 key 与编译使用同一 selector。"""
+    dependencies = agent_execution_dependencies
+    service = _build_agent_execution_service(dependencies)
+    store = dependencies["graph_binding_store"]
+    loop_thread = threading.get_ident()
+
+    def read_binding(owner):
+        assert threading.get_ident() != loop_thread
+        assert (owner.session_id, owner.thread_id) == ("ses_frozen_graph", "thr_test")
+        assert store.load_graph_binding.call_count == 1
+        return DEEP_AGENT_GRAPH_BINDING
+
+    store.load_graph_binding.side_effect = read_binding
+    builder = MagicMock(return_value=object())
+    try:
+        with patch("app.agents.graph_binding.GRAPH_FACTORY_REGISTRY.resolve", return_value=builder):
+            lease = await service._acquire_step_agent(
+                admission=ExecutionAdmission(
+                    session_id="ses_frozen_graph", thread_id="thr_test",
+                    execution_id="exec_frozen_graph", job_id="job_frozen_graph",
+                    admission_idempotency_key="adm_frozen_graph",
+                    execution_origin="user_turn", turn_id="turn_frozen_graph",
+                ),
+                agent_id="test_agent", execution_overrides={},
+                model_visibility_overrides={}, preferred_model=None,
+                include_team_tools=False,
+            )
+            async with lease:
+                assert lease.runtime.agent is builder.return_value
+                assert dependencies["residency_tracker"]._states[("ses_frozen_graph", "thr_test")].runtime.generation_key[0] == DEEP_AGENT_GRAPH_BINDING.selector_fields()
+            builder.assert_called_once()
+            store.load_graph_binding.assert_called_once()
+    finally:
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_generation_reactor_release_is_isolated_per_thread(agent_execution_dependencies):
     """跨会话 runtime 持有各自订阅；一个 thread 卸载不影响其它 active lease。"""
     service = _build_agent_execution_service(agent_execution_dependencies)
@@ -2431,11 +2533,11 @@ def _assert_terminal_failure(dependencies, writer, *, code, message, after_inter
     else:
         assert terminal.call_args.kwargs["reason"] == code
     assert terminal.call_args.kwargs.get("after_interrupt_requested", False) is after_interrupt_requested
-    saver.execution_admission.assert_called_once()
+    saver.execution_admission.assert_not_called()
     writer.close_from_execution.assert_awaited_once()
     owner, admission = writer.close_from_execution.await_args.args
     assert owner is saver
     assert (admission.session_id, admission.thread_id, admission.execution_id) == (
-        saver.execution_admission.call_args.args[0], saver.execution_admission.call_args.kwargs["thread_id"],
-        saver.execution_admission.call_args.kwargs["execution_id"],
+        terminal.call_args.args[0], terminal.call_args.kwargs["thread_id"],
+        terminal.call_args.kwargs["execution_id"],
     )

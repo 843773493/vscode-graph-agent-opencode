@@ -1,7 +1,7 @@
 import { t } from "../../../../shared/core/i18n/index.js";
 import type { ConversationView } from "../../types/frontend";
 import type { TimelineItem } from "./timelineTypes";
-import { responsePartsToTimelineItems } from "./responseParts";
+import { responseItemsToTimelineItems } from "./responseItems";
 
 export type ToolTimelineItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
 export type WorkItem = Extract<TimelineItem, { kind: "aggregated_text" }> | Extract<TimelineItem, { kind: "aggregated_tool" }>;
@@ -10,8 +10,8 @@ export type HistoricalBoundaryStatus = { kind: "user-interrupted" | "cancelled" 
 
 export function historicalBoundaryStatus(conversation: ConversationView): HistoricalBoundaryStatus | null {
   if (conversation.displayMode !== "history") return null;
-  const responseParts = conversation.responseParts ?? [];
-  const userInterrupted = responseParts.some((part) => part.partial === true && part.completion_reason === "user_interrupt");
+  const responseItems = conversation.responseItems ?? [];
+  const userInterrupted = responseItems.some((part) => part.partial === true && part.completion_reason === "user_interrupt");
   if (userInterrupted) return { kind: "user-interrupted", role: "status", className: "chat-inline-cancelled", icon: "codicon-debug-stop", title: t("chat.status.interrupted"), detail: t("chat.status.contentKept") };
   if (conversation.turnStatus === "cancelled") return { kind: "cancelled", role: "status", className: "chat-inline-cancelled", icon: "codicon-debug-stop", title: t("chat.status.cancelled"), detail: t("chat.status.contentKept") };
 
@@ -23,7 +23,7 @@ export function historicalBoundaryStatus(conversation: ConversationView): Histor
 
 export function responseItemsForConversation(conversation: ConversationView): TimelineItem[] {
   const terminalCancellation = conversation.turnStatus === "cancelled" || conversation.messageStream?.streamStatus === "interrupted";
-  const items = responsePartsToTimelineItems(conversation.responseParts ?? [], { terminalFailure: !terminalCancellation && (conversation.turnStatus === "failed" || conversation.turnStatus === "timed_out" || (!conversation.turnStatus && conversation.status === "error")), terminalCancellation });
+  const items = responseItemsToTimelineItems(conversation.responseItems ?? [], { terminalFailure: !terminalCancellation && (conversation.turnStatus === "failed" || conversation.turnStatus === "timed_out" || (!conversation.turnStatus && conversation.status === "error")), terminalCancellation });
   return items;
 }
 
@@ -35,9 +35,9 @@ export function buildRenderGroups(items: TimelineItem[]): RenderGroup[] {
     const previous = groups[groups.length - 1];
     const source = item.responseSources?.[0]?.source;
     const group = source?.activity_group_item_id;
-    const groupId = group ? `group:${group}:${source.activity_group_part_ordinal ?? 0}` : undefined;
+    const groupId = group ? `group:${group}` : undefined;
     if (previous?.kind === "work" && (!groupId || previous.id === groupId)) previous.items.push(item); else {
-      groups.push({ kind: "work", id: group ? `group:${group}:${source.activity_group_part_ordinal ?? 0}` : "work-" + item.id, items: [item] });
+      groups.push({ kind: "work", id: groupId ?? "work-" + item.id, items: [item] });
     }
   }
   return groups;

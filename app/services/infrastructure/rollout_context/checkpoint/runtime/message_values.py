@@ -62,9 +62,7 @@ def prepare_message_values(
             raise TypeError("checkpoint Delta counters 必须是 mapping")
         delta = isinstance(candidate, _DeltaSnapshot) or "messages" in counters or parent_delta
         state: MessagesState = "snapshot" if delta and "messages" in values else "delta" if delta else "view"
-        read_parent = "messages" not in values and (
-            "_summarization_event" in values or (delta and "messages" in new_versions)
-        )
+        read_parent = "messages" not in values and delta and "messages" in new_versions
         parent_values = checkpoints.checkpoint_values(
             owner.session_id, owner.thread_id, checkpoint_ns, index,
             snapshot=snapshot, requested_channels=frozenset({"messages"}) if read_parent else frozenset(),

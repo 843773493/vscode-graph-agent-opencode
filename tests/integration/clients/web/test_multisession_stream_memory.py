@@ -28,10 +28,11 @@ from tests.support.processes.workspace import (
 def streaming_workspace(integration_workspace_root_path, integration_workspace_config_path):
     path = Path(integration_workspace_config_path)
     config = commentjson.loads(path.read_text(encoding="utf-8"))
-    config["llm"]["providers"] = {"primary": config["llm"]["providers"]["primary"]}
+    workspace = config["settings"]["workspace"]
+    workspace["llm"]["providers"] = {"primary": workspace["llm"]["providers"]["primary"]}
     # 回放模型的输入容量覆盖多轮大正文；本场景验证前端释放，不消费压缩模型回放。
-    config["llm"]["providers"]["primary"]["defaults"]["api_mode"]["model_info"]["max_input_tokens"] = 4_000_000
-    for agent in config["agents"].values():
+    config["profiles"]["provider.primary"]["settings"]["model_options"]["api_mode"]["model_info"]["max_input_tokens"] = 4_000_000
+    for agent in workspace["agents"].values():
         agent["model"]["primary"] = {"provider_id": "primary", "model_id": "default"}
         agent["model"]["fallbacks"] = []
     path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")

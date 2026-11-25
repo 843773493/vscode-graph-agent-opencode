@@ -22,7 +22,7 @@ from app.api.deps import (
 from app.api.sessions import router as sessions_router
 from app.core.job_event_bus import JobEventBus
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.runtime.context_compaction import ContextCompactionCheck
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationEnqueueRequest,
@@ -54,35 +54,27 @@ class _RecordingCheckpointAdapter:
     def __init__(self, workspace: CatalogWorkspaceContext) -> None:
         self.workspace = workspace
         self.load_calls = 0
-        self.save_calls = 0
 
     async def load_snapshot(self, owner: MutationIntentOwner) -> ManualCompactionSnapshot | None:
         assert self.workspace.resolver.main_thread_id(owner.session_id) == owner.thread_id
         self.load_calls += 1
         return None
 
-    async def request_compaction(
-        self, *, snapshot: ManualCompactionSnapshot
-    ) -> None:
-        del snapshot
-        self.save_calls += 1
-        raise AssertionError("空 checkpoint 不应创建压缩请求")
-
-
 class _CompactorProbe:
     def __init__(self) -> None:
-        self.check_calls = 0
+        self.source_calls = 0
+        self.request_calls = 0
 
-    async def check(
-        self,
-        *,
-        agent_id: str,
-        raw_messages: list[object],
-        event: object,
-    ) -> ContextCompactionCheck:
-        del agent_id, raw_messages, event
-        self.check_calls += 1
-        raise AssertionError("空 checkpoint 不应触发摘要判断")
+    def source_item_ids(self, owner: MutationIntentOwner) -> tuple[str, ...]:
+        del owner
+        self.source_calls += 1
+        raise AssertionError("空 checkpoint 不应读取压缩范围")
+
+    async def request(self, owner: MutationIntentOwner, *, agent_id: str,
+                      preferred_model: ModelReferenceDTO | None, item_ids: tuple[str, ...], manual: bool) -> None:
+        del owner, agent_id, preferred_model, item_ids, manual
+        self.request_calls += 1
+        raise AssertionError("空 checkpoint 不应登记后台压缩")
 
 
 @dataclass(slots=True)
@@ -174,8 +166,7 @@ async def test_active_compaction_and_missing_session_keep_their_api_contracts(
     assert compact.json()["data"]["status"] == "skipped"
     assert missing.status_code == 404, missing.text
     assert harness.checkpoint_adapter.load_calls == 1
-    assert harness.checkpoint_adapter.save_calls == 0
-    assert harness.compactor.check_calls == 0
+    assert harness.compactor.source_calls == harness.compactor.request_calls == 0
 
 
 @pytest.mark.asyncio
@@ -229,8 +220,7 @@ async def test_compaction_during_real_delete_returns_conflict_before_checkpoint_
         assert "session_deletion_pending" in compact.json()["detail"]
         assert session_get_calls == 0
         assert harness.checkpoint_adapter.load_calls == 0
-        assert harness.checkpoint_adapter.save_calls == 0
-        assert harness.compactor.check_calls == 0
+        assert harness.compactor.source_calls == harness.compactor.request_calls == 0
         continue_drain.set()
         receipt = await catalog.operations.await_terminal(
             intent.client_operation_id,

@@ -86,7 +86,6 @@ from app.domain.itemized.identity.refs import (
     selection_ref_identity,
     unique_ref_identities,
 )
-from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.plans.contributions import ContextContribution, SourceBinding
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import (
@@ -123,8 +122,6 @@ __all__ = [
     "CommitMode",
     "CompiledRootItem",
     "CompiledRootSourceProvenance",
-    "ContentPart",
-    "ContentPartAnchor",
     "ContextAssemblySnapshot",
     "ContextContribution",
     "ContextRef",

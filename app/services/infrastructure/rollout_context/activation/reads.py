@@ -389,7 +389,7 @@ class ResourceActivationReadMixin:
         ) as read_snapshot, self._storage.storage.read_connection(
             session_id, thread_id, checkpoint_ns, snapshot=read_snapshot,
         ) as connection:
-            self._storage.storage._require_v2_runtime(connection)
+            self._storage.storage._require_current_rollout_format(connection)
             self.require_schema(connection)
             row = connection.execute(
                 f"SELECT {','.join(ASSEMBLY_BINDING_COLUMNS)} "

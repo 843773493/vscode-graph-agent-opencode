@@ -1,4 +1,4 @@
-"""未变化的消息通道继承时，stream 语义组不能冒充 canonical projection group。"""
+"""未变化的消息通道继承时，保留封存的 stream 组及 checkpoint 组。"""
 
 from copy import deepcopy
 
@@ -43,11 +43,12 @@ def stream_group_checkpoint(source_seal_case):
         items = stream.finalize(first_item_sequence=2)
         saver.append_items(owner.session_id, items, thread_id=owner.thread_id)
         assert items[0].message_group_id == items[1].message_group_id
-        assert all(item.projection_group is None for item in items)
+        assert [(item.projection_group.ordinal, item.projection_group.size) for item in items] == [(0, 2), (1, 2)]
         checkpoint = empty_checkpoint()
         checkpoint["id"] = "parallel-parent"
         checkpoint["channel_values"] = {"messages": [
-            *(codec.from_dict(codec.project_message((item,))) for item in (root, *items)),
+            codec.from_dict(codec.project_message((root,))),
+            codec.from_dict(codec.project_message(items)),
             AIMessage(
                 id="explicit-group", content="保留有序正文",
                 tool_calls=[{"id": "third", "name": "read", "args": {"path": "third.txt"}}],
@@ -86,7 +87,7 @@ async def test_unchanged_messages_inherit_stream_items_and_explicit_group(stream
         saved = saver.put(config, _successor(), {"source": "unit"}, {"counter": "2"})
         restored = saver.get_tuple(saved)
     assert restored.checkpoint["channel_values"]["messages"] == expected
-    assert [message.tool_calls[0]["id"] for message in expected[1:3]] == ["first", "second"]
+    assert [call["id"] for call in expected[1].tool_calls] == ["first", "second"]
     assert len(expected[-1].response_metadata["canonical_item_manifests"]) == 2
     assert jsonl.read_bytes() == original_body
     with type(saver)(saver._storage.storage.sessions_dir) as reopened:

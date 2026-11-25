@@ -313,7 +313,7 @@ async def test_real_agent_cancellation_persists_original_unknown_tool_result(mut
     })
     assert history.status_code == 200, history.text
     detail, = history.json()["data"]["items"]
-    persisted, = [part for part in detail["response_parts"] if part["kind"] == "tool_result"]
+    persisted, = [part for part in detail["response_items"] if part["kind"] == "tool_result"]
     assert persisted["source"]["item_id"] and persisted["tool_call_id"] == result["tool_call_id"]
     assert json.loads(persisted["result"]) == receipt
     (artifacts / "cancel-agent-events.json").write_text(json.dumps(cold.json(), ensure_ascii=False, indent=2), encoding="utf-8")

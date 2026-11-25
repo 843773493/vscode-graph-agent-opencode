@@ -123,7 +123,7 @@ def test_interrupted_internal_input_preserves_commit_boundary_and_retries_once(
         assert cold.accepted_internal_message(
             case.session, thread_id=case.thread, job_id=admitted.job_id,
             message_id=intent.message_id, intent=intent,
-        ).content == message.content
+        )[1].content == message.content
         record, = cold.execution_queue_snapshot(case.session, case.thread).records
         assert record.input == queue_input
         assert record.cursor.admission == admitted

@@ -33,23 +33,52 @@ from app.services.infrastructure.config.state import (
 from app.services.infrastructure.config.watcher import ConfigFileWatcher
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from configs.installer import (
+    install_user_configuration,
+    install_workspace_configuration,
+)
 
 PRIMARY_MODEL = ModelReferenceDTO(provider_id="primary", model_id="default")
 BACKUP_MODEL = ModelReferenceDTO(provider_id="backup", model_id="default")
 
 
 def _write_workspace_config(tmp_path: Path, config: dict) -> Path:
+    install_user_configuration(config_root=tmp_path, profile="default")
     config_path = tmp_path / "workspace.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     return config_path
 
 
+def _initialize_workspace_config(workspace_root: Path) -> Path:
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    return install_workspace_configuration(workspace_root=workspace_root)
+
+
 def _base_config() -> dict:
     return {
-        "config_version": 3,
-        "llm": {
-            "providers": {"primary": {
-                "defaults": {
+        "config_version": 4,
+        "extends": "builtin:workspace",
+        "settings": {"workspace": {
+            "llm": {"providers": {"primary": {
+                "config_ref": "#/profiles/primary",
+                "models": {"default": {"model": "model-a", "config_ref": "context:provider/primary"}},
+            }}},
+            "mcp": {"supervision": {"sealed_call_timeout_seconds": 1800}, "servers": {}},
+            "default_agent": "default",
+            "agents": {
+                **{name: {"model": {"primary": PRIMARY_MODEL.model_dump(), "fallbacks": []}}
+                   for name in ("coder", "reviewer", "researcher")},
+                "default": {
+                    "name": "Default Agent",
+                    "instructions": {"system_prompt": "hello"},
+                    "model": {
+                        "primary": PRIMARY_MODEL.model_dump(),
+                        "fallbacks": [],
+                    },
+                },
+            },
+        }},
+        "profiles": {"primary": {"extends": "context:workspace", "settings": {"model_options": {
                     "endpoint": "https://example.com/v1",
                     "api_key": "${TEST_API_KEY}",
                     "custom_llm_provider": "openai",
@@ -61,24 +90,7 @@ def _base_config() -> dict:
                         },
                         "supports_reasoning": {"reasoning_content": True},
                     },
-                },
-                "models": {"default": {"model": "model-a"}},
-            }}
-        },
-        "mcp": {"supervision": {"sealed_call_timeout_seconds": 1800}, "servers": {}},
-        "default_agent": "default",
-        "agents": {
-            **{name: {"model": {"primary": PRIMARY_MODEL.model_dump(), "fallbacks": []}}
-               for name in ("coder", "reviewer", "researcher")},
-            "default": {
-                "name": "Default Agent",
-                "instructions": {"system_prompt": "hello"},
-                "model": {
-                    "primary": PRIMARY_MODEL.model_dump(),
-                    "fallbacks": [],
-                },
-            }
-        },
+        }}}},
     }
 
 
@@ -94,7 +106,7 @@ async def test_plugin_refresh_uses_bound_gateway_address(
         monkeypatch.setenv("BOXTEAM_GATEWAY_URL", launched_url)
     config = _base_config()
     configured_url = "http://127.0.0.1:18014"
-    config["runtime"] = {"gateway": {"connection": {"url": configured_url}}}
+    config["settings"]["workspace"]["runtime"] = {"gateway": {"connection": {"url": configured_url}}}
     service = ConfigService(
         config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config),
     )
@@ -117,15 +129,15 @@ async def test_plugin_refresh_uses_bound_gateway_address(
 
 
 @pytest.mark.parametrize("legacy_logger", [{"level": "info"}, {"level": "verbose"}, {"pretty": False}])
-def test_workspace_logger_requires_explicit_cross_domain_migration(tmp_path: Path, legacy_logger: dict) -> None:
+def test_workspace_logger_is_rejected_by_workspace_schema(tmp_path: Path, legacy_logger: dict) -> None:
     config = {**_base_config(), "logger": legacy_logger}
     path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path)
-    with pytest.raises(ValueError, match="migrate-runtime-config"):
+    with pytest.raises(ValueError, match="配置节点校验失败"):
         service.get_snapshot()
 
 
-def test_legacy_workspace_layout_requires_explicit_migration(tmp_path: Path) -> None:
+def test_legacy_workspace_layout_is_not_used_as_config_entry(tmp_path: Path) -> None:
     legacy_path = tmp_path / ".boxteam" / "boxteam.jsonc"
     legacy_path.parent.mkdir()
     legacy_path.write_text('{"config_version": 1}\n', encoding="utf-8")
@@ -134,7 +146,7 @@ def test_legacy_workspace_layout_requires_explicit_migration(tmp_path: Path) -> 
         workspace_root=tmp_path,
     )
 
-    with pytest.raises(RuntimeError, match="不会自动迁移"):
+    with pytest.raises(FileNotFoundError, match="声明的配置来源不存在"):
         service.get_snapshot()
 
     assert legacy_path.is_file()
@@ -261,8 +273,11 @@ def test_config_event_cursor_family_uses_store_state_gate_and_cursor(
 
 def test_config_accepts_chatgpt_oauth_provider_without_api_key(tmp_path: Path):
     config = _base_config()
-    config["llm"]["providers"]["backup_4"] = {
-        "defaults": {
+    config["settings"]["workspace"]["llm"]["providers"]["backup_4"] = {
+        "config_ref": "#/profiles/backup_4",
+        "models": {"default": {"model": "gpt-5.6-luna", "config_ref": "context:provider/backup_4"}},
+    }
+    config["profiles"]["backup_4"] = {"extends": "context:workspace", "settings": {"model_options": {
             "endpoint": "https://chatgpt.com/backend-api/codex",
             "custom_llm_provider": "chatgpt",
             "api_mode": {
@@ -280,9 +295,7 @@ def test_config_accepts_chatgpt_oauth_provider_without_api_key(tmp_path: Path):
                 "replay_policy": {"encrypted_content": "same_source"},
             },
             "auth": {"type": "oauth", "method": "chatgpt"},
-        },
-        "models": {"default": {"model": "gpt-5.6-luna"}},
-    }
+    }}}
     config_path = _write_workspace_config(tmp_path, config)
 
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
@@ -295,9 +308,10 @@ def test_literal_provider_key_is_rejected_before_publishing_workspace_snapshot(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["llm"]["providers"]["primary"]["defaults"]["api_key"] = "literal-provider-key"
+    config["profiles"]["primary"]["settings"]["model_options"]["api_key"] = "literal-provider-key"
     config_path = _write_workspace_config(tmp_path, config)
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -306,7 +320,7 @@ def test_literal_provider_key_is_rejected_before_publishing_workspace_snapshot(
             workspace_root=workspace_root,
             workspace_state_store=store,
         )
-        with pytest.raises(ValueError, match="配置验证失败"):
+        with pytest.raises(ValueError, match="配置节点校验失败"):
             service.validate_workspace_config()
         assert store.get_active_config_snapshot("workspace") is None
         assert json.loads(config_path.read_text(encoding="utf-8")) == config
@@ -337,6 +351,7 @@ def test_source_diagnostics_is_read_only_before_config_initialization(
 ) -> None:
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -350,7 +365,7 @@ def test_source_diagnostics_is_read_only_before_config_initialization(
 
         assert revision == "uninitialized"
         assert schema_path.is_file()
-        assert sources[1].presence == "present"
+        assert all(source.presence == "present" for source in sources)
         assert store.get_source_layer("workspace_mutable_override") is None
         assert config_path.with_name("workspace.jsonc.migrated.bak").exists() is False
         assert store.get_active_config_snapshot("workspace") is None
@@ -365,7 +380,9 @@ def test_source_diagnostics_is_read_only_before_config_initialization(
     ({"mode": "event_poll", "poll_interval": "2h"}, 7200),
 ])
 def test_gateway_skill_policy_loads_through_effective_workspace_config(tmp_path: Path, policy: dict, seconds: int | None) -> None:
-    path = _write_workspace_config(tmp_path, {**_base_config(), "resources": {"skill_sources": {"gateway_updates": policy}}})
+    config = _base_config()
+    config["settings"]["workspace"]["resources"] = {"skill_sources": {"gateway_updates": policy}}
+    path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path)
     actual = service.get_gateway_skill_update_policy()
     assert actual.model_dump() == policy and actual.poll_seconds == seconds
@@ -378,7 +395,9 @@ def test_gateway_skill_policy_loads_through_effective_workspace_config(tmp_path:
     {"mode": "event", "protocol": "unknown"},
 ])
 def test_gateway_skill_policy_rejects_invalid_effective_combinations(tmp_path: Path, policy: dict) -> None:
-    path = _write_workspace_config(tmp_path, {**_base_config(), "resources": {"skill_sources": {"gateway_updates": policy}}})
+    config = _base_config()
+    config["settings"]["workspace"]["resources"] = {"skill_sources": {"gateway_updates": policy}}
+    path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path)
     with pytest.raises(ValueError):
         service.get_gateway_skill_update_policy()
@@ -399,9 +418,9 @@ def test_private_http_sources_load_through_effective_workspace_config(tmp_path: 
     sources = [{"id": "private-one", "name": "demo", "priority": 2,
                 "fetch": {"protocol": "http", "url": "https://example.test/SKILL.md"},
                 "updates": {"mode": "poll", "poll_interval": "7m"}}]
-    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(
-        tmp_path, {**_base_config(), "resources": {"skill_sources": {"sources": sources}}},
-    ))
+    config = _base_config()
+    config["settings"]["workspace"]["resources"] = {"skill_sources": {"sources": sources}}
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config))
     assert service._get_effective_config()["resources"]["skill_sources"]["sources"] == sources
     for path in ("/resources/skill_sources/sources", "/resources/skill_sources/sources/0/fetch/url"):
         decision, = workspace_config_policy().classify((path,))
@@ -417,25 +436,25 @@ def test_private_http_sources_load_through_effective_workspace_config(tmp_path: 
 def test_private_http_sources_reject_invalid_effective_config(tmp_path: Path, change: dict) -> None:
     source = {"id": "private-one", "name": "demo", "fetch": {"protocol": "http", "url": "https://example.test/SKILL.md"}}
     sources = [{**source, **change}]
-    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(
-        tmp_path, {**_base_config(), "resources": {"skill_sources": {"sources": sources}}},
-    ))
+    config = _base_config()
+    config["settings"]["workspace"]["resources"] = {"skill_sources": {"sources": sources}}
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config))
     with pytest.raises((ValueError, jsonschema.ValidationError)):
         service._get_effective_config()
 
 
 def test_private_http_source_ids_are_unique_in_effective_workspace_config(tmp_path: Path) -> None:
     source = {"id": "private-one", "name": "demo", "fetch": {"protocol": "http", "url": "https://example.test/SKILL.md"}}
-    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(
-        tmp_path, {**_base_config(), "resources": {"skill_sources": {"sources": [source, source]}}},
-    ))
+    config = _base_config()
+    config["settings"]["workspace"]["resources"] = {"skill_sources": {"sources": [source, source]}}
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config))
     with pytest.raises(ValueError, match="id 重复"):
         service._get_effective_config()
 
 
 def test_config_reads_agent_run_timeout(tmp_path: Path) -> None:
     config = _base_config()
-    config["runtime"] = {"agent": {"run": {"timeout_seconds": 12.5}}}
+    config["settings"]["workspace"]["runtime"] = {"agent": {"run": {"timeout_seconds": 12.5}}}
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=_write_workspace_config(tmp_path, config),
@@ -446,7 +465,7 @@ def test_config_reads_agent_run_timeout(tmp_path: Path) -> None:
 
 def test_config_reads_agent_run_mode(tmp_path: Path) -> None:
     config = _base_config()
-    config["runtime"] = {"agent": {"run": {"mode": "team"}}}
+    config["settings"]["workspace"]["runtime"] = {"agent": {"run": {"mode": "team"}}}
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=_write_workspace_config(tmp_path, config),
@@ -459,46 +478,48 @@ def test_config_reads_agent_run_mode(tmp_path: Path) -> None:
 def test_source_message_grouping_uses_workspace_layers(tmp_path: Path, grouping: str | None) -> None:
     config = _base_config()
     if grouping is not None:
-        config["context"] = {"source_messages": {"grouping": grouping}}
+        config["settings"]["workspace"]["context"] = {"source_messages": {"grouping": grouping}}
     service = ConfigService(
         config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config),
     )
     assert service.get_source_message_grouping() == (grouping or "aggregate")
-    assert service.get_snapshot().to_dict()["config_version"] == 3
+    assert service.get_snapshot().to_dict()["config_version"] == 4
 
 
 def test_source_message_grouping_rejects_unknown_mode(tmp_path: Path) -> None:
     config = _base_config()
-    config["context"] = {"source_messages": {"grouping": "auto"}}
+    config["settings"]["workspace"]["context"] = {"source_messages": {"grouping": "auto"}}
     service = ConfigService(
         config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config),
     )
-    with pytest.raises(ValueError, match="配置验证失败"):
+    with pytest.raises(ValueError, match="配置节点校验失败"):
         service.validate_workspace_config()
 
 
 def test_config_rejects_unknown_agent_run_mode(tmp_path: Path) -> None:
     config = _base_config()
-    config["runtime"] = {"agent": {"run": {"mode": "unexpected"}}}
+    config["settings"]["workspace"]["runtime"] = {"agent": {"run": {"mode": "unexpected"}}}
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=_write_workspace_config(tmp_path, config),
     )
 
-    with pytest.raises(ValueError, match="single_agent 或 team"):
+    with pytest.raises(ValueError, match="配置节点校验失败"):
         service.get_agent_run_mode()
 
 
 def test_config_rejects_provider_without_api_key_or_oauth(tmp_path: Path):
     config = _base_config()
-    defaults = config["llm"]["providers"]["primary"]["defaults"].copy()
-    del defaults["api_key"]
-    config["llm"]["providers"]["missing_key"] = {
-        "defaults": defaults, "models": {"default": {"model": "model-a"}},
+    options = config["profiles"]["primary"]["settings"]["model_options"].copy()
+    del options["api_key"]
+    config["settings"]["workspace"]["llm"]["providers"]["missing_key"] = {
+        "config_ref": "#/profiles/missing_key",
+        "models": {"default": {"model": "model-a", "config_ref": "context:provider/missing_key"}},
     }
+    config["profiles"]["missing_key"] = {"extends": "context:workspace", "settings": {"model_options": options}}
     config_path = _write_workspace_config(tmp_path, config)
 
-    with pytest.raises(ValueError, match="配置验证失败") as failure:
+    with pytest.raises(ValueError, match="配置节点校验失败") as failure:
         ConfigService(
             config_dir=Path.cwd() / "configs",
             config_path=config_path,
@@ -509,7 +530,7 @@ def test_config_rejects_provider_without_api_key_or_oauth(tmp_path: Path):
 
 def test_tool_policy_resolver_merges_workspace_and_agent_rules(tmp_path: Path):
     config = _base_config()
-    config["tooling"] = {
+    config["settings"]["workspace"]["tooling"] = {
         "policy_defaults": {
             "execution_enabled": True,
             "model_visible": True,
@@ -526,7 +547,7 @@ def test_tool_policy_resolver_merges_workspace_and_agent_rules(tmp_path: Path):
             "confirmation_required": [],
         },
     }
-    config["agents"]["default"]["tools"] = {
+    config["settings"]["workspace"]["agents"]["default"]["tools"] = {
         "policy": {
             "rules": {
                 "by_tool": {"start_debugging": {"model_visible": True}}
@@ -577,19 +598,19 @@ async def test_get_public_config_resolves_default_model_from_agent_provider(
     assert result.max_concurrent_agents == 4
     assert result.metadata["default_agent_id"] == "default"
     # real path 不再对外：metadata 既无 config_path，也无 source_paths；
-    # 来源位置只以 source_details[].uri 表达（非 inline 层为 None）。
+    # 来源位置只以 source_details[].uri 表达。
     assert "config_path" not in result.metadata
     assert "source_paths" not in result.metadata
     source_details = result.metadata["source_details"]
     assert source_details[0]["uri"].startswith("boxteam://inline/")
-    assert all(detail["uri"] is None for detail in source_details[1:])
+    assert all(detail["uri"].startswith("boxteam://") for detail in source_details[1:])
     assert str(config_path) not in result.model_dump_json()
 
 
 @pytest.mark.asyncio
 async def test_update_public_config_uses_runtime_overrides(tmp_path: Path):
     config = _base_config()
-    config["ui"] = {
+    config["settings"]["workspace"]["ui"] = {
         "default_orchestration": "planner",
         "max_concurrent_agents": 2,
         "allow_shell_tools": False,
@@ -661,33 +682,27 @@ async def test_update_public_config_null_clears_runtime_override(tmp_path: Path)
     assert result.metadata["runtime_overrides"] == []
 
 
-def test_workspace_local_config_is_merged_before_workspace_override(
+def test_workspace_parent_chain_applies_local_then_workspace_values(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 1900
+    config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 1900
     config_path = _write_workspace_config(tmp_path, config)
     local_path = tmp_path / "workspace_local.jsonc"
-    local_path.write_text(
-        json.dumps(
-            {
-                "mcp": {"supervision": {"sealed_call_timeout_seconds": 2000}},
-                "agents": {"default": {"name": "Local Agent"}},
-            }
-        ),
-        encoding="utf-8",
-    )
+    local_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace",
+        "settings": {"workspace": {
+            "mcp": {"supervision": {"sealed_call_timeout_seconds": 2000}},
+            "agents": {"default": {"name": "Local Agent"}},
+        }},
+    }), encoding="utf-8")
     workspace_root = tmp_path / "workspace"
     workspace_path = workspace_root / ".boxteam" / "workspace.jsonc"
-    workspace_path.parent.mkdir(parents=True)
-    workspace_path.write_text(
-        json.dumps(
-            {
-                "agents": {"default": {"name": "Workspace Agent"}},
-            }
-        ),
-        encoding="utf-8",
-    )
+    _initialize_workspace_config(workspace_root)
+    workspace_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace_local",
+        "settings": {"workspace": {"agents": {"default": {"name": "Workspace Agent"}}}},
+    }), encoding="utf-8")
 
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
@@ -714,21 +729,24 @@ def test_workspace_local_config_is_merged_before_workspace_override(
     assert public_config.source_details[2].loaded is True
 
 
-def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
+def test_workspace_config_syncs_reachable_sources_to_sqlite(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 1900
+    config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 1900
     config_path = _write_workspace_config(tmp_path, config)
     local_path = tmp_path / "workspace_local.jsonc"
-    local_path.write_text(json.dumps({"mcp": {"supervision": {"sealed_call_timeout_seconds": 2000}}}), encoding="utf-8")
+    local_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace",
+        "settings": {"workspace": {"mcp": {"supervision": {"sealed_call_timeout_seconds": 2000}}}},
+    }), encoding="utf-8")
     workspace_root = tmp_path / "workspace"
     workspace_path = workspace_root / ".boxteam" / "workspace.jsonc"
-    workspace_path.parent.mkdir(parents=True)
-    workspace_path.write_text(
-        json.dumps({"agents": {"default": {"name": "Workspace Agent"}}}),
-        encoding="utf-8",
-    )
+    _initialize_workspace_config(workspace_root)
+    workspace_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace_local",
+        "settings": {"workspace": {"agents": {"default": {"name": "Workspace Agent"}}}},
+    }), encoding="utf-8")
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -741,27 +759,18 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
         assert service.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 2000
         assert service.list_agents()["default"]["name"] == "Workspace Agent"
         assert [source.layer for source in service.get_source_details()] == [
-            "inline",
-            "user",
-            "user_local",
-            "workspace",
-            "runtime_override",
+            "inline", "user", "user_local", "workspace",
         ]
-        # D-A：`layer` MUST 是逻辑来源层。user/user_local/workspace 虽共享同一
-        # workspace.sqlite，但共享只是承载事实，MUST NOT 有损改写成 carrier 名。
-        # runtime_override 只表达逻辑来源，不暴露 SQLite carrier。此处逐层断言比旧的
-        # 「四层同为 sqlite」更强。5A.6：只有 inline 层可寻址；其它层一律不可寻址，
-        # uri MUST be None，且不含任何真实路径。
         details = service.get_source_details()
-        assert details[0].uri is not None
         assert details[0].uri.startswith("boxteam://inline/")
         for source in details[1:]:
-            assert source.uri is None
-        assert config_path.with_name("workspace.jsonc.migrated.bak").is_file()
-        assert local_path.with_name("workspace_local.jsonc.migrated.bak").is_file()
-        assert workspace_path.with_name("workspace.jsonc.migrated.bak").is_file()
+            assert source.uri.startswith("boxteam://")
+            assert store.get_source_layer(source.source_key) is not None
+        assert not list(tmp_path.rglob("*.migrated.bak"))
 
-        config_path.write_text(json.dumps({"mcp": {"supervision": {"sealed_call_timeout_seconds": 2500}}}), encoding="utf-8")
+        service.validate_workspace_config()
+        config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2500
+        config_path.write_text(json.dumps(config), encoding="utf-8")
         assert service.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 2000
     finally:
         store.close()
@@ -770,15 +779,11 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
 def test_config_source_layer_consistent_across_read_paths(
     tmp_path: Path,
 ) -> None:
-    """D-A/D-B：两条读路径对同一 source_key MUST 报同一逻辑层。
-
-    源构建路径（`_config_source`/`_runtime_override_source`）与持久化恢复路径
-    （`_persisted_source_details`）此前同一 source_key 可能得到不同逻辑层，且 inline
-    在恢复路径 precedence 由 0 翻成 1。本用例锁定两路一致。
-    """
+    """恢复后的来源身份与实际父链来源一致。"""
 
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         first = ConfigService(
@@ -801,45 +806,17 @@ def test_config_source_layer_consistent_across_read_paths(
         )
         _, _, restored_sources = restored.get_source_diagnostics()
 
-        expected = {
-            "inline": 0,
-            "user": 1,
-            "user_local": 2,
-            "workspace": 3,
-            "runtime_override": 4,
-        }
-
-        # 两路都按 {逻辑层: precedence} 收敛到同一张权威表；层名互不相同，故该映射
-        # 与顺序无关，恰好表达「同一 source_key MUST 报同一 layer 且 precedence 不翻转」。
-        restored_map = {source.layer: source.precedence for source in restored_sources}
         first_sources = first.get_source_details()
-        first_map = {source.layer: source.precedence for source in first_sources}
-        assert restored_map == expected
-        assert first_map == expected
-        assert "sqlite" not in restored_map
-        assert "sqlite" not in first_map
-
-        # D-B 定点：inline 在恢复路径 MUST 仍为 inline、precedence MUST 为 0，
-        # 不得映射成其它来源层或把 precedence 翻成 1。
-        restored_inline = [
-            source for source in restored_sources if source.layer == "inline"
-        ]
-        assert len(restored_inline) == 1
-        assert restored_inline[0].precedence == 0
-        assert restored_inline[0].uri is not None
+        assert {
+            source.source_key: (source.uri, source.layer) for source in restored_sources
+        } == {
+            source.source_key: (source.uri, source.layer) for source in first_sources
+        }
+        assert {source.layer for source in restored_sources} == {
+            "inline", "user", "user_local", "workspace",
+        }
     finally:
         store.close()
-
-
-@pytest.mark.parametrize(
-    "source_key",
-    ("active_snapshot", "pending_snapshot", "sqlite:1", "user:1"),
-)
-def test_workspace_persisted_source_layer_rejects_unregistered_keys(
-    source_key: str,
-) -> None:
-    with pytest.raises(ValueError, match="未登记的持久化键"):
-        ConfigService._resolve_persisted_layer(source_key)
 
 
 def test_workspace_config_restarts_from_active_snapshot_after_source_json_changes(
@@ -847,6 +824,7 @@ def test_workspace_config_restarts_from_active_snapshot_after_source_json_change
 ) -> None:
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         first = ConfigService(
@@ -879,6 +857,7 @@ def test_cold_start_rejects_invalid_source_without_committed_active_snapshot(
 ) -> None:
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         first = ConfigService(
@@ -908,7 +887,7 @@ def test_cold_start_rejects_invalid_source_without_committed_active_snapshot(
             assert store.get_pending_config_candidate(config_domain="workspace") is None
         # 修复源文件后，原 owner 可以从真实新内容建立唯一 active。
         fixed = _base_config()
-        fixed["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
+        fixed["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(fixed), encoding="utf-8")
         recovered.validate_workspace_config()
         assert recovered.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 2000
@@ -924,6 +903,7 @@ def test_cold_start_rejects_invalid_source_without_committed_active_snapshot(
 async def test_public_runtime_overrides_restart_from_workspace_sqlite(tmp_path: Path):
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         first = ConfigService(
@@ -999,6 +979,7 @@ async def test_public_runtime_override_rejects_stale_layer_and_active_cas(
 ):
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -1036,6 +1017,7 @@ async def test_public_runtime_override_rejects_stale_layer_and_active_cas(
 async def test_public_runtime_override_replay_is_idempotent(tmp_path: Path):
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -1082,7 +1064,7 @@ async def test_get_public_config_fails_when_default_agent_provider_is_missing(
     tmp_path: Path,
 ):
     config = _base_config()
-    config["agents"]["default"]["model"]["primary"] = {"provider_id": "missing", "model_id": "default"}
+    config["settings"]["workspace"]["agents"]["default"]["model"]["primary"] = {"provider_id": "missing", "model_id": "default"}
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
@@ -1094,7 +1076,7 @@ async def test_get_public_config_fails_when_default_agent_provider_is_missing(
 
 def test_get_agent_tool_config_reads_custom_tools(tmp_path: Path):
     config = _base_config()
-    config["agents"]["default"]["tools"] = {
+    config["settings"]["workspace"]["agents"]["default"]["tools"] = {
         "denylist": [],
         "confirmation_required": [],
         "custom": [{"tool_id": "test_tool_2"}],
@@ -1109,7 +1091,7 @@ def test_get_agent_tool_config_reads_custom_tools(tmp_path: Path):
 
 def test_get_agent_tool_config_resolves_all_minus_allowlist(tmp_path: Path):
     config = _base_config()
-    config["agents"]["default"]["tools"] = {
+    config["settings"]["workspace"]["agents"]["default"]["tools"] = {
         "denylist": ["all"],
         "allowlist": ["read_file"],
     }
@@ -1128,7 +1110,7 @@ def test_discovered_mcp_tools_participate_in_policy_and_confirmation(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["agents"]["default"]["tools"] = {
+    config["settings"]["workspace"]["agents"]["default"]["tools"] = {
         "denylist": ["extensions"],
         "allowlist": ["mcp__mini__echo"],
         "confirmation_required": ["mcp__mini__echo"],
@@ -1148,7 +1130,7 @@ def test_discovered_mcp_tools_participate_in_policy_and_confirmation(
 
 def test_discovered_mcp_tools_reject_unknown_configured_tool(tmp_path: Path) -> None:
     config = _base_config()
-    config["agents"]["default"]["tools"] = {
+    config["settings"]["workspace"]["agents"]["default"]["tools"] = {
         "denylist": ["mcp__missing__tool"],
     }
     config_path = _write_workspace_config(tmp_path, config)
@@ -1160,7 +1142,7 @@ def test_discovered_mcp_tools_reject_unknown_configured_tool(tmp_path: Path) -> 
 
 def test_config_loading_fails_on_delegation_dependency_conflict(tmp_path: Path):
     config = _base_config()
-    config["agents"]["default"]["tools"] = {
+    config["settings"]["workspace"]["agents"]["default"]["tools"] = {
         "denylist": ["send_message_to_session"],
     }
     config_path = _write_workspace_config(tmp_path, config)
@@ -1182,7 +1164,7 @@ def test_extension_selector_can_restore_one_custom_tool(
         lambda _factory_path: object(),
     )
     config = _base_config()
-    config["agents"]["default"]["tools"] = {
+    config["settings"]["workspace"]["agents"]["default"]["tools"] = {
         "denylist": ["extensions"],
         "allowlist": ["web_search"],
         "custom": [
@@ -1207,7 +1189,7 @@ def test_config_service_normalizes_custom_tool_specs(
         lambda _factory_path: object(),
     )
     config = _base_config()
-    config["agents"]["default"]["tools"] = {
+    config["settings"]["workspace"]["agents"]["default"]["tools"] = {
         "custom": [
             {
                 "name": "  web_search  ",
@@ -1234,7 +1216,7 @@ def test_config_loading_rejects_duplicate_normalized_custom_tool_names(
     tmp_path: Path,
 ):
     config = _base_config()
-    config["agents"]["default"]["tools"] = {
+    config["settings"]["workspace"]["agents"]["default"]["tools"] = {
         "custom": [
             {"name": "web_search", "factory": "example:create_web_search"},
             {"name": " web_search ", "factory": "example:create_other"},
@@ -1253,27 +1235,22 @@ def test_workspace_config_overrides_user_global_config(
     tmp_path: Path,
 ) -> None:
     global_config = _base_config()
-    global_config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 1900
-    global_path = tmp_path / "home" / ".boxteam" / "workspace.jsonc"
+    global_config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 1900
+    global_path = tmp_path / "home" / "config" / "workspace.jsonc"
     global_path.parent.mkdir(parents=True)
+    install_user_configuration(config_root=global_path.parent, profile="default")
     global_path.write_text(json.dumps(global_config), encoding="utf-8")
 
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     workspace_config = workspace_root / ".boxteam" / "workspace.jsonc"
-    workspace_config.parent.mkdir(parents=True)
-    workspace_config.write_text(
-        json.dumps(
-            {
-                "agents": {
-                    "default": {
-                        "name": "Workspace Override",
-                    }
-                },
-                "development": {"test_tools": True},
-            }
-        ),
-        encoding="utf-8",
-    )
+    workspace_config.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace_local",
+        "settings": {"workspace": {
+            "agents": {"default": {"name": "Workspace Override"}},
+            "development": {"test_tools": True},
+        }},
+    }), encoding="utf-8")
 
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
@@ -1292,7 +1269,7 @@ def test_workspace_config_overrides_user_global_config(
 
 def test_web_fetch_config_needs_no_embedding_options(tmp_path: Path) -> None:
     config = _base_config()
-    config["agents"]["default"]["tools"] = {
+    config["settings"]["workspace"]["agents"]["default"]["tools"] = {
         "custom": [
             {
                 "tool_id": "fetch_webpage",
@@ -1317,22 +1294,27 @@ async def test_resolve_llm_model_only_prepares_selected_model_secret(
 
     config = _base_config()
     secret_id = "sec_00000000000040008000000000000001"
-    config["llm"]["providers"]["embedding"] = {
-        "defaults": {
+    config["settings"]["workspace"]["llm"]["providers"]["embedding"] = {
+        "config_ref": "#/profiles/embedding",
+        "models": {
+            "default": {"model": "embedding-model", "config_ref": "#/profiles/embedding_default"},
+            "unused": {"model": "unused-model", "config_ref": "#/profiles/embedding_unused"},
+        },
+    }
+    config["profiles"]["embedding"] = {"extends": "context:workspace", "settings": {"model_options": {
             "endpoint": "https://embedding.example.com/v1",
             "api_key": "${EMBEDDING_API_KEY}",
             "custom_llm_provider": "openai",
             "api_mode": {"protocol": "chat_completions",
                          "model_info": {"supports_function_calling": False, "supports_reasoning": False},
                          "supports_reasoning": {}},
-        },
-        "models": {
-            "default": {"model": "embedding-model", "overrides": {
-                "api_key": "${EMBEDDING_API_KEY}" if credential == "environment" else "secret:" + secret_id,
-            }},
-            "unused": {"model": "unused-model", "overrides": {"api_key": "${UNUSED_EMBEDDING_API_KEY}"}},
-        },
-    }
+    }}}
+    config["profiles"]["embedding_default"] = {"extends": "context:provider/embedding", "settings": {"model_options": {
+        "api_key": "${EMBEDDING_API_KEY}" if credential == "environment" else "secret:" + secret_id,
+    }}}
+    config["profiles"]["embedding_unused"] = {"extends": "context:provider/embedding", "settings": {"model_options": {
+        "api_key": "${UNUSED_EMBEDDING_API_KEY}",
+    }}}
     monkeypatch.delenv("TEST_API_KEY", raising=False)
     monkeypatch.delenv("UNUSED_EMBEDDING_API_KEY", raising=False)
     monkeypatch.setenv("EMBEDDING_API_KEY", "embedding-secret")
@@ -1359,7 +1341,7 @@ def test_model_request_parameters_schema_accepts_raw_completion_parameters(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["llm"]["providers"]["primary"]["defaults"]["request_options"] = {
+    config["profiles"]["primary"]["settings"]["model_options"]["request_options"] = {
         "parameters": {
             "temperature": 1,
             "max_tokens": None,
@@ -1395,12 +1377,15 @@ def test_agent_runtime_omits_unspecified_generation_parameters(
 def runtime_provider_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ConfigService:
     monkeypatch.setenv("TEST_API_KEY", "initial-key")
     config = _base_config()
-    primary = config["llm"]["providers"]["primary"]
-    primary["defaults"]["request_options"] = {"default_headers": {"X-Runtime": "original"}}
-    config["llm"]["providers"]["backup"] = {
-        "defaults": primary["defaults"].copy(), "models": {"default": {"model": "model-b"}},
+    options = config["profiles"]["primary"]["settings"]["model_options"]
+    options["request_options"] = {"default_headers": {"X-Runtime": "original"}}
+    config["settings"]["workspace"]["llm"]["providers"]["backup"] = {
+        "config_ref": "#/profiles/backup", "models": {"default": {
+            "model": "model-b", "config_ref": "context:provider/backup",
+        }},
     }
-    config["agents"]["default"]["model"]["fallbacks"] = [BACKUP_MODEL.model_dump()]
+    config["profiles"]["backup"] = {"extends": "context:workspace", "settings": {"model_options": options.copy()}}
+    config["settings"]["workspace"]["agents"]["default"]["model"]["fallbacks"] = [BACKUP_MODEL.model_dump()]
     service = ConfigService(config_dir=Path.cwd() / "configs",
                             config_path=_write_workspace_config(tmp_path, config))
     service.get_revision()
@@ -1449,15 +1434,21 @@ def test_model_catalog_warm_reads_do_not_read_sources_or_copy_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _base_config()
-    template = config["llm"]["providers"]["primary"]
-    config["llm"]["providers"] = {
-        provider_id: {"defaults": template["defaults"], "models": {
-            model_id: {"model": "upstream-model"} for model_id in
-            ("default", *(f"model-{index}" for index in range(9)))
-        }} for provider_id in ("primary", *(f"provider-{index}" for index in range(19)))
+    provider_ids = ("primary", *(f"provider-{index}" for index in range(19)))
+    model_ids = ("default", *(f"model-{index}" for index in range(9)))
+    config["settings"]["workspace"]["llm"]["providers"] = {
+        provider_id: {"config_ref": f"#/profiles/{provider_id}", "models": {
+            model_id: {"model": "upstream-model", "config_ref": f"context:provider/{provider_id}"}
+            for model_id in model_ids
+        }} for provider_id in provider_ids
+    }
+    config["profiles"] = {
+        provider_id: {"extends": "context:workspace", "settings": {
+            "model_options": config["profiles"]["primary"]["settings"]["model_options"],
+        }} for provider_id in provider_ids
     }
     inline = config_source_layers_module.read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")
-    inline["llm"]["providers"] = {}
+    inline["settings"]["workspace"]["llm"]["providers"] = {}
     inline_path = tmp_path / "workspace_inline.jsonc"
     inline_path.write_text(json.dumps(inline), encoding="utf-8")
     service = ConfigService(config_dir=Path.cwd() / "configs", inline_config_path=inline_path,
@@ -1465,7 +1456,7 @@ def test_model_catalog_warm_reads_do_not_read_sources_or_copy_workspace(
     initial = service.list_llm_models()
     assert len(initial) == 200
     with pytest.raises(TypeError):
-        service.get_snapshot().read_only["llm"]["providers"]["primary"]["defaults"]["endpoint"] = "https://changed.invalid"
+        service.get_snapshot().read_only["llm"]["providers"]["primary"]["config_ref"] = "#/profiles/changed"
 
     def forbidden(*_args: object, **_kwargs: object) -> NoReturn:
         pytest.fail("模型暖读不得读取来源或重新物化整份工作区配置")
@@ -1488,7 +1479,7 @@ def test_agent_identity_is_not_replaced_by_default_or_unrelated_credential_failu
 ) -> None:
     monkeypatch.delenv("UNRELATED_AGENT_PROVIDER_KEY", raising=False)
     config = _base_config()
-    config["llm"]["providers"]["primary"]["defaults"]["api_key"] = "${UNRELATED_AGENT_PROVIDER_KEY}"
+    config["profiles"]["primary"]["settings"]["model_options"]["api_key"] = "${UNRELATED_AGENT_PROVIDER_KEY}"
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config))
     assert service.get_default_agent_id() == "default"
     assert service.validate_agent_id(None) == "default"
@@ -1499,7 +1490,7 @@ def test_agent_identity_is_not_replaced_by_default_or_unrelated_credential_failu
 
 def test_invalid_config_default_agent_is_not_replaced_by_another_definition(tmp_path: Path) -> None:
     config = _base_config()
-    config["default_agent"] = "removed"
+    config["settings"]["workspace"]["default_agent"] = "removed"
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config))
     with pytest.raises(ValueError, match="default_agent 引用了不存在的 Agent: removed"):
         service.get_default_agent_id()
@@ -1510,7 +1501,7 @@ def test_instruction_inputs_use_merged_configuration_without_python_prompt_defau
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config = _base_config()
-    instructions = config["agents"]["default"]["instructions"]
+    instructions = config["settings"]["workspace"]["agents"]["default"]["instructions"]
     instructions["runtime_identity"] = {"description": "我的路径说明"}
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
@@ -1533,7 +1524,7 @@ def test_agent_runtime_can_require_delegated_report(
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config = _base_config()
-    config["agents"]["default"]["execution"] = {
+    config["settings"]["workspace"]["agents"]["default"]["execution"] = {
         "require_delegated_report": True,
     }
     config_path = _write_workspace_config(tmp_path, config)
@@ -1550,11 +1541,14 @@ def test_agent_runtime_places_session_model_first(
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config = _base_config()
-    config["llm"]["providers"]["backup"] = {
-        "defaults": config["llm"]["providers"]["primary"]["defaults"].copy(),
-        "models": {"default": {"model": "model-b"}},
+    config["settings"]["workspace"]["llm"]["providers"]["backup"] = {
+        "config_ref": "#/profiles/backup", "models": {"default": {
+            "model": "model-b", "config_ref": "context:provider/backup",
+        }},
     }
-    config["agents"]["default"]["model"]["fallbacks"] = [BACKUP_MODEL.model_dump()]
+    config["profiles"]["backup"] = {"extends": "context:workspace", "settings": {"model_options":
+        config["profiles"]["primary"]["settings"]["model_options"].copy()}}
+    config["settings"]["workspace"]["agents"]["default"]["model"]["fallbacks"] = [BACKUP_MODEL.model_dump()]
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
@@ -1585,6 +1579,7 @@ def test_workspace_session_defaults_file_guards_reject_corrupt_and_stale_files(
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     settings_dir = workspace_root / ".boxteam" / "settings"
     settings_dir.mkdir(parents=True)
     defaults_path = settings_dir / "session_defaults.json"
@@ -1646,12 +1641,15 @@ def test_workspace_session_defaults_are_persisted_without_changing_static_config
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config = _base_config()
-    config["llm"]["providers"]["backup"] = {
-        "defaults": config["llm"]["providers"]["primary"]["defaults"].copy(),
-        "models": {"default": {"model": "model-b"}},
+    config["settings"]["workspace"]["llm"]["providers"]["backup"] = {
+        "config_ref": "#/profiles/backup", "models": {"default": {
+            "model": "model-b", "config_ref": "context:provider/backup",
+        }},
     }
-    config["agents"]["default"]["model"]["fallbacks"] = [BACKUP_MODEL.model_dump()]
-    config["agents"]["coder"] = {
+    config["profiles"]["backup"] = {"extends": "context:workspace", "settings": {"model_options":
+        config["profiles"]["primary"]["settings"]["model_options"].copy()}}
+    config["settings"]["workspace"]["agents"]["default"]["model"]["fallbacks"] = [BACKUP_MODEL.model_dump()]
+    config["settings"]["workspace"]["agents"]["coder"] = {
         "name": "Coder",
         "instructions": {"system_prompt": "code"},
         "model": {
@@ -1661,6 +1659,7 @@ def test_workspace_session_defaults_are_persisted_without_changing_static_config
     }
     config_path = _write_workspace_config(tmp_path, config)
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=config_path,
@@ -1695,13 +1694,13 @@ def test_provider_request_override_schema_rejects_legacy_extra_body(
     tmp_path: Path,
 ) -> None:
     config = _base_config()
-    config["llm"]["providers"]["primary"]["defaults"]["request_options"] = {
+    config["profiles"]["primary"]["settings"]["model_options"]["request_options"] = {
         "extra_body": {"reasoning": True}
     }
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
-    with pytest.raises(ValueError, match="配置验证失败") as failure:
+    with pytest.raises(ValueError, match="配置节点校验失败") as failure:
         service.validate_workspace_config()
     assert isinstance(failure.value.__cause__, jsonschema.ValidationError)
     assert "extra_body" in str(failure.value.__cause__)
@@ -1726,7 +1725,7 @@ def test_workspace_schema_rejects_gateway_section(tmp_path: Path):
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
 
-    with pytest.raises(ValueError, match="配置验证失败") as error_info:
+    with pytest.raises(ValueError, match="配置节点校验失败") as error_info:
         service.validate_workspace_config()
 
     cause = error_info.value.__cause__
@@ -1747,7 +1746,7 @@ async def test_config_uses_stable_snapshot_until_reload(
 
     original_snapshot = service.get_snapshot()
     original_revision = original_snapshot.revision
-    config["llm"]["providers"]["primary"]["models"]["default"]["model"] = "model-b"
+    config["settings"]["workspace"]["llm"]["providers"]["primary"]["models"]["default"]["model"] = "model-b"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     assert service.get_llm_model(PRIMARY_MODEL)["model"] == "model-a"
@@ -1763,12 +1762,11 @@ async def test_reload_ignores_shadowed_lower_priority_change(tmp_path: Path) -> 
     global_config = _base_config()
     global_path = _write_workspace_config(tmp_path, global_config)
     workspace_root = tmp_path / "workspace"
-    workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
-    workspace_config_path.parent.mkdir(parents=True)
-    workspace_config_path.write_text(
-        json.dumps({"mcp": {"supervision": {"sealed_call_timeout_seconds": 1900}}}),
-        encoding="utf-8",
-    )
+    workspace_config_path = _initialize_workspace_config(workspace_root)
+    workspace_config_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace_local",
+        "settings": {"workspace": {"mcp": {"supervision": {"sealed_call_timeout_seconds": 1900}}}},
+    }), encoding="utf-8")
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=global_path,
@@ -1776,7 +1774,7 @@ async def test_reload_ignores_shadowed_lower_priority_change(tmp_path: Path) -> 
     )
 
     original_revision = service.get_revision()
-    global_config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
+    global_config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
     global_path.write_text(json.dumps(global_config), encoding="utf-8")
 
     assert await service.reload() is False
@@ -1789,8 +1787,7 @@ async def test_same_revision_reload_refreshes_active_source_paths(
 ) -> None:
     global_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
-    workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
-    workspace_config_path.parent.mkdir(parents=True)
+    workspace_config_path = _initialize_workspace_config(workspace_root)
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=global_path,
@@ -1798,7 +1795,9 @@ async def test_same_revision_reload_refreshes_active_source_paths(
     )
     original_revision = service.get_revision()
 
-    workspace_config_path.write_text("{}", encoding="utf-8")
+    workspace_config_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace", "settings": {},
+    }), encoding="utf-8")
 
     assert await service.reload() is False
     snapshot = service.get_snapshot()
@@ -1811,27 +1810,20 @@ async def test_same_revision_reload_refreshes_active_source_paths(
 
 
 @pytest.mark.asyncio
-async def test_reload_workspace_config_deletion_falls_back_to_user_config(
+async def test_reload_workspace_config_deletion_keeps_last_active_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     user_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
-    workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
-    workspace_config_path.parent.mkdir(parents=True)
-    workspace_config_path.write_text(
-        json.dumps(
-            {
-                "agents": {
-                    "default": {
-                        "instructions": {"system_prompt": "workspace"},
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    workspace_config_path = _initialize_workspace_config(workspace_root)
+    workspace_config_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace_local",
+        "settings": {"workspace": {"agents": {"default": {
+            "instructions": {"system_prompt": "workspace"},
+        }}}},
+    }), encoding="utf-8")
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=user_path,
@@ -1841,13 +1833,10 @@ async def test_reload_workspace_config_deletion_falls_back_to_user_config(
 
     workspace_config_path.unlink()
 
-    assert await service.reload() is True
-    assert service.get_revision() != workspace_revision
-    assert service.get_agent_runtime_config("default")["system_prompt"] == "hello"
-    assert service.get_snapshot().source_paths == (
-        Path("configs/workspace_inline.jsonc").resolve(),
-        user_path,
-    )
+    with pytest.raises(FileNotFoundError, match="声明的配置来源不存在"):
+        await service.reload()
+    assert service.get_revision() == workspace_revision
+    assert service.get_agent_runtime_config("default")["system_prompt"] == "workspace"
 
 
 @pytest.mark.asyncio
@@ -1860,6 +1849,7 @@ async def test_reload_status_keeps_unhealthy_snapshot_base_with_active_record(
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -1926,7 +1916,7 @@ async def test_reload_rejects_missing_custom_factory_and_retains_snapshot(
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
     original_revision = service.get_revision()
-    config["agents"]["default"]["tools"] = {
+    config["settings"]["workspace"]["agents"]["default"]["tools"] = {
         "custom": [
             {
                 "name": "missing_tool",
@@ -1942,11 +1932,12 @@ async def test_reload_rejects_missing_custom_factory_and_retains_snapshot(
     assert service.get_revision() == original_revision
     status = service.get_reload_status()
     assert status.healthy is False
-    assert status.last_error == "Workspace 配置热重载失败: stage=invalid_config, error=ValueError"
-    assert any(record.exc_info and "missing_package.tools:create_missing_tool" in str(record.exc_info[1]) for record in caplog.records)
+    assert status.last_error.startswith("Workspace 配置热重载失败: stage=invalid_config, error=ValueError")
+    assert "扩展工具预检失败" in status.last_error
+    assert "missing_package.tools:create_missing_tool" in caplog.text
     rejected = json.loads(config_path.read_text(encoding="utf-8"))
-    assert rejected["config_version"] == 3
-    assert rejected["agents"]["default"]["tools"]["custom"][0]["factory"] == (
+    assert rejected["config_version"] == 4
+    assert rejected["settings"]["workspace"]["agents"]["default"]["tools"]["custom"][0]["factory"] == (
         "missing_package.tools:create_missing_tool"
     )
 
@@ -1959,7 +1950,7 @@ async def test_candidate_applier_failure_prevents_snapshot_commit(
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
     original_revision = service.get_revision()
-    config["agents"]["default"]["instructions"]["system_prompt"] = "candidate"
+    config["settings"]["workspace"]["agents"]["default"]["instructions"]["system_prompt"] = "candidate"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     async def reject_candidate(*_args) -> NoReturn:
@@ -1985,6 +1976,7 @@ async def test_plugin_binding_candidate_is_validated_after_pending_and_before_pu
     config = _base_config()
     user_config_path = _write_workspace_config(tmp_path, config)
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     load_or_create_workspace_id(workspace_root)
     service = ConfigService(
@@ -1998,25 +1990,13 @@ async def test_plugin_binding_candidate_is_validated_after_pending_and_before_pu
     assert previous_active is not None
     workspace_config_path = get_workspace_config_path(workspace_root)
     workspace_config_path.parent.mkdir(parents=True, exist_ok=True)
-    workspace_config_path.write_text(
-        json.dumps(
-            {
-                "plugins": {
-                    "runtime": {
-                        "entries": [
-                            {
-                                "package_id": "sample",
-                                "plugin_id": "sample-tool",
-                                "package_version": "1.0.0",
-                                "enabled": True,
-                            }
-                        ]
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    workspace_config_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace_local",
+        "settings": {"workspace": {"plugins": {"runtime": {"entries": [{
+            "package_id": "sample", "plugin_id": "sample-tool",
+            "package_version": "1.0.0", "enabled": True,
+        }]}}}},
+    }), encoding="utf-8")
     requests: list[httpx.Request] = []
     original_client = httpx.AsyncClient
 
@@ -2103,6 +2083,7 @@ async def test_shadow_resources_activate_with_sqlite_publication_and_rollback_on
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config = _base_config()
     path = _write_workspace_config(tmp_path, config)
+    _initialize_workspace_config(tmp_path / "workspace")
     store = WorkspaceStateStore(workspace_root=tmp_path / "workspace")
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
                             workspace_root=tmp_path / "workspace", workspace_state_store=store)
@@ -2134,7 +2115,7 @@ async def test_shadow_resources_activate_with_sqlite_publication_and_rollback_on
         await service.start_watching(shadow_reconcile=prepare)
         await service.stop_watching()
         initial = activated[0]
-        config["agents"]["default"]["instructions"]["system_prompt"] = "新的来源策略配置"
+        config["settings"]["workspace"]["agents"]["default"]["instructions"]["system_prompt"] = "新的来源策略配置"
         path.write_text(json.dumps(config), encoding="utf-8")
         with pytest.raises(RuntimeError, match="拒绝候选"):
             await service.reload(candidate_applier=reject)
@@ -2166,6 +2147,7 @@ async def test_published_reload_keeps_sqlite_cache_and_shadow_consistent_when_ol
     config = _base_config()
     path = _write_workspace_config(tmp_path, config)
     workspace = tmp_path / "workspace"
+    _initialize_workspace_config(workspace)
     store = WorkspaceStateStore(workspace_root=workspace)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
                             workspace_root=workspace, workspace_state_store=store)
@@ -2179,7 +2161,7 @@ async def test_published_reload_keeps_sqlite_cache_and_shadow_consistent_when_ol
             raise RuntimeError("测试旧来源订阅释放失败")
 
         old.scope.register(fail_old_release, label="source-policy-release")
-        config["agents"]["default"]["instructions"]["system_prompt"] = "已提交的新配置"
+        config["settings"]["workspace"]["agents"]["default"]["instructions"]["system_prompt"] = "已提交的新配置"
         path.write_text(json.dumps(config), encoding="utf-8")
         with pytest.raises(ExceptionGroup):
             await service.reload()
@@ -2206,6 +2188,7 @@ async def test_sqlite_cache_and_shadow_publish_before_claim_cleanup_failure(
     config = _base_config()
     path = _write_workspace_config(tmp_path, config)
     workspace = tmp_path / "workspace"
+    _initialize_workspace_config(workspace)
     store = WorkspaceStateStore(workspace_root=workspace)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
                             workspace_root=workspace, workspace_state_store=store)
@@ -2220,7 +2203,7 @@ async def test_sqlite_cache_and_shadow_publish_before_claim_cleanup_failure(
             raise RuntimeError("测试 claim 释放后的错误")
 
         monkeypatch.setattr(store, "release_config_apply_claim", fail_after_release)
-        config["agents"]["default"]["instructions"]["system_prompt"] = "claim 清理前已发布"
+        config["settings"]["workspace"]["agents"]["default"]["instructions"]["system_prompt"] = "claim 清理前已发布"
         path.write_text(json.dumps(config), encoding="utf-8")
         with pytest.raises(RuntimeError, match="claim 释放后的错误"):
             await service.reload()
@@ -2244,6 +2227,7 @@ async def test_reload_cancelled_during_old_scope_drain_keeps_published_configura
     config = _base_config()
     path = _write_workspace_config(tmp_path, config)
     workspace = tmp_path / "workspace"
+    _initialize_workspace_config(workspace)
     store = WorkspaceStateStore(workspace_root=workspace)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
                             workspace_root=workspace, workspace_state_store=store)
@@ -2260,7 +2244,7 @@ async def test_reload_cancelled_during_old_scope_drain_keeps_published_configura
             await release.wait()
 
         old.scope.register(wait_old_release, label="old-source-drain-barrier")
-        config["agents"]["default"]["instructions"]["system_prompt"] = "取消前已发布"
+        config["settings"]["workspace"]["agents"]["default"]["instructions"]["system_prompt"] = "取消前已发布"
         path.write_text(json.dumps(config), encoding="utf-8")
         task = asyncio.create_task(service.reload())
         await asyncio.wait_for(entered.wait(), 2)
@@ -2290,6 +2274,7 @@ async def test_source_change_during_apply_fails_final_cas_without_active_promoti
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -2302,7 +2287,7 @@ async def test_source_change_during_apply_fails_final_cas_without_active_promoti
         active_before = store.get_active_config_snapshot("workspace")
         assert active_before is not None
         candidate_config = _base_config()
-        candidate_config["ui"] = {"default_orchestration": "multi_agent"}
+        candidate_config["settings"]["workspace"]["ui"] = {"default_orchestration": "multi_agent"}
         config_path.write_text(json.dumps(candidate_config), encoding="utf-8")
 
         async def mutate_source_during_apply(*_args: object):
@@ -2348,6 +2333,7 @@ async def test_file_change_after_parse_is_rejected_before_source_layer_commit(
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -2360,7 +2346,9 @@ async def test_file_change_after_parse_is_rejected_before_source_layer_commit(
         source_before = store.get_source_layer("workspace_mutable_override")
         assert source_before is not None
 
-        original_parse = config_source_layers_module.parse_stable_config_file
+        from configs.inheritance import resolver as resolver_module
+
+        original_parse = resolver_module.parse_stable_config_file
         mutated = False
 
         def parse_then_mutate(snapshot):
@@ -2369,12 +2357,12 @@ async def test_file_change_after_parse_is_rejected_before_source_layer_commit(
             if snapshot.path == config_path and not mutated:
                 mutated = True
                 changed = _base_config()
-                changed["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
+                changed["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
                 config_path.write_text(json.dumps(changed), encoding="utf-8")
             return payload
 
         monkeypatch.setattr(
-            config_source_layers_module,
+            resolver_module,
             "parse_stable_config_file",
             parse_then_mutate,
         )
@@ -2398,7 +2386,7 @@ async def test_restart_required_failure_exposes_changed_sections(
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
     original_revision = service.get_revision()
-    config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
+    config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     async def require_restart(*_args) -> NoReturn:
@@ -2426,7 +2414,7 @@ async def test_pinned_snapshot_survives_await_and_runtime_reload(
     config_path = _write_workspace_config(tmp_path, config)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path)
     original_snapshot = service.get_snapshot()
-    config["llm"]["providers"]["primary"]["models"]["default"]["model"] = "model-b"
+    config["settings"]["workspace"]["llm"]["providers"]["primary"]["models"]["default"]["model"] = "model-b"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
     with service.use_snapshot(original_snapshot):
@@ -2440,14 +2428,14 @@ async def test_pinned_snapshot_survives_await_and_runtime_reload(
 
 
 @pytest.mark.asyncio
-async def test_watcher_detects_workspace_config_creation(
+async def test_watcher_detects_workspace_config_edit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
-    (workspace_root / ".boxteam").mkdir(parents=True)
+    workspace_config_path = _initialize_workspace_config(workspace_root)
     service = ConfigService(
         config_dir=Path.cwd() / "configs",
         config_path=config_path,
@@ -2457,13 +2445,12 @@ async def test_watcher_detects_workspace_config_creation(
 
     await service.start_watching()
     try:
-        workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
-        workspace_config_path.write_text(
-            json.dumps(
-                {"agents": {"default": {"instructions": {"system_prompt": "hot"}}}}
-            ),
-            encoding="utf-8",
-        )
+        workspace_config_path.write_text(json.dumps({
+            "config_version": 4, "extends": "user:workspace_local",
+            "settings": {"workspace": {"agents": {"default": {
+                "instructions": {"system_prompt": "hot"},
+            }}}},
+        }), encoding="utf-8")
         for _ in range(40):
             if service.get_revision() != original_revision:
                 break
@@ -2484,7 +2471,7 @@ async def test_watcher_does_not_create_missing_user_config_directory(
         config_path=missing_config_path,
     )
 
-    with pytest.raises(FileNotFoundError, match="配置监听目录不存在"):
+    with pytest.raises(FileNotFoundError, match="声明的配置来源不存在"):
         await service.start_watching()
 
     assert missing_config_path.parent.exists() is False
@@ -2557,6 +2544,7 @@ async def test_sqlite_migrated_source_change_is_imported_on_reload(
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -2567,7 +2555,7 @@ async def test_sqlite_migrated_source_change_is_imported_on_reload(
         )
         assert service.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 1800
         config = _base_config()
-        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2500
+        config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2500
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         assert service.get_snapshot().to_dict()["mcp"]["supervision"]["sealed_call_timeout_seconds"] == 1800
@@ -2583,13 +2571,14 @@ async def test_sqlite_migrated_source_change_is_imported_on_reload(
 
 
 @pytest.mark.asyncio
-async def test_sqlite_migrated_source_deletion_writes_absent_tombstone(
+async def test_reachable_user_source_deletion_rejects_candidate_and_keeps_active(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -2598,40 +2587,38 @@ async def test_sqlite_migrated_source_deletion_writes_absent_tombstone(
             workspace_root=workspace_root,
             workspace_state_store=store,
         )
+        service.validate_workspace_config()
         original_revision = service.get_revision()
+        source_before = store.get_source_layer("workspace_mutable_override")
+        assert source_before is not None
         config_path.unlink()
 
-        assert await service.reload() is True
+        with pytest.raises(FileNotFoundError, match="声明的配置来源不存在"):
+            await service.reload()
         source = store.get_source_layer("workspace_mutable_override")
-        assert source is not None
-        assert source.presence == "absent"
-        assert source.payload is None
-        assert source.layer_revision == 2
-        assert service.get_revision() != original_revision
-        assert service.get_source_details()[1].presence == "absent"
-        deleted_backup = config_path.with_name("workspace.jsonc.deleted.bak")
-        assert deleted_backup.is_file()
-        assert "test-key" not in deleted_backup.read_text(encoding="utf-8")
+        assert source == source_before
+        assert service.get_revision() == original_revision
+        assert store.get_active_config_snapshot("workspace") is not None
+        assert not list(tmp_path.rglob("*.deleted.bak"))
     finally:
         store.close()
 
 
 @pytest.mark.asyncio
-async def test_jsonc_rename_to_temp_creates_tombstone_and_restore_reimports_source(
+async def test_jsonc_rename_to_temp_rejects_candidate_then_restores_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     user_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
-    workspace_path = workspace_root / ".boxteam" / "workspace.jsonc"
-    workspace_path.parent.mkdir(parents=True)
-    workspace_path.write_text(
-        json.dumps(
-            {"agents": {"default": {"instructions": {"system_prompt": "before"}}}}
-        ),
-        encoding="utf-8",
-    )
+    workspace_path = _initialize_workspace_config(workspace_root)
+    workspace_path.write_text(json.dumps({
+        "config_version": 4, "extends": "user:workspace_local",
+        "settings": {"workspace": {"agents": {"default": {
+            "instructions": {"system_prompt": "before"},
+        }}}},
+    }), encoding="utf-8")
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -2645,20 +2632,19 @@ async def test_jsonc_rename_to_temp_creates_tombstone_and_restore_reimports_sour
         temporary_path = workspace_path.with_name("workspace.jsonc.tmp")
         workspace_path.rename(temporary_path)
 
-        assert await service.reload() is True
-        assert service.get_revision() != original_revision
-        absent = store.get_source_layer("workspace_root_mutable_override")
-        assert absent is not None
-        assert absent.presence == "absent"
-        assert absent.payload is None
-        assert (workspace_path.with_name("workspace.jsonc.deleted.bak")).is_file()
+        with pytest.raises(FileNotFoundError, match="声明的配置来源不存在"):
+            await service.reload()
+        assert service.get_revision() == original_revision
+        active_source = store.get_source_layer("workspace_root_mutable_override")
+        assert active_source is not None and active_source.presence == "present"
+        assert not list(tmp_path.rglob("*.deleted.bak"))
 
-        temporary_path.write_text(
-            json.dumps(
-                {"agents": {"default": {"instructions": {"system_prompt": "after"}}}}
-            ),
-            encoding="utf-8",
-        )
+        temporary_path.write_text(json.dumps({
+            "config_version": 4, "extends": "user:workspace_local",
+            "settings": {"workspace": {"agents": {"default": {
+                "instructions": {"system_prompt": "after"},
+            }}}},
+        }), encoding="utf-8")
         temporary_path.rename(workspace_path)
         assert await service.reload() is True
         restored = store.get_source_layer("workspace_root_mutable_override")
@@ -2677,6 +2663,7 @@ async def test_source_change_during_apply_without_side_effect_fails_before_promo
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -2689,7 +2676,7 @@ async def test_source_change_during_apply_without_side_effect_fails_before_promo
         active_before = store.get_active_config_snapshot("workspace")
         assert active_before is not None
         candidate_config = _base_config()
-        candidate_config["ui"] = {"default_orchestration": "multi_agent"}
+        candidate_config["settings"]["workspace"]["ui"] = {"default_orchestration": "multi_agent"}
         config_path.write_text(json.dumps(candidate_config), encoding="utf-8")
 
         original_persist = service._persist_active_snapshot
@@ -2744,6 +2731,7 @@ def test_config_active_snapshot_is_persisted_redacted_and_restored(
     monkeypatch.setenv("TEST_API_KEY", "test-key")
     config_path = _write_workspace_config(tmp_path, _base_config())
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -2755,9 +2743,7 @@ def test_config_active_snapshot_is_persisted_redacted_and_restored(
         service.validate_workspace_config()
         snapshot = store.get_active_config_snapshot("workspace")
         assert snapshot is not None
-        assert snapshot.payload["llm"]["providers"]["primary"]["defaults"]["api_key"].startswith(
-            "env:"
-        )
+        assert any(binding["secret_ref"] == "env:TEST_API_KEY" for binding in snapshot.secret_bindings.values())
         assert "test-key" not in json.dumps(snapshot.payload)
         assert snapshot.effective_digest == service.get_snapshot().revision
         assert snapshot.active_revision == 1
@@ -2772,6 +2758,7 @@ async def test_restart_required_reload_persists_pending_candidate_without_changi
     config = _base_config()
     config_path = _write_workspace_config(tmp_path, config)
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -2783,7 +2770,7 @@ async def test_restart_required_reload_persists_pending_candidate_without_changi
         service.validate_workspace_config()
         active_before = store.get_active_config_snapshot("workspace")
         assert active_before is not None
-        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
+        config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> NoReturn:
@@ -2827,6 +2814,7 @@ async def test_workspace_pending_restart_resolves_with_matching_proof(
     config = _base_config()
     config_path = _write_workspace_config(tmp_path, config)
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -2836,7 +2824,7 @@ async def test_workspace_pending_restart_resolves_with_matching_proof(
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
+        config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> NoReturn:
@@ -2893,6 +2881,7 @@ async def test_workspace_recovery_pending_requires_matching_proof_before_resolve
     config = _base_config()
     config_path = _write_workspace_config(tmp_path, config)
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -2902,7 +2891,7 @@ async def test_workspace_recovery_pending_requires_matching_proof_before_resolve
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
+        config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> NoReturn:
@@ -2963,6 +2952,7 @@ async def test_workspace_pending_discard_requires_active_and_source_baseline(
     config = _base_config()
     config_path = _write_workspace_config(tmp_path, config)
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -2972,7 +2962,7 @@ async def test_workspace_pending_discard_requires_active_and_source_baseline(
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
+        config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> NoReturn:
@@ -3031,6 +3021,7 @@ async def test_workspace_pending_candidate_loader_requires_exact_startup_contrac
     config = _base_config()
     config_path = _write_workspace_config(tmp_path, config)
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         service = ConfigService(
@@ -3040,7 +3031,7 @@ async def test_workspace_pending_candidate_loader_requires_exact_startup_contrac
             workspace_state_store=store,
         )
         service.validate_workspace_config()
-        config["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
+        config["settings"]["workspace"]["mcp"]["supervision"]["sealed_call_timeout_seconds"] = 2000
         config_path.write_text(json.dumps(config), encoding="utf-8")
 
         async def require_restart(*_args) -> NoReturn:
@@ -3096,6 +3087,7 @@ def test_workspace_pending_candidate_loader_rejects_wrong_generation_or_token(
     config = _base_config()
     config_path = _write_workspace_config(tmp_path, config)
     workspace_root = tmp_path / "workspace"
+    _initialize_workspace_config(workspace_root)
     store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         candidate_ref = "candidate-ref"
@@ -3103,7 +3095,7 @@ def test_workspace_pending_candidate_loader_rejects_wrong_generation_or_token(
             config_domain="workspace",
             candidate_id="candidate-1",
             idempotency_key="reload-1",
-            payload={"config_version": 3},
+            payload={"config_version": 4},
             source_baseline={},
             candidate_digest="digest",
             effective_digest="digest",
@@ -3149,6 +3141,7 @@ async def test_candidate_runtime_prepares_under_claim_and_activates_only_at_comm
     config = _base_config()
     path = _write_workspace_config(tmp_path, config)
     workspace = tmp_path / "workspace"
+    _initialize_workspace_config(workspace)
     store = WorkspaceStateStore(workspace_root=workspace)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
                             workspace_root=workspace, workspace_state_store=store)
@@ -3157,7 +3150,7 @@ async def test_candidate_runtime_prepares_under_claim_and_activates_only_at_comm
     closed: list[str] = []
     service.validate_workspace_config()
     previous = service.get_revision()
-    config["agents"]["default"]["instructions"]["system_prompt"] = "prepared-runtime"
+    config["settings"]["workspace"]["agents"]["default"]["instructions"]["system_prompt"] = "prepared-runtime"
     path.write_text(json.dumps(config), encoding="utf-8")
 
     async def prepare(_previous, candidate, scope: LifetimeScope, _record_side_effect) -> ConfigPublication:
@@ -3166,7 +3159,8 @@ async def test_candidate_runtime_prepares_under_claim_and_activates_only_at_comm
         journal = store.get_config_apply_journal(apply_id=pending.last_apply_id or "")
         assert journal is not None and journal.state == "applying"
         assert store.get_config_apply_claim(config_domain="workspace") is not None
-        assert service.get_revision() == previous and not activated
+        assert service.get_active_snapshot().revision == previous
+        assert service.get_revision() == candidate.revision and not activated
         scopes.append(scope)
         scope.register(lambda: closed.append(candidate.revision), label="prepared-runtime")
         if failure == "prepare":
@@ -3177,7 +3171,7 @@ async def test_candidate_runtime_prepares_under_claim_and_activates_only_at_comm
         def activate() -> None:
             persisted = store.get_active_config_snapshot("workspace")
             assert persisted is not None and persisted.effective_digest == candidate.revision
-            assert service.get_revision() == candidate.revision
+            assert service.get_active_snapshot().revision == candidate.revision
             assert service._shadow_lifecycle.active.scope is scope
             activated.append(candidate.revision)
 
@@ -3219,12 +3213,13 @@ async def test_expired_apply_claim_prevents_recording_destructive_intent(
     config = _base_config()
     path = _write_workspace_config(tmp_path, config)
     workspace = tmp_path / "workspace"
+    _initialize_workspace_config(workspace)
     store = WorkspaceStateStore(workspace_root=workspace)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
                             workspace_root=workspace, workspace_state_store=store)
     service.validate_workspace_config()
     previous = service.get_revision()
-    config["agents"]["default"]["instructions"]["system_prompt"] = "expired-claim"
+    config["settings"]["workspace"]["agents"]["default"]["instructions"]["system_prompt"] = "expired-claim"
     path.write_text(json.dumps(config), encoding="utf-8")
     effects: list[str] = []
 
@@ -3263,6 +3258,7 @@ async def test_reader_cannot_observe_sqlite_promotion_before_runtime_activation(
     config = _base_config()
     path = _write_workspace_config(tmp_path, config)
     workspace = tmp_path / "workspace"
+    _initialize_workspace_config(workspace)
     store = WorkspaceStateStore(workspace_root=workspace)
     service = ConfigService(config_dir=Path.cwd() / "configs", config_path=path,
                             workspace_root=workspace, workspace_state_store=store)
@@ -3294,7 +3290,7 @@ async def test_reader_cannot_observe_sqlite_promotion_before_runtime_activation(
             return activate
 
         monkeypatch.setattr(service, "_persist_active_snapshot", persist_and_probe)
-        config["agents"]["default"]["instructions"]["system_prompt"] = "publication-barrier"
+        config["settings"]["workspace"]["agents"]["default"]["instructions"]["system_prompt"] = "publication-barrier"
         path.write_text(json.dumps(config), encoding="utf-8")
         try:
             assert await service.reload(candidate_applier=prepare)
@@ -3312,16 +3308,18 @@ async def test_workspace_bound_parameters_are_checked_before_source_write(
     config_path = _write_workspace_config(tmp_path, _base_config())
     root = tmp_path / "workspace"
     workspace_id = load_or_create_workspace_id(root)
+    _initialize_workspace_config(root)
     with WorkspaceStateStore(workspace_root=root) as store:
         service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path,
             workspace_root=root, workspace_state_store=store)
         source = get_workspace_config_path(root)
-        source.parent.mkdir(parents=True, exist_ok=True)
         binding = {"package_id": "proof", "plugin_id": "probe", "package_version": "1.0.0", "enabled": False}
-        payload = {"plugins": {"runtime": {"entries": [binding]},
+        settings = {"plugins": {"runtime": {"entries": [binding]},
             "configuration": {"values": {"proof": {"probe": {"label": "before"}}}}}}
+        payload = {"config_version": 4, "extends": "user:workspace_local",
+            "settings": {"workspace": settings}}
         if not with_parameters:
-            del payload["plugins"]["configuration"]
+            del settings["plugins"]["configuration"]
         source.write_text(json.dumps(payload))
         service.validate_workspace_config()
         document = service.get_source_document(source_key="workspace_root_mutable_override", gateway_id="gateway-proof")
@@ -3333,7 +3331,7 @@ async def test_workspace_bound_parameters_are_checked_before_source_write(
                 raise ConfigConflictError("新版本 schema 拒绝参数")
             monkeypatch.setattr(service, "_validate_gateway_workspace_plugin_bindings", reject_new_schema)
         else:
-            payload["plugins"]["configuration"]["values"]["proof"]["probe"]["label"] = "after"
+            settings["plugins"]["configuration"]["values"]["proof"]["probe"]["label"] = "after"
         request = ConfigSourceEditRequest(gateway_id="gateway-proof", workspace_id=workspace_id,
             source_key=document.source_key, jsonc=json.dumps(payload), base_file_digest=document.file_digest,
             base_layer_revision=document.layer_revision, base_layer_digest=document.layer_digest,
@@ -3346,3 +3344,34 @@ async def test_workspace_bound_parameters_are_checked_before_source_write(
                 request=request, service_plugin_runtime_manage=version_change)
         assert source.read_bytes() == original
         assert service.get_revision() == document.active_digest
+
+
+@pytest.mark.asyncio
+async def test_frozen_model_recipe_keeps_options_across_new_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "before-rotation")
+    original = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=_write_workspace_config(tmp_path / "original", _base_config()),
+    )
+    recipe = original.freeze_model_recipe(PRIMARY_MODEL)
+    assert recipe["api_key"] == "env:TEST_API_KEY"
+    assert "before-rotation" not in json.dumps(recipe)
+    assert isinstance(recipe["proxy_environment"], dict)
+    changed = _base_config()
+    provider = changed["settings"]["workspace"]["llm"]["providers"]["primary"]
+    provider["models"]["default"]["model"] = "new-model"
+    changed["profiles"]["primary"]["settings"]["model_options"]["endpoint"] = (
+        "https://changed.example/v1"
+    )
+    current = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        config_path=_write_workspace_config(tmp_path / "current", changed),
+    )
+    monkeypatch.setenv("TEST_API_KEY", "after-rotation")
+    prepared = await current.prepare_model_recipe(recipe)
+    assert prepared["model"] == "model-a"
+    assert prepared["endpoint"] == "https://example.com/v1"
+    assert prepared["api_key"] == "after-rotation"
+    assert recipe["api_key"] == "env:TEST_API_KEY"

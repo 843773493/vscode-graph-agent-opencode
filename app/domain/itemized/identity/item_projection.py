@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
+from datetime import datetime
 
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.schema import PROTECTIONS, VISIBILITIES, validate_extensions
@@ -30,7 +31,7 @@ def _strings(value: object, names: tuple[str, ...], prefix: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class ProjectionGroup:
-    # 显式多成员投影组的有序位置与完整成员数；message_group_id 相同不足以成组。
+    # 显式消息组的有序位置与完整成员数；单成员也保留原始正文形态。
     ordinal: int
     size: int
     # 原始 carrier 的物理形态；与 size/ordinal 共同定义投影，不按正文或邻接推断。
@@ -38,7 +39,7 @@ class ProjectionGroup:
 
     def __post_init__(self) -> None:
         _ordinal(self.ordinal, "ProjectionGroup.ordinal")
-        if type(self.size) is not int or self.size < 2 or self.ordinal >= self.size:
+        if type(self.size) is not int or self.size < 1 or self.ordinal >= self.size:
             raise ItemSchemaError("ProjectionGroup size/ordinal 非法")
         if not isinstance(self.content_form, str) or self.content_form not in {"str", "list"}:
             raise ItemSchemaError("ProjectionGroup.content_form 必须是 str|list")
@@ -179,6 +180,60 @@ class ToolResultEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolExecutionEvidence:
+    """原 attempt 的真实观测边界；与声明时间、完成镜像发布时间分离。"""
+
+    session_id: str
+    thread_id: str
+    turn_stream_id: str
+    tool_invocation_id: str
+    tool_attempt_id: str
+    tool_execution_id: str
+    started_seq: int
+    started_at: str
+    execution_completed_at: str | None = None
+    status: str = "running"
+    outcome: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("session_id", "thread_id", "turn_stream_id", "tool_invocation_id",
+                     "tool_attempt_id", "tool_execution_id", "started_at"):
+            _non_empty_string(getattr(self, name), f"ToolExecutionEvidence.{name}")
+        _ordinal(self.started_seq, "ToolExecutionEvidence.started_seq")
+        if self.tool_attempt_id != self.tool_execution_id:
+            raise ItemSchemaError("工具 execution/attempt 身份不一致")
+        for value in (self.started_at, self.execution_completed_at):
+            if value is not None and datetime.fromisoformat(value).utcoffset() is None:
+                raise ItemSchemaError("工具执行时间必须包含时区")
+        if self.status not in {"running", "completed", "failed"}:
+            raise ItemSchemaError("未知工具执行状态")
+        if self.outcome is not None and self.outcome not in {"success", "provider_error", "execution_lost", "outcome_unknown", "cancelled"}:
+            raise ItemSchemaError("未知工具执行结局")
+
+    @classmethod
+    def from_dict(cls, value: object) -> ToolExecutionEvidence:
+        names = {entry.name for entry in fields(cls)}
+        return cls(**_object(value, names, names, "ToolExecutionEvidence"))
+
+    @classmethod
+    def from_started_snapshot(
+        cls, scope: Mapping[str, object], execution: Mapping[str, object],
+    ) -> ToolExecutionEvidence:
+        """仅复制原快照已登记的开始事实；不以完成镜像时间补实际停止。"""
+        return cls(
+            session_id=scope["session_id"], thread_id=scope["thread_id"],
+            turn_stream_id=scope["turn_stream_id"],
+            tool_invocation_id=execution["tool_invocation_id"],
+            tool_attempt_id=execution["tool_attempt_id"],
+            tool_execution_id=execution["tool_execution_id"],
+            started_seq=execution["started_seq"], started_at=execution["started_at"],
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {entry.name: getattr(self, entry.name) for entry in fields(self)}
+
+
+@dataclass(frozen=True, slots=True)
 class ItemSourceManifest:
     # canonical source 已发布的语义 revision；不读当前源、不复制造成者身份。
     source_revision: str
@@ -212,23 +267,15 @@ class ItemProvenanceRelation:
     # 来源真实 Turn 和 ModelCall 坐标可空，不能由当前调用回填。
     target_turn_id: str | None = None
     target_model_call_id: str | None = None
-    # 仅一次性 v1 importer 使用的消息序号、part 和旧 item 坐标。
-    target_message_sequence: int | None = None
-    target_part_id: str | None = None
-    target_legacy_item_id: str | None = None
 
     def __post_init__(self) -> None:
-        _strings(self, ("target_id", "target_session_id", "target_thread_id", "target_turn_id", "target_model_call_id", "target_part_id", "target_legacy_item_id"), "ItemProvenanceRelation")
+        _strings(self, ("target_id", "target_session_id", "target_thread_id", "target_turn_id", "target_model_call_id"), "ItemProvenanceRelation")
         if self.target_id is None or not isinstance(self.relation, str) or self.relation not in {"replaces", "derived_from"}:
             raise ItemSchemaError("ItemProvenanceRelation relation/target 非法")
-        if not isinstance(self.target_kind, str) or self.target_kind not in {"projection_message", "canonical_item", "legacy_message"}:
+        if not isinstance(self.target_kind, str) or self.target_kind not in {"projection_message", "canonical_item"}:
             raise ItemSchemaError("未知 ItemProvenanceRelation.target_kind")
         if self.target_kind == "canonical_item" and (self.target_session_id is None or self.target_thread_id is None):
             raise ItemSchemaError("canonical 来源关系缺少完整 owner thread")
-        if self.target_message_sequence is not None:
-            _ordinal(self.target_message_sequence, "ItemProvenanceRelation.target_message_sequence")
-        if self.target_kind != "legacy_message" and (self.target_message_sequence is not None or self.target_part_id is not None or self.target_legacy_item_id is not None):
-            raise ItemSchemaError("非 legacy 关系不得携带 v1 coordinate")
 
     @classmethod
     def from_dict(cls, value: object) -> ItemProvenanceRelation:
@@ -255,10 +302,21 @@ class ItemProjectionManifest:
     source_manifest: ItemSourceManifest | None
     provenance_relations: tuple[ItemProvenanceRelation, ...]
     extensions: Mapping[str, object]
+    tool_execution: ToolExecutionEvidence | None = None
+    tool_outcome: str | None = None
+    output_block_type: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.tool_outcome not in (None, "success", "failure", "cancelled", "unknown"):
+            raise ItemSchemaError("item projection tool_outcome 不是允许的结果 marker")
+        if self.output_block_type is not None:
+            _non_empty_string(self.output_block_type, "item projection output_block_type")
 
     @classmethod
     def from_dict(cls, value: object) -> ItemProjectionManifest:
-        if not isinstance(value, Mapping) or value.keys() != _ITEM_PROJECTION_MANIFEST_FIELDS:
+        if (not isinstance(value, Mapping)
+                or set(value) - _ITEM_PROJECTION_MANIFEST_FIELDS - {"tool_execution", "tool_outcome", "output_block_type"}
+                or _ITEM_PROJECTION_MANIFEST_FIELDS - set(value)):
             raise ItemSchemaError("item projection manifest 字段缺失或含未知字段")
         validate_extensions(value["extensions"])
         group = ProjectionGroup.from_dict(value["projection_group"]) if value["projection_group"] is not None else None
@@ -270,7 +328,10 @@ class ItemProjectionManifest:
             raise ItemSchemaError("item provenance_relations 必须是有序 array")
         return cls(group, identity, evidence, source,
                    tuple(ItemProvenanceRelation.from_dict(child) for child in relations),
-                   dict(value["extensions"]))
+                   dict(value["extensions"]),
+                   ToolExecutionEvidence.from_dict(value["tool_execution"])
+                   if value.get("tool_execution") is not None else None,
+                   value.get("tool_outcome"), value.get("output_block_type"))
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -280,4 +341,7 @@ class ItemProjectionManifest:
             "source_manifest": self.source_manifest.to_dict() if self.source_manifest is not None else None,
             "provenance_relations": [entry.to_dict() for entry in self.provenance_relations],
             "extensions": dict(self.extensions),
+            **({"tool_execution": self.tool_execution.to_dict()} if self.tool_execution is not None else {}),
+            **({"tool_outcome": self.tool_outcome} if self.tool_outcome is not None else {}),
+            **({"output_block_type": self.output_block_type} if self.output_block_type is not None else {}),
         }

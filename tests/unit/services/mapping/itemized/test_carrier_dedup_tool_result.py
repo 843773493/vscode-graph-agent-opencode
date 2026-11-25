@@ -297,24 +297,26 @@ def test_late_result_requires_complete_selected_checkpoint_group(missing: str):
 def parallel_checkpoint_carriers():
     first = _confirmed_tool_call()
     second_id = "parallel-tool-call"
-    payload = {"tool_calls": [
-        *first.payload["tool_calls"],
-        {**first.payload["tool_calls"][0], "id": second_id},
-    ]}
-    checkpoint = replace(first, payload=payload, content_hash=content_hash(first.payload_kind, payload))
+    payload = {"tool_calls": [{**first.payload["tool_calls"][0], "id": second_id}]}
+    checkpoint_first = replace(first, item_id=f"{first.item_id}-call-0",
+        projection_group=ProjectionGroup(1, 3, "list"),
+        projection_identity=ItemProjectionIdentity(model_call_id=MODEL_CALL))
+    checkpoint = replace(first, item_sequence=6, payload=payload,
+        projection_group=ProjectionGroup(2, 3, "list"), content_hash=content_hash(first.payload_kind, payload))
     stream = _stream_tool_call()
     second_payload = {**stream.payload, "tool_call_id": f"{MODEL_CALL}:tool-call:{second_id}",
                       "tool_invocation_id": f"tool-invocation:{MODEL_CALL}:{second_id}"}
     second = replace(stream, item_sequence=3, item_id="parallel-stream-call",
                      payload=second_payload, content_hash=content_hash(stream.payload_kind, second_payload))
-    result = _request_tool_result()
+    result = _request_tool_result(7)
     result_payload = {**result.payload, "tool_call_id": second_id, "result_id": "parallel-result"}
-    second_result = replace(result, item_sequence=7, item_id="parallel-result", payload=result_payload,
+    second_result = replace(result, item_sequence=8, item_id="parallel-result", payload=result_payload,
                             content_hash=content_hash(result.payload_kind, result_payload),
                             message_group_id="parallel-result", projection_identity=ItemProjectionIdentity(
                                 projection_message_id="parallel-result", model_call_id=MODEL_CALL,
                             ))
-    return stream, second, (_confirmed_reasoning(), checkpoint, result, second_result)
+    reasoning = replace(_confirmed_reasoning(), projection_group=ProjectionGroup(0, 3, "list"))
+    return stream, second, (reasoning, checkpoint_first, checkpoint, result, second_result)
 
 
 @pytest.mark.parametrize("remaining", [0, 1])

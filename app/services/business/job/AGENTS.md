@@ -43,6 +43,7 @@ Job业务
 - 终端完成通知是独立的已接受执行；前序 Job 失败或超时只交还执行槽，不按消息类型批量丢弃通知。显式停止、删除和来源 owner 的控制仍沿各自入口执行。
 - 队列、active 槽、幂等准入和恢复保持精确 thread 归属；会话查询、删除和排空仍聚合该 Session 的全部 thread。
 - 队列版本由 rollout SQLite owner 发布；Session 聚合版本只用于既有聚合查询，重排必须使用精确 Thread 的 revision CAS。`JobPendingQueue` 只维护镜像；`QueueEntry` 只承载单条消息状态，位置理由只在对应 thread 队首变动时更新。
+- 单次恢复沿用持久队列同次读取的不可变记录与版本；只有未知 Job 经原 canonical reader 读取正文，已有 Job 核对完整身份并复用输入。领取及启动仍由原 owner 校验并提交，提交后才刷新发布版本，不跨请求缓存快照。
 - 持久化能力通过 abstractions 协议注入。
 - 调度状态只保留查询、控制和准入所需字段，不缓存最终回复正文；完整回复沿原消息历史和Session Trace读取，JobExecutionService的完成事件仍携带原结果。
 - 所有队列状态变更必须在调度锁内完成。

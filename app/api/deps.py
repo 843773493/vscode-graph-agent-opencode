@@ -15,6 +15,7 @@ from app.services.business.agent_tool_settings.service import AgentToolSettingsS
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.communication.user_questions import UserQuestionService
 from app.services.business.context_compaction_service import ContextCompactionService
+from app.services.business.derived_execution_service import DerivedExecutionService
 from app.services.business.message_service import MessageService
 from app.services.business.persistent_task_service import PersistentTaskService
 from app.services.business.search.service import WorkspaceSearchService
@@ -111,6 +112,7 @@ class _AppContainerProtocol(Protocol):
     session_turn_replay_service: SessionTurnReplayService
     session_turn_history_service: SessionTurnHistoryService
     context_compaction_service: ContextCompactionService
+    derived_execution_service: DerivedExecutionService
     session_changes_service: SessionChangesService
     session_information_service: SessionInformationService
     session_context_query_service: SessionContextQueryService
@@ -330,6 +332,10 @@ def get_session_context_query_service(request: Request) -> SessionContextQuerySe
 
 def get_context_compaction_service(request: Request) -> ContextCompactionService:
     return _require_service(request, "context_compaction_service", ContextCompactionService, "ContextCompactionService 尚未在应用启动阶段初始化")
+
+
+def get_derived_execution_service(request: Request) -> DerivedExecutionService:
+    return _require_service(request, "derived_execution_service", DerivedExecutionService, "DerivedExecutionService 尚未在应用启动阶段初始化")
 
 
 def get_session_resource_service(request: Request) -> SessionResourceService:

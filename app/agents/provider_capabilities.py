@@ -16,6 +16,7 @@ PROMPT_CACHE_KEY = "prompt_cache_key"
 CONTENT_BLOCK_CAPABILITY_REQUIREMENTS: dict[str, set[ProviderCapability]] = {
     "image": {IMAGE_INPUT},
     "image_url": {IMAGE_INPUT},
+    "input_image": {IMAGE_INPUT},
     "video": {VIDEO_INPUT},
     "video_url": {VIDEO_INPUT},
     "input_video": {VIDEO_INPUT},

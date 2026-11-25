@@ -2,7 +2,6 @@
 
 
 import pytest
-from langchain_core.messages import AIMessage
 
 from app.domain.itemized.epoch.source_protocol import parse_source_blocks
 from app.domain.itemized.hashing import canonical_json_bytes
@@ -20,14 +19,15 @@ from tests.integration.backend.sessions.rollout_context.test_context_epoch_trans
 
 
 @pytest.mark.parametrize("boundary", ["rewind", "compaction"])
-def test_explicit_snapshot_after_pending_transition_is_sealed_once(epoch_case, boundary):
+@pytest.mark.asyncio
+async def test_explicit_snapshot_after_pending_transition_is_sealed_once(
+    epoch_case, boundary, compaction_summary_model,
+):
     case = epoch_case
     if boundary == "rewind":
         case.rewind("checkpoint-first")
     else:
-        case.checkpoint("refresh-compaction", compaction=True, messages=[
-            case.user, AIMessage(content="摘要", id="refresh-summary"),
-        ])
+        await case.compact("refresh-compaction", compaction_summary_model)
     transition = case.pending_rows()[-1]
     assert transition[3:] == ("pending", None)
     binding = case.load_snapshot()
@@ -52,7 +52,10 @@ def test_explicit_snapshot_after_pending_transition_is_sealed_once(epoch_case, b
 
 
 @pytest.mark.parametrize("boundary", ["rewind", "compaction"])
-def test_named_selection_follows_checkpoint_and_does_not_revive_old_source(epoch_case, boundary):
+@pytest.mark.asyncio
+async def test_named_selection_follows_checkpoint_and_does_not_revive_old_source(
+    epoch_case, boundary, compaction_summary_model,
+):
     case = epoch_case
     a = SkillCatalogBinding("switch", "a:activation", "a", "boxteam://workspace/test/resources/skills/a/SKILL.md", "a:1", "选择A\n")
     b = SkillCatalogBinding("switch", "b:activation", "b", "boxteam://workspace/test/resources/skills/b/SKILL.md", "b:1", "选择B\n")
@@ -74,7 +77,7 @@ def test_named_selection_follows_checkpoint_and_does_not_revive_old_source(epoch
         expected, excluded = b, a
         expected_state = selected_states[1]
     else:
-        case.checkpoint("choice-compaction", compaction=True, messages=[case.user, AIMessage(content="摘要", id="choice-summary")])
+        await case.compact("choice-compaction", compaction_summary_model)
         expected, excluded = a, b
         expected_state = selected_states[2]
     case.restart()

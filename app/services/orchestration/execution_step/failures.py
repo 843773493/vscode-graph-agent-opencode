@@ -11,6 +11,7 @@ from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
 from app.core.failures import execution_failure_message, public_error, report_failure
 from app.core.job_event_bus import EventType
 from app.core.turn_execution_scope import ScopeCancelledError
+from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.services.business.runtime_reminder import (
     submit_execution_interruption_reminder,
 )
@@ -39,14 +40,16 @@ async def handle_step_cancelled(
     session_id: str,
     thread_id: str,
     job_id: str,
-    turn_id: str | None,
-    execution_id: str | None,
+    admission: ExecutionAdmission | None,
     checkpoint_ns: str,
     logger: logging.Logger,
 ) -> None:
     """完成取消事实收口；调用方随后重新抛出 CancelledError。"""
-    if execution_id is None:
+    if admission is None:
         return
+    if (admission.session_id, admission.thread_id, admission.job_id) != (session_id, thread_id, job_id):
+        raise ValueError("取消收尾与原 execution admission 归属冲突")
+    turn_id, execution_id = admission.turn_id, admission.execution_id
     user_interrupt = state.interrupt_request_id is not None
     cancellation_reason = cancelled_error_reason(cancellation_error)
     pending_tool_calls = (
@@ -124,10 +127,6 @@ async def handle_step_cancelled(
                     outcome="user_interrupt",
                     reason="用户中断 internal execution",
                 )
-            if execution_id is None:
-                raise RuntimeError(
-                    f"internal user interruption 缺少 execution_id: job_id={job_id}"
-                )
             await asyncio.to_thread(
                 checkpointer.converge_execution,
                 session_id,
@@ -144,8 +143,6 @@ async def handle_step_cancelled(
             execution_id=execution_id, outcome="cancelled", turn_status="cancelled", checkpoint_ns=checkpoint_ns,
         )
         if message_stream_writer is not None:
-            admission = await asyncio.to_thread(checkpointer.execution_admission, session_id,
-                thread_id=thread_id, execution_id=execution_id, checkpoint_ns=checkpoint_ns)
             await message_stream_writer.close_from_execution(checkpointer, admission)
         return
     if message_stream_runtime is not None:
@@ -164,20 +161,17 @@ async def handle_step_cancelled(
     mark_execution_lost = getattr(checkpointer, "mark_execution_lost", None)
     if not callable(mark_execution_lost):
         raise TypeError("v2 checkpoint saver 缺少可调用端口: mark_execution_lost")
-    if execution_id is not None:
-        await asyncio.to_thread(
-            mark_execution_lost,
-            session_id,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            execution_id=execution_id,
-            reason=failure_code,
-            checkpoint_ns=checkpoint_ns,
-            failure={"code": failure_code, "message": failure_message},
-        )
+    await asyncio.to_thread(
+        mark_execution_lost,
+        session_id,
+        thread_id=thread_id,
+        turn_id=turn_id,
+        execution_id=execution_id,
+        reason=failure_code,
+        checkpoint_ns=checkpoint_ns,
+        failure={"code": failure_code, "message": failure_message},
+    )
     if message_stream_writer is not None:
-        admission = await asyncio.to_thread(checkpointer.execution_admission, session_id,
-            thread_id=thread_id, execution_id=execution_id, checkpoint_ns=checkpoint_ns)
         await message_stream_writer.close_from_execution(checkpointer, admission)
 
 
@@ -192,13 +186,16 @@ async def handle_step_failure(
     session_id: str,
     thread_id: str,
     job_id: str,
-    turn_id: str | None,
-    execution_id: str | None,
+    admission: ExecutionAdmission | None,
     checkpoint_ns: str,
     publish: Callable[[str, dict[str, Any]], Awaitable[None]],
     logger: logging.Logger,
 ) -> None:
     """区分确定业务失败与取消/失联，收敛同一 v2 execution 终态。"""
+    if admission is not None and (admission.session_id, admission.thread_id, admission.job_id) != (session_id, thread_id, job_id):
+        raise ValueError("失败收尾与原 execution admission 归属冲突")
+    turn_id = admission.turn_id if admission is not None else None
+    execution_id = admission.execution_id if admission is not None else None
     failure_message = report_failure(
         error, detail=execution_failure_message(error), diagnostic_logger=logger,
         extra={
@@ -206,7 +203,7 @@ async def handle_step_failure(
             "turn_id": turn_id, "execution_id": execution_id,
         },
     )
-    if execution_id is None:
+    if admission is None:
         await publish(EventType.ERROR, {"error": failure_message, "phase": "agent_execution"})
         return
     if turn_id is not None and interrupt_state.interrupt_request_id is not None:
@@ -217,8 +214,6 @@ async def handle_step_failure(
             execution_id=execution_id, outcome="cancelled", turn_status="cancelled", checkpoint_ns=checkpoint_ns,
         )
         if message_stream_writer is not None:
-            admission = await asyncio.to_thread(checkpointer.execution_admission, session_id,
-                thread_id=thread_id, execution_id=execution_id, checkpoint_ns=checkpoint_ns)
             await message_stream_writer.close_from_execution(checkpointer, admission)
         return
     failure_code = (
@@ -287,8 +282,6 @@ async def handle_step_failure(
             failure=failure,
         )
     if message_stream_writer is not None:
-        admission = await asyncio.to_thread(checkpointer.execution_admission, session_id,
-            thread_id=thread_id, execution_id=execution_id, checkpoint_ns=checkpoint_ns)
         await message_stream_writer.close_from_execution(checkpointer, admission)
     await publish(EventType.ERROR, {"error": failure_message, "phase": "agent_execution"})
 

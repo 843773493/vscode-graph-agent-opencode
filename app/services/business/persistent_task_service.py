@@ -224,8 +224,9 @@ class PersistentTaskService:
             if isinstance(action, SessionGenerationActionDTO):
                 assert run.generation is not None and run.generation.job_id is not None and run.generation.message_id is not None
                 item = saver.accepted_user_input(session_id, thread_id=thread_id, job_id=run.generation.job_id)
-                content = saver.accepted_user_message(session_id, thread_id=thread_id, job_id=run.generation.job_id,
-                                                      message_id=run.generation.message_id).content
+                _admission, message = saver.accepted_user_message(session_id, thread_id=thread_id, job_id=run.generation.job_id,
+                                                                 message_id=run.generation.message_id)
+                content = message.content
                 if not isinstance(content, str):
                     raise TypeError("会话生成输入应是冻结的文本消息")
             else:

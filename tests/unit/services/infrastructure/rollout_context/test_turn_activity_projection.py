@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from time import perf_counter
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
@@ -41,7 +41,7 @@ from app.services.mapping.itemized.provider_history import (
     reasoning_projection_rows,
     visible_text,
 )
-from app.services.mapping.turn_response_parts import response_parts_from_records
+from app.services.mapping.turn_response_items import response_items_from_records
 from tests.support.rollout.view_mutations import mutate_view_members
 from tests.support.rollout.web_boundary_seeding import (
     _seed_case_0006,
@@ -73,6 +73,16 @@ def test_nonfinal_text_survives_cold_history_and_activity_reads(
         user_content="保留非 final 正文", items=(item,), outcome=outcome, turn_status=outcome)
     saver = RolloutCheckpointSaver(sessions)
     thread_id = saver._storage.storage.main_thread_id(session_id)
+    with saver._storage.storage._connect(thread_id, session_id=session_id) as connection:
+        accepted_at, terminal_at = connection.execute(
+            "SELECT created_at, updated_at FROM turn_records WHERE turn_id='text-turn'",
+        ).fetchone()
+        expected_duration = (datetime.fromisoformat(terminal_at) - datetime.fromisoformat(accepted_at)) // timedelta(milliseconds=1)
+        # 模拟迟到的消息投影更新；它不能增加已经终结的 Turn 耗时。
+        connection.execute(
+            "UPDATE turns SET updated_at=? WHERE turn_id='text-turn'",
+            ((datetime.fromisoformat(terminal_at) + timedelta(days=1)).isoformat(),),
+        )
     initial = saver.load_history(session_id, thread_id, TurnHistoryLoadRequest())
     binding = {"source_view_id": initial.source_view_id, "source_view_revision": initial.source_view_revision}
     pages = [initial, *[
@@ -84,15 +94,50 @@ def test_nonfinal_text_survives_cold_history_and_activity_reads(
     for page in pages:
         turn = page.items[0]
         assert turn.status == outcome and turn.final_response == ""
+        assert turn.activity_stats.duration_ms == expected_duration
         assert turn.activity_stats.item_count == 1
         assert turn.activity_stats.first_item_sequence == turn.activity_stats.last_item_sequence
-        part, = turn.response_parts
+        part, = turn.response_items
         assert part.kind == "text" and part.source.item_id == item.item_id
         assert part.text == text
-        assert part.part_id == initial.items[0].response_parts[0].part_id
+        assert part.id == initial.items[0].response_items[0].id
 
 
-def test_standalone_internal_reasoning_identity_does_not_require_message_projection(source_seal_case):
+@pytest.mark.parametrize("structured", [False, True])
+def test_stream_summary_survives_cold_item_history(tmp_path, session_bundle_factory, structured):
+    """经过真实 accumulator 和 writer，摘要不能因 Item 映射丢失正文。"""
+    sessions = tmp_path / ".boxteam/sessions"
+    session_id = "ses_019c5123cafb789e8fdf8704f6464f74"
+    session_bundle_factory(sessions, session_id)
+    accumulator = CanonicalBlockAccumulator(
+        turn_id="summary-turn", execution_id="summary-execution",
+        producer_id="summary-model", model_call_id="summary-model",
+    )
+    text = "保留流式思考摘要。"
+    block = {"block_id": "summary-block", "block_index": 0, "carrier_type": "reasoning_items"}
+    block.update({"operation": "item_upsert", "item": {"type": "reasoning", "id": "summary-source",
+                                                       "summary": [{"type": "summary_text", "text": text}]}}
+                 if structured else {"text": text})
+    accumulator.accept(block)
+    item, = accumulator.finalize(first_item_sequence=1)
+    seed_boundary_turn(sessions, session_id=session_id, turn_id="summary-turn",
+                       user_content="读取思考摘要", items=(item,), outcome="failed", turn_status="failed")
+    cold = RolloutCheckpointSaver(sessions)
+    thread_id = cold._storage.storage.main_thread_id(session_id)
+    for include in (["thinking"], ["reasoning_summary"]):
+        turn, = cold.load_history(session_id, thread_id, TurnHistoryLoadRequest(
+            turn_ids=["summary-turn"], include=include,
+        )).items
+        summary, = turn.thinking_blocks
+        assert summary.kind == "summary" and summary.text == text
+        response, = turn.response_items
+        assert response.kind == "reasoning_summary" and response.text == text
+        assert response.source.item_id == item.item_id
+        assert turn.activity_stats.item_count == 1
+
+
+@pytest.mark.parametrize("protected", [False, True])
+def test_standalone_internal_reasoning_identity_does_not_require_message_projection(source_seal_case, protected):
     """普通思考可携带消息身份，但轮廓不因此要求不存在的结构化消息投影。"""
     case = source_seal_case
     saver, owner = case.saver, case.owner
@@ -109,8 +154,14 @@ def test_standalone_internal_reasoning_identity_does_not_require_message_project
         job_id="standalone-job", message=notice,
         intent=InternalExecutionIntent(message_id=notice.id, execution_id="standalone-execution",
                                        admission_idempotency_key="standalone-admission"))
+    from app.services.mapping.itemized.content_blocks import semantic_content_payload
+
+    _, payload_kind, payload, _ = semantic_content_payload(
+        {"type": "thinking", "thinking": "独立思考正文", "signature": "private-signature"}
+        if protected else {"type": "thinking", "thinking": "独立思考正文"},
+    )
     item = CanonicalItemRecord.create(item_sequence=1, item_id="standalone-reasoning",
-        semantic_kind="reasoning", payload_kind="text", status="completed", payload="独立思考正文",
+        semantic_kind="reasoning", payload_kind=payload_kind, status="completed", payload=payload,
         producer_ref={"producer_kind": "runtime", "producer_id": "fixture"},
         projection_identity=ItemProjectionIdentity(projection_message_id="standalone-message",
             model_call_id="standalone-model", block_id="standalone-block", block_index=2))
@@ -121,14 +172,70 @@ def test_standalone_internal_reasoning_identity_does_not_require_message_project
         saver.append_items(owner.session_id, (item,), thread_id=owner.thread_id)
     page = saver.load_history(owner.session_id, owner.thread_id, TurnHistoryLoadRequest())
     execution = next(entry for entry in page.internal_executions if entry.execution_id == admission.execution_id)
-    part, = execution.response_parts
+    part, = execution.response_items
     assert part.kind == "reasoning" and part.projection == "summary" and not part.text
-    assert part.source.item_id == item.item_id and part.source.part_ordinal == 2
+    assert part.source.item_id == item.item_id and part.source.content_block_index == 2
     body = saver.load_history(owner.session_id, owner.thread_id, TurnHistoryLoadRequest(
         execution_id=admission.execution_id, item_ids=[item.item_id], include=["internal", "reasoning_detail"],
         source_view_id=page.source_view_id, source_view_revision=page.source_view_revision))
-    detailed, = body.internal_executions[0].response_parts
-    assert detailed.part_id == part.part_id and detailed.text == "独立思考正文"
+    detailed, = body.internal_executions[0].response_items
+    assert detailed.id == part.id and detailed.text == "独立思考正文"
+
+
+def test_internal_tool_failure_survives_summary_and_detail_without_execution_timing(source_seal_case, monkeypatch):
+    """无Turn的真实写入和冷读也保留结果marker，轻摘要不为它打开正文。"""
+    case = source_seal_case
+    saver, owner = case.saver, case.owner
+    prepared = internal_message_factory.build(
+        kind="generated_session_result", control="检查内部任务。",
+        sections=(PromptSection("control_context", {"source": "internal-tool-result"}),
+                  PromptSection("generated_session_result", "内部输入")), display_content="内部输入",
+    )
+    stamp = datetime.now(UTC)
+    notice = HumanMessage(id="internal-tool-notice", content=prepared.content,
+        response_metadata={"message_id": "internal-tool-notice", "created_at": stamp.isoformat(),
+                           "message_metadata": prepared.metadata})
+    admission = saver.admit_internal_execution(owner.session_id, thread_id=owner.thread_id,
+        job_id="internal-tool-job", message=notice,
+        intent=InternalExecutionIntent(message_id=notice.id, execution_id="internal-tool-execution",
+                                       admission_idempotency_key="internal-tool-admission"))
+    messages = [
+        AIMessage(id="internal-tool-call", content="", tool_calls=[
+            {"id": "internal-call", "name": "read", "args": {"path": "A"}},
+        ], response_metadata={"model_call_id": "internal-tool-model"}),
+        ToolMessage(id="internal-tool-result", content="文件不存在", tool_call_id="internal-call",
+                    name="read", status="error", response_metadata={"model_call_id": "internal-tool-model"}),
+    ]
+    codec = LangChainMessageCodec()
+    items = tuple(item for index, message in enumerate(messages) for item in codec.items_for_message(
+        message, item_sequence=index + 1, message_id=message.id, turn_id=None,
+        execution_id=admission.execution_id, timestamp=(stamp + timedelta(seconds=index + 1)).isoformat(),
+    ))
+    saver.converge_execution(owner.session_id, thread_id=owner.thread_id, turn_id=None,
+        execution_id=admission.execution_id, outcome="completed", turn_status=None, items=items)
+    with (session_thread_owner_scope(MutationIntentOwner(owner.session_id, owner.thread_id), langgraph_thread_id=owner.thread_id),
+          execution_admission_scope(admission, langgraph_thread_id=owner.thread_id)):
+        saver.append_items(owner.session_id, items, thread_id=owner.thread_id)
+    cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
+    read_bodies = cold._context_reader.read_canonical_items
+
+    def reject_body_read(*args, **kwargs):
+        pytest.fail("内部工具轻摘要不应读取参数或结果正文")
+    monkeypatch.setattr(cold._context_reader, "read_canonical_items", reject_body_read)
+    summary = cold.load_history(owner.session_id, owner.thread_id, TurnHistoryLoadRequest(
+        execution_id=admission.execution_id, include=["internal", "tool_summary"],
+    ))
+    projected = summary.internal_executions[0].response_items
+    assert [part.kind for part in projected] == ["tool_call", "tool_result"]
+    assert all(part.tool_outcome == "failure" and part.tool_execution is None for part in projected)
+    assert all(part.arguments is None and part.result is None for part in projected)
+    monkeypatch.setattr(cold._context_reader, "read_canonical_items", read_bodies)
+    detail = cold.load_history(owner.session_id, owner.thread_id, TurnHistoryLoadRequest(
+        execution_id=admission.execution_id, include=["internal", "tool_call", "tool_result"],
+        source_view_id=summary.source_view_id, source_view_revision=summary.source_view_revision,
+    )).internal_executions[0].response_items
+    assert [part.tool_outcome for part in detail] == ["failure", "failure"]
+    assert detail[0].arguments == '{"path": "A"}' and detail[1].result == "文件不存在"
 
 
 def test_parallel_tool_history_keeps_committed_outcomes(tmp_path, session_bundle_factory):
@@ -143,7 +250,7 @@ def test_parallel_tool_history_keeps_committed_outcomes(tmp_path, session_bundle
         include=["tool_call", "tool_result", "final_response"],
     ))
     turn = page.items[0]
-    tools = [part for part in turn.response_parts if part.kind in {"tool_call", "tool_result"}]
+    tools = [part for part in turn.response_items if part.kind in {"tool_call", "tool_result"}]
     assert len(tools) == 4
     assert all(part.status == "completed" for part in tools)
     assert [part.result for part in tools if part.kind == "tool_result"] == ['{"result": "README ok"}', '{"matches": 3}']
@@ -151,44 +258,32 @@ def test_parallel_tool_history_keeps_committed_outcomes(tmp_path, session_bundle
     outline = saver.load_history(session_id, thread_id, TurnHistoryLoadRequest(
         turn_ids=[turn.turn_id], include=["activity_outline"], **binding,
     ))
-    projected = [part for part in outline.items[0].response_parts if part.kind in {"tool_call", "tool_result"}]
-    assert [(part.part_id, part.tool_call_id, part.status) for part in projected] == [
-        (part.part_id, part.tool_call_id, part.status) for part in tools
+    projected = [part for part in outline.items[0].response_items if part.kind in {"tool_call", "tool_result"}]
+    assert [(part.id, part.tool_call_id, part.status) for part in projected] == [
+        (part.id, part.tool_call_id, part.status) for part in tools
     ]
     for part in tools:
         point = saver.load_history(session_id, thread_id, TurnHistoryLoadRequest(
             turn_ids=[turn.turn_id], item_ids=[part.source.item_id],
             include=["tool_call", "tool_result"], **binding,
         ))
-        selected, = point.items[0].response_parts
-        assert selected.part_id == part.part_id and selected.status == "completed"
+        selected, = point.items[0].response_items
+        assert selected.id == part.id and selected.status == "completed"
         assert selected.outcome_unknown is not True
         assert selected.arguments == part.arguments and selected.result == part.result
 
 
-def test_plain_turn_has_zero_expandable_items() -> None:
-    projection: dict[str, object] = {
-        "created_at": "2026-09-09T00:00:00+00:00",
-        "activity_items": [],
-        "activity_stats": {
-            "duration_ms": 7100,
-            "item_count": 99,
-            "first_item_sequence": 1,
-            "last_item_sequence": 9,
-        },
-    }
-
-    _finalize_activity_projection(projection)
-
-    assert projection["activity_stats"] == {
-        "duration_ms": 7100,
-        "item_count": 0,
-        "first_item_sequence": None,
-        "last_item_sequence": None,
-    }
+def test_plain_turn_has_zero_expandable_items(source_seal_case) -> None:
+    case = source_seal_case
+    page = case.saver.load_history(case.owner.session_id, case.owner.thread_id,
+        TurnHistoryLoadRequest(include=["metadata"]))
+    stats = page.items[0].activity_stats
+    assert stats.item_count == 0
+    assert stats.first_item_sequence is stats.last_item_sequence is None
+    assert stats.duration_ms is None
 
 
-def test_activity_projection_counts_identity_order_and_item_elapsed_time() -> None:
+def test_activity_projection_preserves_scope_stats_and_item_elapsed_time() -> None:
     activity_items = [
         {
             "item_id": "item-reasoning-1",
@@ -236,8 +331,8 @@ def test_activity_projection_counts_identity_order_and_item_elapsed_time() -> No
         "activity_stats": {
             "duration_ms": 7000,
             "item_count": 10,
-            "first_item_sequence": None,
-            "last_item_sequence": None,
+            "first_item_sequence": 2,
+            "last_item_sequence": 20,
         },
     }
 
@@ -245,9 +340,9 @@ def test_activity_projection_counts_identity_order_and_item_elapsed_time() -> No
 
     assert projection["activity_stats"] == {
         "duration_ms": 7000,
-        "item_count": 4,
+        "item_count": 10,
         "first_item_sequence": 2,
-        "last_item_sequence": 7,
+        "last_item_sequence": 20,
     }
     assert [item["elapsed_ms"] for item in activity_items] == [1000, 2000, 1000, 3000]
     assert [item["text"] for item in activity_items if item["kind"] == "reasoning"] == [
@@ -299,11 +394,11 @@ def test_real_projection_uses_exact_selected_view_membership(membership_projecti
             copy_source.commit()
         with storage.open_read_snapshot(admission.session_id, admission.thread_id) as selected:
             projection = storage.read_turn_projections(selected, view_id, (admission.turn_id,))[admission.turn_id]
-            parts = response_parts_from_records([], projection=projection, mode="summary", include=frozenset({"thinking"}))
+            parts = response_items_from_records([], projection=projection, mode="summary", include=frozenset({"thinking"}))
             assert [part.source.item_id for part in parts] == [items[1].item_id, items[0].item_id]
             assert [part.source.logical_item_ordinal for part in parts] == [4, 20]
             assert [part.source.item_sequence for part in parts] == [3, 2]
-            assert [part.source.logical_item_ordinal for part in response_parts_from_records(
+            assert [part.source.logical_item_ordinal for part in response_items_from_records(
                 [], projection=storage.read_turn_projections(snapshot, view_id, (admission.turn_id,))[admission.turn_id],
                 mode="summary", include=frozenset({"thinking"}),
             )] == [1, 2]
@@ -311,7 +406,7 @@ def test_real_projection_uses_exact_selected_view_membership(membership_projecti
         admission.session_id, admission.thread_id,
         TurnHistoryLoadRequest(include=["reasoning_detail"]),
     ).items[0]
-    assert [part.source.item_id for part in history.response_parts] == [items[1].item_id, items[0].item_id]
+    assert [part.source.item_id for part in history.response_items] == [items[1].item_id, items[0].item_id]
     assert (history.activity_stats.first_item_sequence, history.activity_stats.last_item_sequence) == (2, 3)
 
 
@@ -326,6 +421,46 @@ def test_projection_excludes_hidden_view_member(membership_projection_case):
         projection = storage.read_turn_projections(snapshot, view_id, (admission.turn_id,))[admission.turn_id]
     assert [item["item_id"] for item in projection["activity_items"]] == [items[1].item_id]
     assert projection["activity_stats"]["item_count"] == 1
+
+
+def test_encrypted_presence_is_not_counted_or_used_as_elapsed_predecessor(membership_projection_case):
+    case, admission, initial = membership_projection_case
+    saver = case.saver
+    start = datetime.fromisoformat(initial[-1].created_at)
+    codec = LangChainMessageCodec()
+    encrypted, = codec.items_for_message(
+        AIMessage(id="encrypted-presence", content=[{"type": "redacted_thinking", "data": "PRIVATE_CIPHER"}]),
+        item_sequence=4, message_id="encrypted-presence", turn_id=admission.turn_id,
+        execution_id=admission.execution_id, model_call_id="encrypted-call",
+        timestamp=(start + timedelta(seconds=1)).isoformat(),
+    )
+    following = replace(initial[-1], item_id="after-encrypted", item_sequence=5,
+        created_at=(start + timedelta(seconds=2)).isoformat())
+    with session_thread_owner_scope(MutationIntentOwner(admission.session_id, admission.thread_id), langgraph_thread_id=admission.thread_id), execution_admission_scope(admission, langgraph_thread_id=admission.thread_id):
+        saver.append_items(admission.session_id, (encrypted, following), thread_id=admission.thread_id)
+    binding = saver.load_history(admission.session_id, admission.thread_id, TurnHistoryLoadRequest(include=["metadata"]))
+    page = saver.load_history(admission.session_id, admission.thread_id, TurnHistoryLoadRequest(
+        turn_ids=[admission.turn_id], include=["activity_outline"],
+        source_view_id=binding.source_view_id, source_view_revision=binding.source_view_revision,
+    ))
+    turn = page.items[0]
+    assert turn.activity_stats.item_count == 3
+    assert (turn.activity_stats.first_item_sequence, turn.activity_stats.last_item_sequence) == (2, 5)
+    parts = {part.source.item_id: part for part in turn.response_items}
+    assert parts[encrypted.item_id].kind == "reasoning_encrypted"
+    assert parts[encrypted.item_id].text == "" and parts[encrypted.item_id].source.elapsed_ms == 0
+    assert parts[following.item_id].source.elapsed_ms == 2000
+    # 所选view仅剩密文存在性时，计数和边界必须一致归零，仍可返回安全存在性。
+    storage = saver._storage.storage
+    with storage.write_connection(admission.session_id, admission.thread_id) as connection:
+        mutate_view_members(connection,
+            "UPDATE context_view_items SET visible=0 WHERE view_id=? AND item_id IN (?,?,?)",
+            (page.source_view_id, initial[0].item_id, initial[1].item_id, following.item_id))
+    with storage.open_read_snapshot(admission.session_id, admission.thread_id) as snapshot:
+        projection = storage.read_turn_projections(snapshot, page.source_view_id, (admission.turn_id,))[admission.turn_id]
+    assert projection["activity_stats"]["item_count"] == 0
+    assert projection["activity_stats"]["first_item_sequence"] is projection["activity_stats"]["last_item_sequence"] is None
+    assert [item["item_id"] for item in projection["activity_items"]] == [encrypted.item_id]
 
 
 @pytest.mark.parametrize("membership_projection_case", [(-1, 0), (2, 1), (2, 1.999999)], indirect=True)
@@ -346,16 +481,20 @@ def test_history_rejects_activity_time_going_backwards(membership_projection_cas
 
 
 @pytest.mark.parametrize("delta", [timedelta(seconds=-1), timedelta(microseconds=-1)])
-def test_cold_history_rejects_turn_duration_time_going_backwards(source_seal_case, delta):
+@pytest.mark.parametrize("table,error_type,error", [
+    ("turns", ValueError, "历史 Turn projection 结束时间早于创建时间"),
+    ("turn_records", RuntimeError, "Turn 生命周期时间倒退"),
+])
+def test_cold_history_rejects_turn_duration_time_going_backwards(source_seal_case, delta, table, error_type, error):
     case = source_seal_case
     owner = case.owner
     storage = case.saver._storage.storage
     with storage._connect(owner.thread_id, session_id=owner.session_id) as connection:
         (created_at,) = connection.execute(
-            "SELECT created_at FROM turns WHERE turn_id=?", (case.accepted["turn_id"],),
+            f"SELECT created_at FROM {table} WHERE turn_id=?", (case.accepted["turn_id"],),
         ).fetchone()
         connection.execute(
-            "UPDATE turns SET updated_at=? WHERE turn_id=?",
+            f"UPDATE {table} SET updated_at=? WHERE turn_id=?",
             ((datetime.fromisoformat(created_at) + delta).isoformat(), case.accepted["turn_id"]),
         )
     with storage.open_read_snapshot(owner.session_id, owner.thread_id) as snapshot:
@@ -364,7 +503,7 @@ def test_cold_history_rejects_turn_duration_time_going_backwards(source_seal_cas
     before_jsonl = jsonl.read_bytes()
     with (
         RolloutCheckpointSaver(storage.sessions_dir) as cold,
-        pytest.raises(ValueError, match="历史 Turn projection 结束时间早于创建时间"),
+        pytest.raises(error_type, match=error),
     ):
         cold.load_history(owner.session_id, owner.thread_id, TurnHistoryLoadRequest())
     with storage.open_read_snapshot(owner.session_id, owner.thread_id) as snapshot:
@@ -486,11 +625,11 @@ def internal_content_carrier_case(source_seal_case, request):
     ]
     accumulator = CanonicalBlockAccumulator(turn_id=None, execution_id=admission.execution_id,
                                             producer_id=model_call_id, model_call_id=model_call_id)
-    for index, (part_id, kind, text) in enumerate((
+    for index, (id, kind, text) in enumerate((
         ("part_internal_reasoning", "reasoning_content", "核对初始化报告。"),
         ("part_internal_text", "text", "初始化报告的私有正文。"),
     )):
-        accumulator.accept({"block_id": f"{model_call_id}:block:{part_id}", "block_index": index,
+        accumulator.accept({"block_id": f"{model_call_id}:block:{id}", "block_index": index,
                             "carrier_type": kind, "text": text})
     stream = tuple(replace(item, created_at=(stamp + timedelta(seconds=index + 3)).isoformat())
                    for index, item in enumerate(accumulator.finalize(first_item_sequence=1)))
@@ -621,14 +760,15 @@ def test_internal_content_large_history_bounds_metadata_before_reading_bodies(
         assert set(seen) == expected
         assert seen[-1] == final.item_id
         # final 在窗口外时仍替代旧正文；冻结上界排除 final 时旧正文恢复可读。
-        final_ordinal = snapshot.connection.execute(
-            "SELECT logical_item_ordinal FROM context_view_items WHERE item_id=? AND view_id=?",
-            (final.item_id, reader.context_view_id(chain)),
+        final_start_ordinal = snapshot.connection.execute(
+            "SELECT MIN(member.logical_item_ordinal) FROM context_view_items member "
+            "JOIN item_catalog item ON item.item_id=member.item_id WHERE item.message_group_id=? AND member.view_id=?",
+            (final.message_group_id, reader.context_view_id(chain)),
         ).fetchone()[0]
-        for frozen_upper, removed in ((bound, superseded), (final_ordinal - 1, set())):
+        for frozen_upper, removed in ((bound, superseded), (final_start_ordinal - 1, set())):
             page = reader.read_internal_execution_history_page(
                 snapshot, chain, direction="after", anchor_logical_item_ordinal=None,
-                lower_logical_item_ordinal=None, upper_logical_item_ordinal=final_ordinal - 1,
+                lower_logical_item_ordinal=None, upper_logical_item_ordinal=final_start_ordinal - 1,
                 snapshot_upper_logical_item_ordinal=frozen_upper,
                 execution_id=admission.execution_id, limit=256,
             )
@@ -709,8 +849,13 @@ def test_internal_content_survivor_is_selected_before_keyset_and_body_reads(
         assert tail.has_more
         final_ordinal = tail.entries[0].logical_item_ordinal
         preceding = page("before", anchor=final_ordinal)
-        assert preceding.entries[0].item.item_id == independent[1].item_id
+        final_reasoning = next(item for item in raw if item.message_group_id == final.message_group_id
+                               and item.semantic_kind == "reasoning")
+        assert preceding.entries[0].item.item_id == final_reasoning.item_id
         assert preceding.has_more
+        final_start_ordinal = preceding.entries[0].logical_item_ordinal
+        before_group = page("before", anchor=final_start_ordinal)
+        assert before_group.entries[0].item.item_id == independent[1].item_id
         following = page("after", anchor=preceding.entries[0].logical_item_ordinal)
         assert following.entries[0].item.item_id == final.item_id and not following.has_more
         # 替代项位于 anchor 页外，旧 stream/checkpoint 仍必须被排除。
@@ -721,12 +866,13 @@ def test_internal_content_survivor_is_selected_before_keyset_and_body_reads(
         head = page("after", lower=first_independent_ordinal)
         assert head.entries[0].item.item_id == independent[0].item_id and head.has_more
         assert page("after", lower=final_ordinal).entries[0].logical_item_ordinal == final_ordinal
-        assert page("before", upper=final_ordinal - 1).entries[0].item.item_id == independent[1].item_id
+        assert page("before", upper=final_start_ordinal - 1).entries[0].item.item_id == independent[1].item_id
         # frozen upper 外的 final 不参与当前选择，旧 carrier 坐标和正文仍能读取。
-        frozen = page("before", upper=final_ordinal - 1, frozen_upper=final_ordinal - 1)
+        frozen = page("before", upper=final_start_ordinal - 1, frozen_upper=final_start_ordinal - 1)
         assert frozen.entries[0].item.item_id == "item-lc_run--internal-content-model"
         # 前一物理 checkpoint 虽被隐藏，elapsed 仍沿它起算，不能跳到前一 survivor。
-        assert tail.entries[0].elapsed_ms == 2000
+        assert preceding.entries[0].elapsed_ms == 2000
+        assert tail.entries[0].elapsed_ms == 0
     assert all(len(ids) == 1 for ids in requested)
     assert jsonl_path.read_bytes() == before
     assert [item.to_dict() for item in original_read(admission.session_id, admission.thread_id)] == [item.to_dict() for item in raw]
@@ -736,11 +882,14 @@ def test_internal_content_survivor_is_selected_before_keyset_and_body_reads(
 def test_internal_content_hidden_or_other_source_replacement_cannot_hide_visible_stream(
     internal_content_carrier_case, membership_change,
 ):
-    case, admission, _raw, final, _independent = internal_content_carrier_case
+    case, admission, raw, final, _independent = internal_content_carrier_case
     storage, reader = case.saver._storage.storage, case.saver._context_reader
     with closing(storage._connect(admission.thread_id, session_id=admission.session_id)) as connection:
         view_id = storage._active_context_view_id(connection, "")
-        mutate_view_members(connection, f"UPDATE context_view_items SET {membership_change} WHERE view_id=? AND item_id=?", (view_id, final.item_id))
+        mutate_view_members(connection,
+            f"UPDATE context_view_items SET {membership_change} WHERE view_id=? "
+            "AND item_id IN (SELECT item_id FROM item_catalog WHERE message_group_id=?)",
+            (view_id, final.message_group_id))
         connection.commit()
     with reader.open_snapshot(admission.session_id, admission.thread_id) as snapshot:
         chain = reader.resolve_chain(snapshot)
@@ -754,7 +903,9 @@ def test_internal_content_hidden_or_other_source_replacement_cannot_hide_visible
     ids = [entry.item.item_id for entry in page.entries]
     assert final.item_id not in ids
     assert "item-lc_run--internal-content-model" in ids
-    assert len([entry for entry in page.entries if entry.item.semantic_kind == "reasoning"]) == 1
+    assert {entry.item.item_id for entry in page.entries if entry.item.semantic_kind == "reasoning"} == {
+        item.item_id for item in raw if item.semantic_kind == "reasoning" and item.message_group_id != final.message_group_id
+    }
     assert len([entry for entry in page.entries if entry.item.semantic_kind == "assistant_output"]) == 4
 
 
@@ -773,7 +924,7 @@ def test_internal_content_cold_history_and_provider_keep_one_final_with_reasonin
             source_view_id=page.source_view_id, source_view_revision=page.source_view_revision,
             include=["internal", "text", "final_response", "reasoning_detail"]))
     assert point.next_cursor is None and not point.has_more
-    assert {part.source.item_id for execution in point.internal_executions for part in execution.response_parts
+    assert {part.source.item_id for execution in point.internal_executions for part in execution.response_items
             if part.kind != "context_notice"} == {independent[0].item_id, final.item_id}
     with pytest.raises(ValueError, match="不属于当前可见历史或已被替代"):
         restarted.load_history(admission.session_id, admission.thread_id,
@@ -783,15 +934,18 @@ def test_internal_content_cold_history_and_provider_keep_one_final_with_reasonin
                 include=["internal", "text"]))
     assert len(page.internal_executions) == 1
     internal = page.internal_executions[0]
+    final_reasoning = next(item for item in raw if item.message_group_id == final.message_group_id
+                           and item.semantic_kind == "reasoning")
     assert internal.status == "completed"
     assert (internal.execution_id, internal.job_id, internal.session_id, internal.thread_id) == (
         admission.execution_id, admission.job_id, admission.session_id, admission.thread_id,
     )
-    assert [part.source.item_id for part in internal.response_parts] == [
-        independent[0].item_id, independent[1].item_id, final.item_id, final.item_id,
+    assert [part.source.item_id for part in internal.response_items] == [
+        independent[0].item_id, independent[1].item_id, final_reasoning.item_id, final.item_id,
     ]
-    assert [part.kind for part in internal.response_parts] == ["text", "text", "reasoning", "text"]
-    assert [part.text for part in internal.response_parts if part.source.item_id == final.item_id] == [
+    assert [part.kind for part in internal.response_items] == ["text", "text", "reasoning", "text"]
+    assert [part.text for part in internal.response_items
+            if part.source.item_id in {final_reasoning.item_id, final.item_id}] == [
         "核对初始化报告。", "初始化报告的私有正文。",
     ]
     independent_ids = {item.item_id for item in independent}
@@ -830,7 +984,7 @@ def versioned_activity_rows():
     activity = [(
         "turn", item.item_sequence, item.item_id, item.semantic_kind, item.payload_kind,
         item.status, item.created_at, json.dumps(dict(item.producer_ref)),
-        json.dumps(item.projection_manifest()), "工具调用", 0, None, index,
+        json.dumps(item.projection_manifest()), "工具调用", 0, item.tool_call_id, index, item.message_group_id, index + 1, None,
     ) for index, item in enumerate(items)]
     return tools, activity
 
@@ -842,12 +996,12 @@ def test_tool_activity_uses_exact_canonical_version(versioned_activity_rows):
 
     tools, activity = versioned_activity_rows
     result = {"turn": {"activity_items": []}}
-    _merge_activity_items(result, tools, activity, {})
+    _merge_activity_items(result, tools, activity)
     assert [(
         item["item_id"], item["tool_name"], item["status"], item["assistant_message_sequence"],
     ) for item in result["turn"]["activity_items"]] == [
         ("version-1", "read_file", "completed", 1),
-        ("version-2", "write_file", "running", 2),
+        ("version-2", "write_file", "completed", 2),
     ]
 
 
@@ -865,6 +1019,9 @@ def test_activity_outline_pages_and_item_body_share_frozen_binding(membership_pr
     with session_thread_owner_scope(MutationIntentOwner(admission.session_id, admission.thread_id), langgraph_thread_id=admission.thread_id), execution_admission_scope(admission, langgraph_thread_id=admission.thread_id):
         saver.append_items(admission.session_id, items, thread_id=admission.thread_id)
     initial_page = saver.load_history(admission.session_id, admission.thread_id, TurnHistoryLoadRequest(include=["metadata"]))
+    expected_stats = initial_page.items[0].activity_stats
+    assert expected_stats.item_count == len(initial) + len(items)
+    assert (expected_stats.first_item_sequence, expected_stats.last_item_sequence) == (2, 604)
     binding = {"source_view_id": initial_page.source_view_id, "source_view_revision": initial_page.source_view_revision}
     storage = saver._storage.storage
     original_read = storage.read_items
@@ -878,7 +1035,8 @@ def test_activity_outline_pages_and_item_body_share_frozen_binding(membership_pr
     seen = []
     cursors = set()
     while True:
-        parts = page.items[0].response_parts
+        assert page.items[0].activity_stats == expected_stats
+        parts = page.items[0].response_items
         assert len(parts) <= 256
         assert all(part.projection == "summary" and not part.text for part in parts)
         seen.extend(part.source.item_id for part in parts)
@@ -895,8 +1053,9 @@ def test_activity_outline_pages_and_item_body_share_frozen_binding(membership_pr
     monkeypatch.setattr(storage, "read_items", original_read)
     point = saver.load_history(admission.session_id, admission.thread_id,
         TurnHistoryLoadRequest(turn_ids=[admission.turn_id], item_ids=[initial[0].item_id], include=["reasoning_detail"], **binding))
-    assert [part.source.item_id for part in point.items[0].response_parts] == [initial[0].item_id]
-    assert point.items[0].response_parts[0].text == initial[0].payload
+    assert [part.source.item_id for part in point.items[0].response_items] == [initial[0].item_id]
+    assert point.items[0].response_items[0].text == initial[0].payload
+    assert point.items[0].activity_stats == expected_stats
     assert not point.has_more and point.next_cursor is None
     from app.services.infrastructure.rollout_history.errors import StaleTurnCursorError
     with pytest.raises(StaleTurnCursorError) as stale:
@@ -909,7 +1068,7 @@ def test_activity_outline_pages_and_item_body_share_frozen_binding(membership_pr
 
 @pytest.mark.parametrize("internal_content_carrier_case", [300], indirect=True)
 def test_internal_partial_pages_keep_true_segment_and_structured_group_start(internal_content_carrier_case, monkeypatch):
-    case, admission, _raw, final, independent = internal_content_carrier_case
+    case, admission, raw, final, independent = internal_content_carrier_case
     saver = case.saver
     storage = saver._storage.storage
     original_read = storage.read_items
@@ -919,7 +1078,7 @@ def test_internal_partial_pages_keep_true_segment_and_structured_group_start(int
         return original_read(*args, **kwargs)
     monkeypatch.setattr(storage, "read_items", reject_activity_bodies)
     summary_page = saver.load_history(admission.session_id, admission.thread_id, TurnHistoryLoadRequest())
-    summary_parts = summary_page.internal_executions[0].response_parts
+    summary_parts = summary_page.internal_executions[0].response_items
     assert any(part.kind == "reasoning" for part in summary_parts), "纯思考执行也有可展开的活动轮廓"
     assert all(part.projection == "summary" and not part.text for part in summary_parts if part.kind == "reasoning")
     monkeypatch.setattr(storage, "read_items", original_read)
@@ -929,19 +1088,20 @@ def test_internal_partial_pages_keep_true_segment_and_structured_group_start(int
             include=["internal", "activity_outline", "assistant_text"],
             source_view_id=initial.source_view_id, source_view_revision=initial.source_view_revision))
     assert outline.before_cursor
-    parts = outline.internal_executions[0].response_parts
-    final_reasoning = next(part for part in parts if part.source.item_id == final.item_id and part.kind == "reasoning")
+    parts = outline.internal_executions[0].response_items
+    reasoning_item = next(item for item in raw if item.message_group_id == final.message_group_id
+                          and item.semantic_kind == "reasoning")
+    final_reasoning = next(part for part in parts if part.source.item_id == reasoning_item.item_id and part.kind == "reasoning")
     # 当前尾页没有段首，但标题必须使用该段的真实首项，补前页不能改变标题。
     assert independent[0].item_id not in {part.source.item_id for part in parts}
     assert final_reasoning.source.process_segment_item_id == independent[0].item_id
-    assert final_reasoning.source.activity_group_item_id == final.item_id
-    assert final_reasoning.source.activity_group_part_ordinal == 0
+    assert final_reasoning.source.activity_group_item_id == reasoning_item.item_id
     point = saver.load_history(admission.session_id, admission.thread_id,
-        TurnHistoryLoadRequest(execution_id=admission.execution_id, item_ids=[final.item_id],
+        TurnHistoryLoadRequest(execution_id=admission.execution_id, item_ids=[reasoning_item.item_id],
             include=["internal", "reasoning_detail", "text"],
             source_view_id=outline.source_view_id, source_view_revision=outline.source_view_revision))
-    body = next(part for part in point.internal_executions[0].response_parts if part.kind == "reasoning")
-    assert body.part_id == final_reasoning.part_id
+    body = next(part for part in point.internal_executions[0].response_items if part.kind == "reasoning")
+    assert body.id == final_reasoning.id
     assert body.source.process_segment_item_id == final_reasoning.source.process_segment_item_id
     assert body.source.activity_group_item_id == final_reasoning.source.activity_group_item_id
     assert body.text == "核对初始化报告。"
@@ -965,30 +1125,31 @@ def test_structured_turn_pages_keep_reasoning_and_true_group_coordinates(members
     binding = {"source_view_id": metadata.source_view_id, "source_view_revision": metadata.source_view_revision}
     page = saver.load_history(admission.session_id, admission.thread_id,
         TurnHistoryLoadRequest(turn_ids=[admission.turn_id], include=["activity_outline", "assistant_text"], **binding))
-    parts = page.items[0].response_parts
-    first_group = [part for part in parts if part.source.item_id == items[0].item_id and part.kind == "reasoning" and part.source.part_ordinal < 301]
-    assert first_group and first_group[0].source.part_ordinal > 1
-    assert {part.source.activity_group_part_ordinal for part in first_group} == {1}
+    parts = page.items[0].response_items
+    first_group_ids = {item.item_id for item in items[1:301]}
+    first_group = [part for part in parts if part.source.item_id in first_group_ids and part.kind == "reasoning"]
+    assert first_group and items[1].item_id not in {part.source.item_id for part in first_group}
+    assert {part.source.activity_group_item_id for part in first_group} == {items[1].item_id}
     assert all(not part.text for part in first_group)
-    second_group = next(part for part in parts if part.source.part_ordinal == 302)
-    assert second_group.source.activity_group_part_ordinal == 302
-    seen = {part.part_id for part in parts}
+    second_group = next(part for part in parts if part.source.item_id == items[-1].item_id)
+    assert second_group.source.activity_group_item_id == items[-1].item_id
+    seen = {part.id for part in parts}
     assert page.before_cursor
     earlier = saver.load_history(admission.session_id, admission.thread_id,
         TurnHistoryLoadRequest(direction="before", cursor=page.before_cursor))
-    assert not seen & {part.part_id for part in earlier.items[0].response_parts}
-    assert len(seen | {part.part_id for part in earlier.items[0].response_parts}) == 305
+    assert not seen & {part.id for part in earlier.items[0].response_items}
+    assert len(seen | {part.id for part in earlier.items[0].response_items}) == 305
     detail = saver.load_history(admission.session_id, admission.thread_id,
-        TurnHistoryLoadRequest(turn_ids=[admission.turn_id], item_ids=[items[0].item_id],
+        TurnHistoryLoadRequest(turn_ids=[admission.turn_id], item_ids=[items[-1].item_id],
             include=["text", "reasoning_detail"], **binding))
-    body = next(part for part in detail.items[0].response_parts if part.source.part_ordinal == 302)
+    body = next(part for part in detail.items[0].response_items if part.source.item_id == items[-1].item_id)
     assert body.text == "第二组思考。"
-    assert body.part_id == second_group.part_id
-    assert body.source.activity_group_part_ordinal == second_group.source.activity_group_part_ordinal
+    assert body.id == second_group.id
+    assert body.source.activity_group_item_id == second_group.source.activity_group_item_id
 
 
-def test_catalog_activity_identity_is_chosen_before_paging(membership_projection_case):
-    """真实 reader 保留不同调用和不同块，相同来源的重复载体在截页前择一。"""
+def test_catalog_activity_preserves_distinct_items_with_equal_provider_coordinates(membership_projection_case):
+    """原协议坐标不是内容身份；没有显式替代关系不能吞掉独立思考 Item。"""
     case, admission, initial = membership_projection_case
     coordinates = (("same", "block-a"), ("same", "block-a"), ("other", "block-a"), ("same", "block-b"))
     items = tuple(CanonicalItemRecord.create(
@@ -1005,6 +1166,6 @@ def test_catalog_activity_identity_is_chosen_before_paging(membership_projection
         turn_ids=[admission.turn_id], include=["activity_outline"],
         source_view_id=binding.source_view_id, source_view_revision=binding.source_view_revision,
     ))
-    projected=[part for part in page.items[0].response_parts if part.source.item_id.startswith("identity-")]
-    assert [part.source.item_id for part in projected] == ["identity-4", "identity-6", "identity-7"]
+    projected=[part for part in page.items[0].response_items if part.source.item_id.startswith("identity-")]
+    assert [part.source.item_id for part in projected] == ["identity-4", "identity-5", "identity-6", "identity-7"]
     assert all(part.text == "" for part in projected)

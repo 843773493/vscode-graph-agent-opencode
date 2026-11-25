@@ -23,19 +23,17 @@ from app.services.infrastructure.resource_platform.registry.semantic_registry im
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 
 
-def test_runtime_selects_factory_from_injected_graph_binding_store() -> None:
+def test_runtime_selects_factory_from_frozen_graph_binding() -> None:
     config_service = MagicMock()
     config_service.resolve_agent_id.return_value = "default"
     config_service.get_agent_tool_config.return_value = {"custom": []}
     config_service.resolve_agent_confirmation_tool_names.return_value = set()
     dependency_provider = MagicMock()
     dependency_provider.get_checkpointer.return_value = MagicMock()
-    store = MagicMock(spec=GraphBindingStorePort)
     resource_registry = ResourceRegistry()
     resource_activation = MagicMock()
     skill_catalog = MagicMock()
 
-    store.load_graph_binding.return_value = DEEP_AGENT_GRAPH_BINDING
     with (
         patch("app.runtime.agent_runtime.prepare_agent_model"),
         patch("app.agents.graph_binding.GRAPH_FACTORY_REGISTRY.resolve") as resolve_factory,
@@ -56,17 +54,17 @@ def test_runtime_selects_factory_from_injected_graph_binding_store() -> None:
             resource_registry=resource_registry,
             resource_activation=resource_activation,
             skill_catalog=skill_catalog,
-            graph_binding_store=store,
+            graph_binding=DEEP_AGENT_GRAPH_BINDING,
         )
 
-    assert store.load_graph_binding.call_args.args == (GraphBindingOwnerKey("session_test", "thread_test"),)
     assert resolve_factory.call_args.args == (DEEP_AGENT_GRAPH_BINDING,)
+    resolve_factory.assert_called_once()
     assert create_runtime.call_args.kwargs["resource_registry"] is resource_registry
     assert create_runtime.call_args.kwargs["resource_activation"] is resource_activation
     assert create_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
 
 
-def test_execution_service_passes_store_to_runtime() -> None:
+def test_execution_service_passes_frozen_binding_to_runtime() -> None:
     from app.services.orchestration.agent_execution_service import AgentExecutionService
 
     store = MagicMock(spec=GraphBindingStorePort)
@@ -97,6 +95,7 @@ def test_execution_service_passes_store_to_runtime() -> None:
         service._assemble_agent(
             session_id="session_test",
             thread_id="thread_test",
+            graph_binding=DEEP_AGENT_GRAPH_BINDING,
             agent_id="default",
             execution_overrides={},
             model_visibility_overrides={},
@@ -108,7 +107,8 @@ def test_execution_service_passes_store_to_runtime() -> None:
             skill_catalog=skill_catalog,
         )
 
-    assert build_runtime.call_args.kwargs["graph_binding_store"] is store
+    assert build_runtime.call_args.kwargs["graph_binding"] is DEEP_AGENT_GRAPH_BINDING
+    store.load_graph_binding.assert_not_called()
     assert build_runtime.call_args.kwargs["thread_id"] == "thread_test"
     assert build_runtime.call_args.kwargs["resource_registry"] is resource_registry
     assert build_runtime.call_args.kwargs["resource_activation"] is resource_activation

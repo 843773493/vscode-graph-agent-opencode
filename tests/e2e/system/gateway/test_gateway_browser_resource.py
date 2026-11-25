@@ -538,9 +538,7 @@ async def test_gateway_restart_reuses_browser_plugin_and_live_page(
             gateway_config = commentjson.loads(
                 gateway_config_path.read_text(encoding="utf-8")
             )
-            gateway_health_config = gateway_config["runtime"]["gateway"]["process"][
-                "health"
-            ]
+            gateway_health_config = gateway_config["settings"]["gateway"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("process", {}).setdefault("health", {})
             old_poll_interval = gateway_health_config["poll_interval_seconds"]
             if not isinstance(old_poll_interval, (int, float)):
                 raise TypeError(

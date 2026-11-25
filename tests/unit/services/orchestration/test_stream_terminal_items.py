@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import AIMessageChunk, ToolMessage
@@ -20,16 +20,8 @@ def item_sink() -> AsyncMock:
 
 
 @pytest.fixture
-def tool_result_sink() -> AsyncMock:
-    return AsyncMock(wraps=lambda completion: SimpleNamespace(payload={
-        "content": completion.content, "tool_outcome": completion.tool_outcome,
-    }))
-
-
-@pytest.fixture
-def runtime(item_sink: AsyncMock, tool_result_sink: AsyncMock) -> MessageStreamRuntime:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+def runtime(item_sink: AsyncMock, tool_result_sink: AsyncMock, stream_writer) -> MessageStreamRuntime:
+    writer = stream_writer()
     return MessageStreamRuntime(
         writer,
         canonical_item_sink=item_sink,
@@ -70,7 +62,7 @@ async def active_scoped_tool_call_id(runtime: MessageStreamRuntime) -> str:
     ("status", "outcome", "error", "expected"),
     [
         ("succeeded", "success", None, "success"),
-        ("failed", "failure", "工具报错", "failure"),
+        ("failed", "provider_error", "工具报错", "failure"),
         ("completed", "cancelled", None, "cancelled"),
         ("completed", "unknown", "用户中断时结果无法确认", "unknown"),
     ],
@@ -142,7 +134,7 @@ async def test_unknown_tool_terminal_paths_keep_registered_provider_identity(
     assert completion.tool_name == "shell"
     assert completion.tool_outcome == "unknown"
     assert completion.item_id == f"item-exec_1-result-{active_scoped_tool_call_id}"
-    assert isinstance(runtime.writer, MagicMock)
+    assert runtime.writer is not None
     terminal_events = [
         call.args[1]
         for call in runtime.writer.commit.await_args_list
@@ -191,9 +183,8 @@ async def test_tool_result_commit_failure_keeps_tool_for_failed_cleanup(
 
 
 @pytest.mark.asyncio
-async def test_sinkless_display_tool_completion() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_sinkless_display_tool_completion(stream_writer) -> None:
+    writer = stream_writer()
     display_runtime = MessageStreamRuntime(writer)
     await display_runtime.start_model("display_model", "test")
     await display_runtime.start_tool(
@@ -230,16 +221,16 @@ async def test_provider_failure_cannot_publish_completed_item(
     item_sink.assert_awaited_once()
     item = item_sink.await_args.args[0][0]
     assert item.status == expected
-    assert item.payload == "尚未完成"
+    assert item.payload == [{"id": "text_1", "index": 0, "type": "text", "text": "尚未完成"}]
     await runtime.finish_model()
     item_sink.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_tool_result_completion_is_serialized_across_tool_end_and_provider_message(
+    stream_writer,
 ) -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+    writer = stream_writer()
     sink_started = asyncio.Event()
     release_sink = asyncio.Event()
     block_sink = False
@@ -247,12 +238,14 @@ async def test_tool_result_completion_is_serialized_across_tool_end_and_provider
     canonical_sink = AsyncMock()
     tool_result_sink = AsyncMock()
 
-    async def record_blocked_sink(completion: ToolResultCompletion) -> None:
+    async def record_blocked_sink(completion: ToolResultCompletion) -> SimpleNamespace:
         sink_calls.append(completion)
-        if not block_sink:
-            return
-        sink_started.set()
-        await release_sink.wait()
+        if block_sink:
+            sink_started.set()
+            await release_sink.wait()
+        return SimpleNamespace(tool_execution=completion.tool_execution, payload={
+            "content": completion.content, "tool_outcome": completion.tool_outcome,
+        })
 
     tool_result_sink.side_effect = record_blocked_sink
     runtime = MessageStreamRuntime(
@@ -364,9 +357,9 @@ async def test_tool_result_completion_is_serialized_across_tool_end_and_provider
 
 @pytest.mark.asyncio
 async def test_provider_delta_before_model_start_keeps_full_model_call_history(
+    stream_writer,
 ) -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+    writer = stream_writer()
     item_sink = AsyncMock()
     runtime = MessageStreamRuntime(
         writer,
@@ -405,9 +398,9 @@ async def test_provider_delta_before_model_start_keeps_full_model_call_history(
 
 @pytest.mark.asyncio
 async def test_deltas_for_next_model_call_are_not_appended_to_previous_call(
+    stream_writer,
 ) -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+    writer = stream_writer()
     item_sink = AsyncMock()
     runtime = MessageStreamRuntime(
         writer,
@@ -469,9 +462,8 @@ async def test_deltas_for_next_model_call_are_not_appended_to_previous_call(
 
 
 @pytest.mark.asyncio
-async def test_stale_provider_run_id_is_bound_to_current_model_call() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_stale_provider_run_id_is_bound_to_current_model_call(stream_writer) -> None:
+    writer = stream_writer()
     item_sink = AsyncMock()
     runtime = MessageStreamRuntime(
         writer,
@@ -520,9 +512,8 @@ async def test_stale_provider_run_id_is_bound_to_current_model_call() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reused_provider_block_id_is_scoped_per_model_call() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_reused_provider_block_id_is_scoped_per_model_call(stream_writer) -> None:
+    writer = stream_writer()
     item_sink = AsyncMock()
     runtime = MessageStreamRuntime(
         writer,
@@ -571,9 +562,8 @@ async def test_reused_provider_block_id_is_scoped_per_model_call() -> None:
 
 
 @pytest.mark.asyncio
-async def test_split_tool_call_keeps_id_when_model_start_event_is_late() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_split_tool_call_keeps_id_when_model_start_event_is_late(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     # provider delta 可能先于 on_chat_model_start 落入同一个 Turn；后续
@@ -629,7 +619,8 @@ async def test_interrupt_mirrors_owner_result_instead_of_overwriting_with_unknow
     active_scoped_tool_call_id: str, known_outcome: str,
     expected_status: str, expected_outcome: str,
 ) -> None:
-    tool_result_sink.return_value = SimpleNamespace(payload={
+    tool_result_sink.side_effect = None
+    tool_result_sink.return_value = SimpleNamespace(tool_execution=None, payload={
         "content": "owner 已提交的原始正文", "tool_outcome": known_outcome,
     })
     await runtime.finalize_interruption_facts()

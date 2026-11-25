@@ -14,6 +14,13 @@ from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.enums import CanonicalItemStatus, SemanticKind
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.runtime import ModelCallRecord
+from app.services.infrastructure.rollout_context.checkpoint.codec.groups import (
+    validate_group,
+)
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    CANONICAL_GROUP_FIELD,
+    canonical_message_anchor,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -38,6 +45,7 @@ class StepModelCallAdapter:
             "consume_prepared_context_for_dispatch",
             "update_model_call_outcome",
             "converge_execution",
+            "read_canonical_items",
         ):
             port = getattr(checkpointer, name, None)
             if not callable(port):
@@ -51,7 +59,7 @@ class StepModelCallAdapter:
         self._last_assembly_id: str | None = None
         self._last_execution_id: str | None = None
         self._failed_call_retry_binding_available = False
-        self._final_convergence_item_id: str | None = None
+        self._final_convergence_message_id: str | None = None
         self._logger = logging.getLogger(__name__)
 
     async def register(
@@ -156,7 +164,7 @@ class StepModelCallAdapter:
         self._last_execution_id = model_call.execution_id
 
     def converge_final_message(self, message: AIMessage) -> None:
-        """在最终 checkpoint message 落盘前提交同一份 terminal item。"""
+        """明确原输出消息的终态角色，已有组只引用，不再追加 final 副本。"""
         admission = require_current_execution_admission(
             langgraph_thread_id=self._thread_id
         )
@@ -165,25 +173,38 @@ class StepModelCallAdapter:
         message_id = message.id
         if not isinstance(message_id, str) or not message_id:
             raise ValueError("最终 assistant message 缺少稳定 message_id")
-        items = codec.items_for_message(
-            message,
-            item_sequence=1,
-            message_id=message_id,
-            turn_id=admission.turn_id,
-            execution_id=admission.execution_id,
-            timestamp=datetime.now(UTC).isoformat(),
-        )
-        if len(items) != 1:
-            raise ValueError("最终 assistant message 不得包含 tool-call content group")
-        item = items[0]
-        if (
-            item.item_id != f"item-{message_id}"
-            or item.semantic_kind != SemanticKind.ASSISTANT_OUTPUT
+        manifests = message.response_metadata.get(CANONICAL_GROUP_FIELD)
+        if manifests is not None:
+            canonical_message_anchor(message)
+            item_ids = tuple(entry["item_id"] for entry in manifests)
+            items = self._ports["read_canonical_items"](
+                self._session_id, self._thread_id, item_ids=item_ids,
+                checkpoint_ns=self._checkpoint_ns,
+            )
+            if tuple(item.item_id for item in items) != item_ids:
+                raise ValueError("最终输出的原 canonical 消息组缺失或顺序不一致")
+            validate_group(items)
+        else:
+            # 原消息尚未提交时首次提交该组；不是为 final 展示生成另一条消息。
+            items = codec.items_for_message(
+                message, item_sequence=1, message_id=message_id,
+                turn_id=admission.turn_id, execution_id=admission.execution_id,
+                timestamp=datetime.now(UTC).isoformat(),
+            )
+        if any(
+            item.semantic_kind not in {SemanticKind.ASSISTANT_OUTPUT, SemanticKind.REASONING}
             or item.status != CanonicalItemStatus.COMPLETED.value
             or item.turn_id != admission.turn_id
             or item.turn_scope != ("turn_member" if admission.turn_id is not None else None)
+            for item in items
         ):
-            raise ValueError("最终 assistant message 未生成 admission 归属的 completed item")
+            raise ValueError("最终 assistant message 未生成 admission 归属的 completed 输出组")
+        final_item = next(
+            (item for item in reversed(items) if item.semantic_kind == SemanticKind.ASSISTANT_OUTPUT),
+            None,
+        )
+        if final_item is None:
+            raise ValueError("最终 assistant message 缺少真实输出 Item")
         converge = self._ports["converge_execution"]
         execution_id = admission.execution_id
         converge(
@@ -193,12 +214,12 @@ class StepModelCallAdapter:
             execution_id=execution_id,
             outcome="completed",
             turn_status="completed" if admission.turn_id is not None else None,
-            items=(item,),
-            final_item_id=item.item_id if admission.turn_id is not None else None,
+            items=items if manifests is None else (),
+            final_item_id=final_item.item_id if admission.turn_id is not None else None,
             assembly_id=self._last_assembly_id,
             checkpoint_ns=self._checkpoint_ns,
         )
-        self._final_convergence_item_id = item.item_id
+        self._final_convergence_message_id = message_id
 
     async def converge_final_checkpoint(self, final_message_id: str | None) -> None:
         """确认 checkpoint 与 checkpoint 写入前的终态提交一致。"""
@@ -210,7 +231,7 @@ class StepModelCallAdapter:
         if final_message_id is not None:
             if not final_message_id:
                 raise ValueError("最终 checkpoint 的 message_id 不得为空")
-            if self._final_convergence_item_id != f"item-{final_message_id}":
+            if self._final_convergence_message_id != final_message_id:
                 raise RuntimeError(
                     "最终 assistant item 必须在 checkpoint 写入前与 execution 原子收敛: "
                     f"execution_id={admission.execution_id} message_id={final_message_id}"

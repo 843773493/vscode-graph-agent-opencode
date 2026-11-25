@@ -15,8 +15,17 @@ from app.domain.itemized.enums import (
     SemanticKind,
     TurnScope,
 )
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ProjectionGroup,
+)
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.mapping.agent_content_mapper import (
+    extract_agent_stream_content_parts,
+    materialize_model_content_part,
+    merge_model_content_part,
+)
+from app.services.mapping.itemized.content_blocks import semantic_content_payload
 
 
 def _required_text(value: object, field_name: str) -> str:
@@ -105,6 +114,13 @@ class CanonicalBlockAccumulator:
                 "normalized provider block identity 与既有 draft 不一致: "
                 f"block_id={block_id}"
             )
+        source_content = block.get("source_content")
+        if isinstance(source_content, Mapping):
+            part, = extract_agent_stream_content_parts([dict(source_content)])
+            draft["source_content"] = merge_model_content_part(
+                part, cast(dict[str, object] | None, draft.get("source_content")),
+            )
+            return
         text = block.get("text", block.get("delta"))
         if isinstance(text, str):
             cast(list[str], draft["text_chunks"]).append(text)
@@ -113,6 +129,8 @@ class CanonicalBlockAccumulator:
             draft["args"] = draft["args"] + args
         elif isinstance(args, Mapping):
             draft["args"] = dict(args)
+        if "arguments_complete" in block:
+            draft["arguments_complete"] = block["arguments_complete"]
         if isinstance(block.get("name"), str):
             draft["name"] = block["name"]
         if isinstance(block.get("tool_call_id"), str):
@@ -140,13 +158,39 @@ class CanonicalBlockAccumulator:
             raise ValueError("first_item_sequence 必须是正整数")
         status = _required_text(status, "status")
         result: list[CanonicalItemRecord] = []
+        # 同一次模型响应的声明在封存边界才确定完整成员；工具回执是独立消息。
+        message_size = sum(draft["semantic_kind"] != SemanticKind.TOOL_RESULT
+                           for draft in self._drafts.values())
+        message_ordinal = 0
+        # 仅替换工具槽位中的相对顺序；正文与工具的 index 不能混排。
+        # 排序在封存时执行一次，不为每个参数 delta 重排全部草稿。
+        calls = iter(sorted(
+            (block_id for block_id in self._order
+             if self._drafts[block_id]["semantic_kind"] == SemanticKind.TOOL_CALL),
+            key=lambda block_id: cast(int, self._drafts[block_id]["block_index"]),
+        ))
         for index, block_id in enumerate(self._order):
+            if self._drafts[block_id]["semantic_kind"] == SemanticKind.TOOL_CALL:
+                block_id = next(calls)
             draft = self._drafts[block_id]
             text = "".join(cast(list[str], draft["text_chunks"]))
             semantic = _required_text(draft["semantic_kind"], "draft.semantic_kind")
             payload_kind = _required_text(draft["payload_kind"], "draft.payload_kind")
-            if semantic == SemanticKind.TOOL_CALL:
-                raw_args = draft["args"] if draft["args"] else {}
+            item_status = status
+            reasoning_carrier = None
+            if "source_content" in draft:
+                content = materialize_model_content_part(
+                    cast(dict[str, object], draft["source_content"]),
+                )
+                semantic, payload_kind, payload, reasoning_carrier = semantic_content_payload(content)
+            elif semantic == SemanticKind.TOOL_CALL:
+                if draft.get("arguments_complete") is False:
+                    item_status = CanonicalItemStatus.INCOMPLETE.value
+                    raw_args = draft["args"]
+                else:
+                    if draft.get("arguments_complete") is True:
+                        item_status = CanonicalItemStatus.COMPLETED.value
+                    raw_args = draft["args"] if draft["args"] else {}
                 name = _required_text(draft.get("name"), "draft.tool_call.name")
                 tool_call_id = _required_text(
                     draft.get("tool_call_id"),
@@ -216,7 +260,7 @@ class CanonicalBlockAccumulator:
                     item_id=_required_text(draft["item_id"], "draft.item_id"),
                     semantic_kind=semantic,
                     payload_kind=payload_kind,
-                    status=status,
+                    status=item_status,
                     producer_ref={
                         "producer_kind": "provider",
                         "producer_id": self.producer_id,
@@ -227,7 +271,10 @@ class CanonicalBlockAccumulator:
                         block_id=block_id,
                         block_index=draft["block_index"],
                         model_call_id=self.model_call_id,
+                        reasoning_carrier=reasoning_carrier,
                     ),
+                    projection_group=ProjectionGroup(message_ordinal, message_size, "list")
+                    if semantic != SemanticKind.TOOL_RESULT and message_size > 1 else None,
                     turn_id=self.turn_id,
                     turn_scope=(
                         TurnScope.TURN_MEMBER if self.turn_id is not None else None
@@ -235,12 +282,15 @@ class CanonicalBlockAccumulator:
                     # 一个 execution 可能包含多次模型调用；消息组必须绑定单次
                     # model call，否则不同调用的流式 carrier 会互相合并，无法
                     # 与对应的 checkpoint carrier 做 shadow 去重。
-                    message_group_id=f"message-{self.model_call_id}",
+                    message_group_id=(f"message-{self.model_call_id}" if semantic != SemanticKind.TOOL_RESULT
+                                      else f"message-{draft['item_id']}"),
                     wire_role="assistant"
                     if semantic != SemanticKind.TOOL_RESULT
                     else "tool",
                 )
             )
+            if semantic != SemanticKind.TOOL_RESULT:
+                message_ordinal += 1
         self._drafts.clear()
         self._order.clear()
         return tuple(result)
@@ -257,7 +307,10 @@ class CanonicalBlockAccumulator:
             return SemanticKind.REASONING, PayloadKind.OPAQUE
         if carrier in {"reasoning", "thinking", "reasoning_content"}:
             return SemanticKind.REASONING, PayloadKind.TEXT
-        return SemanticKind.ASSISTANT_OUTPUT, PayloadKind.TEXT
+        return SemanticKind.ASSISTANT_OUTPUT, (
+            PayloadKind.TEXT if carrier in {"text", "output_text", "refusal"}
+            else PayloadKind.STRUCTURED_CONTENT
+        )
 
 
 __all__ = ["CanonicalBlockAccumulator"]

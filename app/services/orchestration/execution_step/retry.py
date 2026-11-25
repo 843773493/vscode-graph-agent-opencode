@@ -17,6 +17,7 @@ from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.mapping.itemized.content_blocks import has_assistant_output
 from app.services.orchestration.event_stream.contracts import (
     AgentEventSource,
     AgentEventStreamResult,
@@ -82,6 +83,10 @@ class StepAgentRetryResult:
     successful_tool_calls: tuple[Any, ...]
     completed_custom_tool_names: tuple[str, ...]
     stream_result: AgentEventStreamResult
+
+    @property
+    def has_final_output(self) -> bool:
+        return bool(self.final_text) or has_assistant_output(self.latest_model_content_blocks)
 
 
 async def run_agent_with_retries(
@@ -192,6 +197,7 @@ async def run_agent_with_retries(
                 len(stream_result.final_text),
             )
         latest_model_content_blocks = stream_result.latest_model_content_blocks
+        has_final_output = bool(final_text) or has_assistant_output(latest_model_content_blocks)
         missing_custom_tool_names = (
             requested_custom_tool_names - completed_custom_tool_names
         )
@@ -211,7 +217,7 @@ async def run_agent_with_retries(
             )
         )
         validation_succeeded = bool(
-            final_text
+            has_final_output
             and not missing_custom_tool_names
             and not missing_delegated_report
             and not missing_session_question_reply
@@ -223,7 +229,7 @@ async def run_agent_with_retries(
         if validation_succeeded:
             break
         await message_stream_runtime.retrying("AgentLoop 最终业务校验未通过")
-        if final_text and missing_custom_tool_names:
+        if has_final_output and missing_custom_tool_names:
             custom_tool_response_retries += 1
             if custom_tool_response_retries > CUSTOM_TOOL_RESPONSE_RETRY_LIMIT:
                 raise RuntimeError(
@@ -264,7 +270,7 @@ async def run_agent_with_retries(
             next_input_messages = []
             continue
 
-        if final_text and missing_delegated_report:
+        if has_final_output and missing_delegated_report:
             delegated_report_retries += 1
             if delegated_report_retries > DELEGATED_REPORT_RETRY_LIMIT:
                 raise RuntimeError(
@@ -301,7 +307,7 @@ async def run_agent_with_retries(
             next_input_messages = []
             continue
 
-        if final_text and missing_session_question_reply:
+        if has_final_output and missing_session_question_reply:
             if question_source is None:
                 raise RuntimeError("跨会话回复缺少受信 source 地址")
             question_target_ref = session_resource_uri(question_source.workspace_id, question_source.session_id)

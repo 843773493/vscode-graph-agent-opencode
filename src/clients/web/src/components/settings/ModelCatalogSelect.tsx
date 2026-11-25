@@ -4,6 +4,7 @@ import { listLlmCatalog, listLlmProviders } from '../../api/configSources.js';
 import type { GatewayWorkspaceRequestTarget } from '../../api/workspaceIdentity.js';
 import AnchoredOverlay from '../overlays/AnchoredOverlay.js';
 import { modelMetadataDetails } from './modelMetadata.js';
+import { errorSummary } from '../../utils/errorMessage.js';
 
 export interface CatalogChoice {
   id: string;
@@ -19,7 +20,7 @@ export function ModelCatalogSelect({ kind, provider, target, signal, disabled, c
   disabled: boolean; custom?: boolean; needsConnection?: boolean; onSelect: (choice: CatalogChoice) => void;
 }) {
   const [choices, setChoices] = useState<CatalogChoice[]>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<unknown>();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -42,7 +43,7 @@ export function ModelCatalogSelect({ kind, provider, target, signal, disabled, c
         detail: modelMetadataDetails(item.metadata),
       }))) : Promise.resolve([]);
     request.then(items => { if (!requestSignal.aborted) setChoices(items); }, cause => {
-      if (!requestSignal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
+      if (!requestSignal.aborted) setError(cause);
     });
     return () => controller.abort();
   }, [kind, kind === 'model' ? provider : '', target.gateway_id, target.workspace_id, target.gateway_connection_id, signal]);
@@ -90,7 +91,7 @@ export function ModelCatalogSelect({ kind, provider, target, signal, disabled, c
         </div>
       </div>
     </AnchoredOverlay>
-    {error ? <small role="alert">{error}</small> : null}
+    {error ? <small className="failure-summary" role="alert">{errorSummary(error)}</small> : null}
     {current && kind === 'provider' && !current.endpoint && needsConnection ? <small>{t('configuration.catalog.manualConnection')}</small> : null}
   </span>;
 }

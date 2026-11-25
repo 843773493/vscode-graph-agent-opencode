@@ -220,7 +220,7 @@ class DetailRegistryMixin(DetailRetentionMixin):
         """唯一 manifest writer；不初始化、不另开 connection、不提交事务。"""
         if not connection.in_transaction:
             raise RuntimeError("detail manifest 登记需要调用方的活动事务")
-        self._storage._require_v2_runtime(connection)
+        self._storage._require_current_rollout_format(connection)
         if not isinstance(detail, DetailRecord):
             raise TypeError("detail registry 只接受完整 DetailRecord")
         ref = detail.detail_ref
@@ -276,7 +276,7 @@ class DetailRegistryMixin(DetailRetentionMixin):
         with self._storage.read_connection(
             session_id, thread_id, checkpoint_ns, snapshot=snapshot,
         ) as connection:
-            self._storage._require_v2_runtime(connection)
+            self._storage._require_current_rollout_format(connection)
             require_historical_scope(
                 connection, detail_ref.session_id, detail_ref.thread_id,
                 current_owner=(session_id, thread_id),

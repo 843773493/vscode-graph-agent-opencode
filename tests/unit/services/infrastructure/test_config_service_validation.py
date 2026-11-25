@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
 
 import jsonschema
 import pytest
@@ -10,6 +9,10 @@ import pytest
 import app.services.infrastructure.config_service.config_source_layers as source_layers
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from configs.installer import (
+    install_user_configuration,
+    install_workspace_configuration,
+)
 from configs.runtime import read_jsonc_object
 
 
@@ -19,6 +22,7 @@ def validation_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     inline.write_bytes(Path("configs/workspace_inline.jsonc").read_bytes())
     schema = tmp_path / "workspace_schema.jsonc"
     schema.write_bytes(Path("configs/workspace_schema.jsonc").read_bytes())
+    install_user_configuration(config_root=tmp_path, profile="default")
     monkeypatch.setattr(source_layers, "get_user_workspace_schema_path", lambda: tmp_path / "absent.jsonc")
     return inline, schema, tmp_path
 
@@ -27,17 +31,17 @@ def _service_with_model_api_mode(
     validation_files,
     *,
     provider_api_mode: dict[str, object],
-    model_overrides: dict[str, object] | None = None,
+    model_settings: dict[str, object] | None = None,
 ) -> ConfigService:
     inline, _schema, directory = validation_files
     config = read_jsonc_object(inline)
-    providers = cast(dict[str, dict[str, object]], cast(dict[str, object], config["llm"])["providers"])
-    primary = providers["primary"]
-    defaults = cast(dict[str, object], primary["defaults"])
-    defaults["api_mode"] = provider_api_mode
-    if model_overrides is not None:
-        models = cast(dict[str, dict[str, object]], primary["models"])
-        models["default"]["overrides"] = model_overrides
+    options = config["profiles"]["provider.primary"]["settings"]["model_options"]
+    options["api_mode"] = provider_api_mode
+    if model_settings is not None:
+        config["profiles"]["model.primary.default"] = {
+            "extends": "context:provider/primary", "settings": {"model_options": model_settings},
+        }
+        config["settings"]["workspace"]["llm"]["providers"]["primary"]["models"]["default"]["config_ref"] = "#/profiles/model.primary.default"
     inline.write_text(json.dumps(config), encoding="utf-8")
     return ConfigService(
         config_dir=directory,
@@ -57,12 +61,20 @@ def test_candidate_preserves_source_schema_precedence(
     user_schema = directory / "user_schema.jsonc"
     user_schema.write_bytes(schema.read_bytes())
     user = directory / "workspace.jsonc"
-    user_text = json.dumps({"$schema": schema_reference})
+    user_text = json.dumps({
+        "$schema": schema_reference, "config_version": 4,
+        "extends": "builtin:workspace", "settings": {},
+    })
     user.write_text(user_text)
-    # local 层的合并结果不能取代 user／inline 原始来源的 schema 选择。
-    (directory / "workspace_local.jsonc").write_text(json.dumps({"$schema": "local_schema.jsonc"}))
+    # 子节点的 schema 引用不取代当前 Workspace owner 的 schema 选择。
+    (directory / "workspace_local.jsonc").write_text(json.dumps({
+        "$schema": "local_schema.jsonc", "config_version": 4,
+        "extends": "user:workspace", "settings": {},
+    }))
     (directory / "local_schema.jsonc").write_text(json.dumps({"not": {}}))
     root = directory / "workspace"
+    root.mkdir()
+    install_workspace_configuration(workspace_root=root)
     store = WorkspaceStateStore(workspace_root=root) if stored else None
     try:
         service = ConfigService(
@@ -115,13 +127,15 @@ def test_shadow_schema_validation_rejects_without_echoing_config(validation_file
     service.validate_workspace_config()
     snapshot = service.get_snapshot()
     config = snapshot.to_dict()
-    config["llm"]["providers"]["primary"]["defaults"]["api_mode"]["protocol"] = str(directory / "secret-marker")
+    config["llm"]["providers"]["primary"]["models"]["default"]["model"] = {
+        "secret": str(directory / "secret-marker"),
+    }
     with pytest.raises(ValueError, match="stage=config") as failure:
         service._validate_shadow_config(config)
     assert "secret-marker" not in str(failure.value)
     assert str(directory) not in str(failure.value)
     assert isinstance(failure.value.__cause__, jsonschema.ValidationError)
-    assert failure.value.__cause__.validator == "enum"
+    assert failure.value.__cause__.validator == "type"
     assert service.get_snapshot() is snapshot
 
 
@@ -133,7 +147,7 @@ def test_config_admission_resolves_model_protocol_override(validation_files) -> 
             "model_info": {"supports_reasoning": True},
             "supports_reasoning": {"reasoning_content": True},
         },
-        model_overrides={
+        model_settings={
             "custom_llm_provider": "anthropic",
             "api_mode": {
                 "protocol": "anthropic_messages",

@@ -7,6 +7,7 @@ import threading
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, TypeAlias
 from unittest.mock import AsyncMock
 
@@ -1221,7 +1222,10 @@ async def test_tool_message_completion_stays_persisted_through_interrupt_and_reo
         turn_id=turn_id,
     )
     canonical_item_sink = AsyncMock()
-    tool_result_sink = AsyncMock()
+    tool_result_sink = AsyncMock(wraps=lambda completion: SimpleNamespace(
+        tool_execution=completion.tool_execution,
+        payload={"content": completion.content, "tool_outcome": completion.tool_outcome},
+    ))
     runtime = MessageStreamRuntime(
         writer,
         canonical_item_sink=canonical_item_sink,
@@ -1374,7 +1378,10 @@ async def test_tool_completion_writer_failure_reuses_original_completion(
         turn_id=turn_id,
     )
     canonical_item_sink = AsyncMock()
-    tool_result_sink = AsyncMock()
+    tool_result_sink = AsyncMock(wraps=lambda completion: SimpleNamespace(
+        tool_execution=completion.tool_execution,
+        payload={"content": completion.content, "tool_outcome": completion.tool_outcome},
+    ))
     runtime = MessageStreamRuntime(
         writer,
         canonical_item_sink=canonical_item_sink,
@@ -1396,17 +1403,23 @@ async def test_tool_completion_writer_failure_reuses_original_completion(
             ],
         )
     )
-    if completion_path == "pending_tool_message":
-        call_id = runtime._tool_call_order[-1]
-    else:
-        call_id = runtime.claim_tool_call_id(model_call_id, provider_call_id)
+    call_id = runtime._tool_call_order[-1]
     tool_execution_id = "exec_tool_completion"
-    if completion_path != "pending_tool_message":
+
+    async def start_attempt() -> None:
+        runtime.register_tool_start(model_call_id, provider_call_id, tool_execution_id)
+        binding = await runtime.tool_binding_for_callback(tool_execution_id)
+        assert binding.tool_call_id == call_id
         await runtime.start_tool(
             tool_execution_id=tool_execution_id,
             tool_call_id=call_id,
             tool_name="read_file",
+            started_at=binding.started_at,
         )
+        runtime.observe_tool_completion(tool_execution_id)
+
+    if completion_path != "pending_tool_message":
+        await start_attempt()
 
     async def complete() -> None:
         if completion_path in {"tool_message", "pending_tool_message"}:
@@ -1471,15 +1484,7 @@ async def test_tool_completion_writer_failure_reuses_original_completion(
         completing = asyncio.create_task(complete())
         await asyncio.sleep(0)
         assert not completing.done()
-        claimed_call_id = runtime.claim_tool_call_id(
-            model_call_id, provider_call_id,
-        )
-        assert claimed_call_id == call_id
-        await runtime.start_tool(
-            tool_execution_id=tool_execution_id,
-            tool_call_id=claimed_call_id,
-            tool_name="read_file",
-        )
+        await start_attempt()
         with pytest.raises(RuntimeError, match=f"injected {failure_stage}") as error_info:
             await completing
     else:
@@ -1488,7 +1493,10 @@ async def test_tool_completion_writer_failure_reuses_original_completion(
     assert error_info.value is injected_error
 
     pending = runtime._pending_tool_completions[tool_execution_id]
-    assert runtime._active_tool_executions[tool_execution_id] == (call_id, "read_file")
+    active = runtime._active_tool_executions[tool_execution_id]
+    assert (active.tool_call_id, active.tool_name) == (call_id, "read_file")
+    assert active.evidence is not None
+    assert active.evidence.execution_completed_at is not None
     assert tool_execution_id not in runtime._completed_tool_execution_ids
     assert pending.payload["result"] == "README 原始内容"
     if failure_stage == "before_append":

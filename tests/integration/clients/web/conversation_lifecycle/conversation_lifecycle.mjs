@@ -10,7 +10,7 @@ import { beginForkOperationDeadline, beginForkSubmissionDeadline, bindForkOperat
   assertForkDeadlineCloseSemanticsForTest, closeForkDeadlineWatchdog, planGoldenLoop, planChatCalls, testControl,
   uuidText, waitForForkOperation } from "../../../../support/e2e_control/browser_client.mjs";
 import { expectedTypedInternalHistoryMembership } from "./generated_internal_history_oracle.mjs";
-import { expectedForkPrefixParts, freezeForkCanonicalItems } from "./fork_history_oracle.mjs";
+import { expectedForkPrefixItems, freezeForkCanonicalItems } from "./fork_history_oracle.mjs";
 import { readDiagnosticResponseBody, runDiagnosticResponseLifetimeSelfTest } from "./diagnostic_response_bodies.mjs";
 import { WORKBENCH_LIFECYCLE_MARKER, classifyNativeShutdownLogs, observeNativeShutdown, originalConsoleLocation,
   runNativeShutdownClassifierSelfTest } from "./native_shutdown.mjs";
@@ -1810,7 +1810,7 @@ function expectedActivityPreview(durationMs, itemCount, boundary = null) {
 
 function expectedTurnBoundary(turn) {
   const states = [
-    [turn.response_parts.some((part) => part.partial && part.completion_reason === "user_interrupt"), "user-interrupted", "已由用户中断"],
+    [turn.response_items.some((part) => part.partial && part.completion_reason === "user_interrupt"), "user-interrupted", "已由用户中断"],
     [turn.status === "cancelled", "cancelled", "任务已取消"],
     [turn.status === "failed", "turn-failed", "本轮执行失败"],
     [turn.status === "timed_out", "turn-timed-out", "本轮执行超时"],
@@ -2082,22 +2082,20 @@ async function loadPersistedEvidence(owner) {
   }
   const historyTurns = history?.data?.items ?? [];
   const canonicalActivity = historyTurns.map((turn) => {
-    const parts = (turn.response_parts ?? []).filter((part) => part.kind !== "final_text");
-    assert.equal(parts.length, turn.activity_stats?.item_count, "history Item 数量与 response_parts 不一致");
+    const parts = (turn.response_items ?? []).filter((part) => part.kind !== "final_text");
+    assert.equal(parts.length, turn.activity_stats?.item_count, "history Item 数量与 response_items 不一致");
     assert.ok(parts.every((part) => typeof part.source?.item_id === "string"));
     assert.ok(parts.every((part) => Number.isInteger(part.source?.item_sequence)));
-    assert.ok(parts.every((part) => Number.isInteger(part.source?.part_ordinal)));
     assert.ok(parts.every((part) => Number.isInteger(part.source?.logical_item_ordinal)));
     assert.ok(parts.every((part) => typeof part.source?.created_at === "string"));
     assert.ok(parts.every((part) => Number.isInteger(part.source?.elapsed_ms)));
     const coordinates = parts.map((part) => [
       part.source.logical_item_ordinal,
-      part.source.part_ordinal,
     ]);
     assert.deepEqual(
       coordinates,
       [...coordinates].sort((left, right) => left[0] - right[0] || left[1] - right[1]),
-      "history response_parts 未使用后端 canonical 顺序",
+      "history response_items 未使用后端 canonical 顺序",
     );
     return {
       turnId: turn.turn_id,
@@ -2139,14 +2137,14 @@ function assertBoundToolResult(owner, sent, turn, modelCallId, providerCallId, t
   assert.deepEqual([turn.session_id, turn.job_id, turn.turn_id], [owner.sessionId, sent.jobId, sent.turnId]);
   assert.equal(sent.accepted.thread_id, owner.threadId);
   const toolCallId = `${modelCallId}:tool-call:${providerCallId}`;
-  const calls = turn.response_parts.filter((part) => part.kind === "tool_call" && part.tool_call_id === toolCallId);
-  const results = turn.response_parts.filter((part) => part.kind === "tool_result" && part.tool_call_id === toolCallId);
+  const calls = turn.response_items.filter((part) => part.kind === "tool_call" && part.tool_call_id === toolCallId);
+  const results = turn.response_items.filter((part) => part.kind === "tool_result" && part.tool_call_id === toolCallId);
   assert.equal(calls.length, 1, "原 emitting ModelCall/raw ToolCall 必须只有一个可见调用");
   assert.equal(results.length, 1, "原 emitting ModelCall/raw ToolCall 必须只有一个可见结果");
   for (const part of [...calls, ...results]) {
     assert.equal(part.tool_name, toolName);
     assert.ok(part.source.item_id, "拒绝事实必须绑定真实 canonical Item");
-    assert.equal(part.part_id, `${part.source.item_id}:part:${part.source.part_ordinal}`);
+    assert.equal(part.id, part.source.item_id);
   }
   assert.ok(calls[0].source.logical_item_ordinal < results[0].source.logical_item_ordinal);
   assert.equal(results[0].truncated, false);
@@ -2306,11 +2304,11 @@ function mergeThreadHistoryPages(pages) {
     for (const execution of page.internal_executions) {
       let merged = internals.get(execution.execution_id);
       if (!merged) {
-        merged = { ...execution, display_parts: [], response_parts: [] };
+        merged = { ...execution, display_items: [], response_items: [] };
         internals.set(execution.execution_id, merged);
       }
       assert.equal(merged.job_id, execution.job_id);
-      for (const [field, identity] of [["display_parts", "item_id"], ["response_parts", "part_id"]]) {
+      for (const [field, identity] of [["display_items", "item_id"], ["response_items", "id"]]) {
         for (const part of execution[field]) {
           assert.ok(!merged[field].some((previous) => previous[identity] === part[identity]), "composite 续读不得重影 canonical 成员");
           merged[field].push(part);
@@ -2319,8 +2317,8 @@ function mergeThreadHistoryPages(pages) {
     }
   }
   for (const execution of internals.values()) {
-    execution.display_parts.sort((left, right) => left.logical_item_ordinal - right.logical_item_ordinal);
-    execution.response_parts.sort((left, right) => left.source.logical_item_ordinal - right.source.logical_item_ordinal || left.source.part_ordinal - right.source.part_ordinal);
+    execution.display_items.sort((left, right) => left.logical_item_ordinal - right.logical_item_ordinal);
+    execution.response_items.sort((left, right) => left.source.logical_item_ordinal - right.source.logical_item_ordinal);
   }
   return { ...pages[0], items: [...turns.values()].sort((left, right) => left.root_logical_item_ordinal - right.root_logical_item_ordinal),
     internal_executions: [...internals.values()], has_more: false, next_cursor: null };
@@ -2420,18 +2418,18 @@ async function assertAcceptedTurn(owner, sent) {
 function partCoordinate(part) {
   const source = part.source;
   assert.equal(typeof source?.item_id, "string");
-  for (const key of ["item_sequence", "logical_item_ordinal", "part_ordinal", "elapsed_ms"]) assert.ok(Number.isInteger(source[key]), `${part.part_id} 缺少 ${key}`);
+  for (const key of ["item_sequence", "logical_item_ordinal", "elapsed_ms"]) assert.ok(Number.isInteger(source[key]), `${part.id} 缺少 ${key}`);
   assert.equal(typeof source.created_at, "string");
-  return { part_id: part.part_id, kind: part.kind, item_id: source.item_id,
+  return { id: part.id, kind: part.kind, item_id: source.item_id,
     item_sequence: source.item_sequence, logical_item_ordinal: source.logical_item_ordinal,
-    part_ordinal: source.part_ordinal, created_at: source.created_at, elapsed_ms: source.elapsed_ms };
+    created_at: source.created_at, elapsed_ms: source.elapsed_ms };
 }
 
 function expectedTranscript(history) {
   return [
     ...history.items.map((turn) => ({ kind: "turn", ordinal: turn.root_logical_item_ordinal,
       turnOrdinal: turn.ordinal, turnId: turn.turn_id })),
-    ...history.internal_executions.flatMap((execution) => execution.display_parts.map((part) => ({ kind: "internal", ordinal: part.logical_item_ordinal, text: part.text }))),
+    ...history.internal_executions.flatMap((execution) => execution.display_items.map((part) => ({ kind: "internal", ordinal: part.logical_item_ordinal, text: part.text }))),
   ].sort((left, right) => left.ordinal - right.ordinal);
 }
 
@@ -2768,10 +2766,10 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
     phase = "Turn article visibility and root identity";
     // 校准会重建同一 Turn 的 DOM；沿用原60秒预算等待完整 owner／root 身份，不能只等实时壳出现。
     await assertVisibleTurn(owner, turn, 60_000);
-    expected = turn.response_parts.map(partCoordinate);
-    const logical = expected.map((part) => [part.logical_item_ordinal, part.part_ordinal]);
+    expected = turn.response_items.map(partCoordinate);
+    const logical = expected.map((part) => [part.logical_item_ordinal]);
     assert.deepEqual(logical, [...logical].sort((left, right) => left[0] - right[0] || left[1] - right[1]), `${stage}: history 必须按 view logical ordinal 排序`);
-    assert.equal(new Set(expected.map((part) => part.part_id)).size, expected.length);
+    assert.equal(new Set(expected.map((part) => part.id)).size, expected.length);
     const activity = article.locator(".chat-thinking");
     await activity.waitFor({ state: "visible" });
     phase = "backend activity statistics";
@@ -2832,14 +2830,13 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
       const coordinate = (part) => {
         const source = part?.source ?? part;
         const text = (value) => typeof value === "string" ? value.slice(0, 160) : null;
-        const strings = [part?.part_id, part?.kind, source?.item_id, source?.created_at];
+        const strings = [part?.id, part?.kind, source?.item_id, source?.created_at];
         return {
-          part_id: text(part?.part_id),
+          id: text(part?.id),
           kind: text(part?.kind),
           item_id: text(source?.item_id),
           item_sequence: source?.item_sequence ?? null,
           logical_item_ordinal: source?.logical_item_ordinal ?? null,
-          part_ordinal: source?.part_ordinal ?? null,
           created_at: text(source?.created_at),
           elapsed_ms: source?.elapsed_ms ?? null,
           coordinateValuesTruncated: strings.some((value) => typeof value === "string" && value.length > 160),
@@ -2869,7 +2866,7 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
         child: Boolean(owner.child),
         url: owner.page.url().slice(0, 512),
       },
-      expected: summarize(expected.length > 0 ? expected : turn.response_parts ?? []),
+      expected: summarize(expected.length > 0 ? expected : turn.response_items ?? []),
     };
     failure.actual = latestActual === null
       ? { count: null, countKnown: false, coordinates: [], coordinatesAvailable: false }
@@ -2911,12 +2908,12 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
         let inspectedAttributeBytes = 0;
         let totalParts = 0;
         let totalPartsKnown = Boolean(article);
-        let responsePartsTruncated = false;
+        let responseItemsTruncated = false;
         const sourceNodeCount = responseSourceNodes?.length ?? null;
         const sampledSourceNodeCount = Math.min(sourceNodeCount ?? 0, responseSourceNodeLimit);
         if (sourceNodeCount !== null && sourceNodeCount > responseSourceNodeLimit) {
           totalPartsKnown = false;
-          responsePartsTruncated = true;
+          responseItemsTruncated = true;
         }
         for (let nodeIndex = 0; nodeIndex < sampledSourceNodeCount; nodeIndex += 1) {
           const raw = responseSourceNodes[nodeIndex].getAttribute("data-response-sources");
@@ -2934,7 +2931,7 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
           }
           if (raw === null || attributeByteLimitExceeded || aggregateAttributeByteLimitExceeded) {
             totalPartsKnown = false;
-            responsePartsTruncated = true;
+            responseItemsTruncated = true;
           } else {
             inspectedAttributeBytes += attributeBytes;
             try {
@@ -2944,22 +2941,22 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
               partCountKnown = true;
               totalParts += parts.length;
               const sampleCount = Math.min(parts.length, partSampleLimit - responsePartCoordinates.length);
-              if (parts.length > sampleCount) responsePartsTruncated = true;
+              if (parts.length > sampleCount) responseItemsTruncated = true;
               for (let partIndex = 0; partIndex < sampleCount; partIndex += 1) {
                 const part = parts[partIndex];
                 const source = part?.source ?? part;
-                const strings = [part?.part_id, part?.kind, source?.item_id, source?.created_at];
+                const strings = [part?.id, part?.kind, source?.item_id, source?.created_at];
                 const clipped = (value) => typeof value === "string" ? value.slice(0, coordinateTextLimit) : null;
                 responsePartCoordinates.push({ nodeIndex, partIndex,
-                  part_id: clipped(part?.part_id), kind: clipped(part?.kind), item_id: clipped(source?.item_id),
+                  id: clipped(part?.id), kind: clipped(part?.kind), item_id: clipped(source?.item_id),
                   item_sequence: source?.item_sequence ?? null, logical_item_ordinal: source?.logical_item_ordinal ?? null,
-                  part_ordinal: source?.part_ordinal ?? null, created_at: clipped(source?.created_at),
+                  created_at: clipped(source?.created_at),
                   elapsed_ms: source?.elapsed_ms ?? null,
                   coordinateValuesTruncated: strings.some((value) => typeof value === "string" && value.length > coordinateTextLimit) });
               }
             } catch (error) {
               totalPartsKnown = false;
-              responsePartsTruncated = true;
+              responseItemsTruncated = true;
               parseError = String(error).slice(0, 160);
             }
           }
@@ -3019,7 +3016,7 @@ async function assertTurnDom(owner, turn, stage, history, timing = null,
             totalPartCountKnown: totalPartsKnown,
             sampledPartCount: responsePartCoordinates.length,
             partSampleLimit,
-            partsTruncated: responsePartsTruncated,
+            partsTruncated: responseItemsTruncated,
             coordinates: responsePartCoordinates,
           },
         };
@@ -3039,22 +3036,22 @@ async function assertInternalHistory(owner, history, stage) {
   for (const execution of history.internal_executions) {
     assertInternalExecutionOwner(execution, owner);
     assert.ok(!history.items.some((turn) => turn.job_id === execution.job_id), "internal execution 不得伪造用户 Turn");
-    const parts = execution.response_parts.map(partCoordinate);
-    assert.deepEqual(parts.map((part) => [part.logical_item_ordinal, part.part_ordinal]),
-      parts.map((part) => [part.logical_item_ordinal, part.part_ordinal]).sort((left, right) => left[0] - right[0] || left[1] - right[1]));
+    const parts = execution.response_items.map(partCoordinate);
+    assert.deepEqual(parts.map((part) => [part.logical_item_ordinal]),
+      parts.map((part) => [part.logical_item_ordinal]).sort((left, right) => left[0] - right[0] || left[1] - right[1]));
     if (owner.child) {
       const surface = await openOwnerThreads(owner);
       await surface.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-report-link`).click();
       const report = surface.locator(`.child-thread-conversation[data-thread-id="${owner.threadId}"] .child-thread-report[data-execution-id="${execution.execution_id}"]`);
       await report.waitFor({ state: "visible" });
-      for (const part of execution.response_parts.filter((entry) => entry.kind === "text" || entry.kind === "final_text")) {
+      for (const part of execution.response_items.filter((entry) => entry.kind === "text" || entry.kind === "final_text")) {
         if (part.text) {
           const rendered = await report.locator(".chat-markdown").allTextContents();
           assert.ok(rendered.some((text) => text.includes(part.text)), `${stage}: internal report 正文丢失: ${JSON.stringify({ expected: part.text, rendered })}`);
         }
       }
     }
-    facts.push({ executionId: execution.execution_id, jobId: execution.job_id, parts, display: execution.display_parts });
+    facts.push({ executionId: execution.execution_id, jobId: execution.job_id, parts, display: execution.display_items });
   }
   {
     const transcript = expectedTranscript(history);
@@ -3068,7 +3065,7 @@ async function assertInternalHistory(owner, history, stage) {
       assert.ok(!html.includes("data-turn-id"), "安全 internal notice 不能伪造 Turn");
       for (const execution of history.internal_executions) {
         for (const identity of [execution.execution_id, execution.job_id,
-          ...execution.display_parts.flatMap((part) => Object.values(part.provenance).filter((value) => typeof value === "string"))]) {
+          ...execution.display_items.flatMap((part) => Object.values(part.provenance).filter((value) => typeof value === "string"))]) {
           assert.ok(!html.includes(identity), "安全 internal notice DOM 不能暴露内部来源 identity");
         }
       }
@@ -3605,19 +3602,19 @@ async function runObservationDeletion(surfaces) {
           const expectedStatus = operation === "read" ? "completed" : "failed";
           const recovered = await assertRecoveredExecution(source, sent, proof, calls,
             { expectedJobStatus: expectedStatus, expectedExecutionOutcome: expectedStatus, expectedTurnStatus: expectedStatus });
-          const results = recovered.turn.response_parts.filter((part) => part.kind === "tool_result");
+          const results = recovered.turn.response_items.filter((part) => part.kind === "tool_result");
           assert.equal(results.length, 1, "同 source call 的新授权重放只提交一份 ToolResult");
           const result = assertBoundToolResult(source, sent, recovered.turn, calls[0], label,
             operation === "read" ? "invoke_extension_tool" : "wait_for_session");
           assert.equal(result.result, operation === "read" ? "target-deleted"
             : `工具执行失败: tool=wait_for_session, call_id=${label}: stage=tool-execution, error=RemoteObservationError`);
           if (operation === "read") {
-            assert.deepEqual(recovered.turn.response_parts.filter((part) => part.kind === "final_text").map((part) => part.text),
+            assert.deepEqual(recovered.turn.response_items.filter((part) => part.kind === "final_text").map((part) => part.text),
               ["目标寻址已拒绝，没有建立新观察。"]);
             await assertToolResultContinuation(source, calls, label, result);
           } else {
             assert.equal(recovered.job.error_message, "target-deleted");
-            assert.equal(recovered.turn.response_parts.filter((part) => part.kind === "final_text").length, 0);
+            assert.equal(recovered.turn.response_items.filter((part) => part.kind === "final_text").length, 0);
           }
           assert.deepEqual(await observationPage(source, sourceCallId, "source"), saved);
           assert.deepEqual(await readDeletedControl(target, deletion,
@@ -3631,7 +3628,7 @@ async function runObservationDeletion(surfaces) {
           await waitForPlannedExecutions(source, calls, expectedExecutionOutcome);
           const displayed = await verifyOwnerTurns(source);
           const turn = (await loadThreadHistory(source, { turn_ids: [sent.turnId] })).items[0];
-          assert.equal(turn.response_parts.filter((part) => part.kind === "tool_result").length, 1);
+          assert.equal(turn.response_items.filter((part) => part.kind === "tool_result").length, 1);
           const result = assertBoundToolResult(source, sent, turn, calls[0], label,
             operation === "read" ? "invoke_extension_tool" : "wait_for_session");
           const discoveryRejection = await assertDiscoveryRejection(source, sent, result, target.sessionId,
@@ -3639,12 +3636,12 @@ async function runObservationDeletion(surfaces) {
           assert.equal(turn.status, expectedTurnStatus);
           let continuation;
           if (operation === "read") {
-            assert.deepEqual(turn.response_parts.filter((part) => part.kind === "final_text").map((part) => part.text),
+            assert.deepEqual(turn.response_items.filter((part) => part.kind === "final_text").map((part) => part.text),
               ["目标寻址已拒绝，没有建立新观察。"]);
             continuation = await assertToolResultContinuation(source, calls, label, result);
           } else {
             assert.equal(job.error_message, discoveryRejection.message, "builtin wait 沿原访问异常结束，不能由后继 Provider 错误代替");
-            assert.equal(turn.response_parts.filter((part) => part.kind === "final_text").length, 0);
+            assert.equal(turn.response_items.filter((part) => part.kind === "final_text").length, 0);
             const emitted = await readRollout(source,
               "SELECT model_call_id FROM model_calls WHERE execution_id=(SELECT execution_id FROM model_calls WHERE model_call_id=?) ORDER BY attempt", [calls[0]]);
             assert.deepEqual(emitted.map((row) => row.model_call_id), calls, "终止的 builtin wait 不得重发或发起后继调用");
@@ -3958,7 +3955,7 @@ async function runLifecycleAdmissionDeletion(surfaces) {
       const history = (await loadThreadHistory(source, { turn_ids: [sent.turnId] })).items[0];
       assert.equal(history.status, expectedTurnStatus);
       const sourceEvidence = await verifyOwnerTurns(source);
-      const results = history.response_parts.filter((part) => part.kind === "tool_result");
+      const results = history.response_items.filter((part) => part.kind === "tool_result");
       assert.equal(results.length, 1, "同一通信调用只能提交一个 ToolResult");
       const after = await readDeletedControl(target, deletion.operation, "SELECT * FROM communication_inbox WHERE communication_id=?", [communicationId]);
       const afterRollout = await deletedRolloutCounts(target, deletion.operation, node);
@@ -3970,7 +3967,7 @@ async function runLifecycleAdmissionDeletion(surfaces) {
         const result = assertBoundToolResult(source, sent, history, calls[0], label, "send_message_to_session");
         discoveryRejection = await assertDiscoveryRejection(source, sent, result, target.sessionId, label);
         assert.equal(job.error_message, discoveryRejection.message, "builtin send 必须保留原 discovery owner 异常");
-        assert.equal(history.response_parts.filter((part) => part.kind === "final_text").length, 0);
+        assert.equal(history.response_items.filter((part) => part.kind === "final_text").length, 0);
         const emitted = await readRollout(source,
           "SELECT model_call_id FROM model_calls WHERE execution_id=(SELECT execution_id FROM model_calls WHERE model_call_id=?) ORDER BY attempt", [calls[0]]);
         assert.deepEqual(emitted.map((row) => row.model_call_id), calls, "终止的 builtin send 不得重发或发起后继调用");
@@ -5942,13 +5939,13 @@ async function forkHistoryEvidence(owner) {
     const root = roots.find((row) => row.turn_id === turn.turn_id);
     assert.ok(root, "fork 源/目标 Turn 必须有本地显式 root membership");
     assert.equal(root.logical_item_ordinal, turn.root_logical_item_ordinal);
-    for (const part of turn.response_parts) {
+    for (const part of turn.response_items) {
       const row = byItem.get(part.source.item_id);
       assert.ok(row, "fork history part 必须属于本地冻结 view");
       assert.deepEqual([row.turn_id, row.item_sequence, row.logical_item_ordinal, row.created_at.replace(/\+00:00$/, "Z")],
         [turn.turn_id, part.source.item_sequence, part.source.logical_item_ordinal, part.source.created_at.replace(/\+00:00$/, "Z")]);
     }
-    const activity = turn.response_parts.filter((part) => part.kind !== "final_text");
+    const activity = turn.response_items.filter((part) => part.kind !== "final_text");
     assert.equal(activity.length, turn.activity_stats.item_count);
     const itemSequences = activity.map((part) => part.source.item_sequence);
     assert.equal(turn.activity_stats.first_item_sequence, itemSequences.length ? Math.min(...itemSequences) : null);
@@ -6341,19 +6338,19 @@ async function publishedForkOwner(source, request, fork, sourceEvidence, targetS
     const rootSelected = selectedIds.has(sourceEvidence.turns.find((row) => row.turn_id === original.turn_id).root_input_item_id);
     assert.deepEqual(copied.user_messages.map((message) => message.content), rootSelected
       ? original.user_messages.map((message) => message.content) : []);
-    const selectedParts = request.mode === "full_rollout_copy" ? original.response_parts
-      : expectedForkPrefixParts(sourceEvidence.canonicalItems, selectedMembers,
+    const selectedParts = request.mode === "full_rollout_copy" ? original.response_items
+      : expectedForkPrefixItems(sourceEvidence.canonicalItems, selectedMembers,
         sourceEvidence.turns.find(row => row.turn_id === copied.turn_id));
-    assert.deepEqual(copied.response_parts.map((part) => [part.part_id, part.kind, part.text ?? part.result ?? part.tool_name]),
-      selectedParts.map((part) => [part.part_id, part.kind, part.text ?? part.result ?? part.tool_name]));
+    assert.deepEqual(copied.response_items.map((part) => [part.id, part.kind, part.text ?? part.result ?? part.tool_name]),
+      selectedParts.map((part) => [part.id, part.kind, part.text ?? part.result ?? part.tool_name]));
     const tools = parts => parts.filter(part => ["tool_call", "tool_result"].includes(part.kind))
       .map(part => [part.kind, part.tool_call_id,
         typeof part.arguments === "string" ? JSON.parse(part.arguments) : part.arguments ?? null, part.result ?? null]);
-    assert.deepEqual(tools(copied.response_parts), tools(selectedParts), "fork 工具调用身份、参数与完整结果必须来自选中原件");
+    assert.deepEqual(tools(copied.response_items), tools(selectedParts), "fork 工具调用身份、参数与完整结果必须来自选中原件");
     if (request.mode === "full_rollout_copy") assert.deepEqual(copied.activity_stats, original.activity_stats);
-    assert.deepEqual(copied.response_parts.map((part) => [part.source.item_id, part.source.part_ordinal, part.source.created_at, part.source.elapsed_ms]),
-      selectedParts.map((part) => [part.source.item_id, part.source.part_ordinal, part.source.created_at, part.source.elapsed_ms]));
-    for (const part of copied.response_parts) {
+    assert.deepEqual(copied.response_items.map((part) => [part.source.item_id, part.source.created_at, part.source.elapsed_ms]),
+      selectedParts.map((part) => [part.source.item_id, part.source.created_at, part.source.elapsed_ms]));
+    for (const part of copied.response_items) {
       assert.equal(targetMembers.get(part.source.item_id).created_at,
         sourceMembers.get(part.source.item_id).created_at, "fork canonical 创建时间必须逐字保留源端值");
     }
@@ -6601,7 +6598,7 @@ async function runDefaultChildForkUi(surface) {
     target_uri: attachment.file_id, reason: null }], "同会话默认 child 必须发布 main 已保活附件的复用结果");
   const coldHistory = published.targetHistory;
   assert.deepEqual(coldHistory.items.map((turn) => turn.turn_id), [material.turn.turn_id]);
-  assert.deepEqual(coldHistory.items[0].response_parts, [], "点击用户root只发布可见root，不扩张backing响应");
+  assert.deepEqual(coldHistory.items[0].response_items, [], "点击用户root只发布可见root，不扩张backing响应");
   assert.equal(coldHistory.items[0].status, material.turn.status);
   const displayed = published.displayed;
   assert.deepEqual((await loadCompleteThreadHistory(source)).items, before.history.items, "同会话分支不得改写main历史");
@@ -6617,7 +6614,7 @@ async function runDefaultChildForkUi(surface) {
   assert.equal(childSuccessorTurn.status, "completed");
   assert.deepEqual([childSuccessorTurn.source_view_id, childSuccessorTurn.source_view_revision],
     [childBefore.view.view_id, childBefore.view.history_view_revision], "按钮所属 Turn 必须保留实际展示的冻结快照");
-  const childFinalPart = childSuccessorTurn.response_parts.find((part) => part.kind === "final_text" && part.final);
+  const childFinalPart = childSuccessorTurn.response_items.find((part) => part.kind === "final_text" && part.final);
   assert.ok(childFinalPart && typeof childFinalPart.source.item_id === "string", "后继最终回答必须有可分支的稳定 item 身份");
   assert.equal(childFinalPart.status, "completed", "item 锚点必须来自已闭合最终回答");
   const childTurnElement = childContainer.locator(`.chat-turn[data-turn-id="${childSuccessorTurn.turn_id}"]`);
@@ -7353,7 +7350,7 @@ async function runAttachmentCapabilityBoundary(owner, source, targetFile, source
       { id: "attachment-alias-edit", name: "edit_file", arguments: { file_path: alias, expected_version: `sha256:${"0".repeat(64)}`, old_string: "独占附件事实", new_string: "forbidden rewrite" } },
     ] }, finalResponse(`attachment-capability-boundary-final-${label}`, "同一工作区附件引用均可读，原件写入已明确拒绝。"),
   ]);
-  assert.equal(completed.turn.response_parts.filter((part) => part.kind === "tool_result").length, 5);
+  assert.equal(completed.turn.response_items.filter((part) => part.kind === "tool_result").length, 5);
   const boundaryResult = (callId) => {
     const toolName = callId.endsWith("read") ? "read_file" : callId.endsWith("write") ? "write_file" : "edit_file";
     return String(assertBoundToolResult(owner, completed.sent, completed.turn, completed.calls[0], callId, toolName).result);
@@ -7482,7 +7479,7 @@ async function runCopyAttachmentLifecycle(surface, owners) {
       tool = await completeOwnerTurn(published.owner, `用 read_file 读取本会话附件 ${targetFile}，确认独占事实。`, [
         toolResponse(`copy-attachment-read-${phase}`, "read_file", { path: targetFile }), finalResponse(`copy-attachment-read-final-${phase}`, "副本附件 capability 已实际读取。"),
       ]);
-      const resultPart = tool.turn.response_parts.find((part) => part.kind === "tool_result");
+      const resultPart = tool.turn.response_items.find((part) => part.kind === "tool_result");
       assert.ok(JSON.stringify(resultPart).includes(source.sessionId), "正常工具 capability 必须读到原正文独占事实");
       await assertToolResultContinuation(published.owner, tool.calls, `copy-attachment-read-${phase}`, resultPart);
       capabilityBoundary = await runAttachmentCapabilityBoundary(published.owner, source,
@@ -7734,7 +7731,7 @@ async function runCopyMissingAttachment(surface, owners) {
     finalResponse("optional-compact-final", "旧上下文已经真实压缩，用户历史仍保留附件引用。"),
   ], [], { historyTiming, openBeforeSend: false });
   historyTiming.targetTurnId = compact.turn.turn_id;
-  assert.ok(compact.turn.response_parts.some((part) => part.kind === "compaction_summary"));
+  assert.ok(compact.turn.response_items.some((part) => part.kind === "compaction_summary"));
   const visible = (await ownerApi(earlier, `/api/v1/sessions/${earlier.sessionId}/messages`)).data.items;
   assert.ok(visible.some((message) => message.attachments.some((ref) => ref.file_id === optionalAttachment.file_id)), "压缩不得从完整可见消息中删掉历史附件");
   const before = await forkHistoryEvidence(earlier);
@@ -8379,13 +8376,13 @@ async function runRealCompaction(surface) {
   ]);
   const history = await loadThreadHistory(owner);
   const turn = history.items.at(-1);
-  const summaries = turn.response_parts.filter((part) => part.kind === "compaction_summary");
+  const summaries = turn.response_items.filter((part) => part.kind === "compaction_summary");
   assert.equal(summaries.length, 1, "真实压缩只能添加一个独立 compaction_summary");
   assert.ok(summaries[0].text.includes("read_compaction_history(line_offset=1, limit=200)"),
     "摘要必须指向模型可执行的精确 thread 归档读取工具");
   assert.ok(!summaries[0].text.includes("session-artifacts/") && !summaries[0].text.includes("history.md"),
     "模型与持久 history 摘要不得携带可推导的归档位置");
-  const archiveRead = turn.response_parts.find((part) => part.kind === "tool_result"
+  const archiveRead = turn.response_items.find((part) => part.kind === "tool_result"
     && part.tool_name === "read_compaction_history");
   assert.ok(archiveRead, "模型必须实际调用工具取回归档原文");
   const archiveText = JSON.stringify(archiveRead);
@@ -8399,11 +8396,11 @@ async function runRealCompaction(surface) {
   assert.ok(!compactedMessages.includes("压缩素材 1") && !compactedMessages.includes("第 1 轮已确认 README"),
     "归档读取必须取回已从模型请求移出的中段原文");
   assert.ok(!archiveText.includes("压缩素材 0"), "缓存前缀不得被当作已压缩中段重复归档");
-  const expandable = turn.response_parts.filter((part) => part.kind !== "final_text");
+  const expandable = turn.response_items.filter((part) => part.kind !== "final_text");
   assert.equal(turn.activity_stats.item_count, expandable.length);
   assert.equal(turn.activity_stats.item_count, expandable.filter((part) => part.kind !== "compaction_summary").length + 1);
-  assert.ok(turn.response_parts.some((part) => part.kind === "tool_call" && part.tool_name === "compact_conversation"));
-  assert.ok(turn.response_parts.some((part) => part.kind === "tool_result"));
+  assert.ok(turn.response_items.some((part) => part.kind === "tool_call" && part.tool_name === "compact_conversation"));
+  assert.ok(turn.response_items.some((part) => part.kind === "tool_result"));
   const display = threadSurface(owner).locator(`.chat-turn[data-turn-id="${turn.turn_id}"] details.chat-compaction-summary`);
   assert.equal(await display.count(), 1);
   await display.locator("summary").click();
@@ -8662,7 +8659,7 @@ async function runBackgroundMailboxRecovery(surface) {
     "唯一公开 ToolResult 必须精确关联已提交 canonical identity");
   const history = await verifyOwnerTurns(child);
   const mainHistory = await loadThreadHistory(main);
-  assert.ok(mainHistory.items.every((item) => item.response_parts.every((part) =>
+  assert.ok(mainHistory.items.every((item) => item.response_items.every((part) =>
     !["emit_system_time_messages", "collect_background_messages"].includes(part.tool_name))), "main history 不得混入 child 工具");
   const graphCollected = await graphLifecycle(child);
   assert.equal(graphCollected.compiled.length, graphBefore.compiled.length + 1, "真实消费才重新构建 child graph");
@@ -8912,7 +8909,7 @@ async function runChildFifoAndResidency(surface) {
   assert.equal(graphAdmission(mainGraph, creation.sent.jobId).details.agent_object_id, graphAdmission(mainGraph, siblingCreation.sent.jobId).details.agent_object_id);
   await openOwner(owner);
   const mainHistory = await loadThreadHistory(owner);
-  const reportNotice = mainHistory.internal_executions.flatMap((execution) => execution.display_parts)
+  const reportNotice = mainHistory.internal_executions.flatMap((execution) => execution.display_items)
     .find((part) => part.provenance.source_thread_id === child.threadId);
   assert.ok(reportNotice, "main 必须持有真实 child 汇报来源，不能由测试补造");
   assert.equal(reportNotice.provenance.source_session_id, owner.sessionId);
@@ -9021,7 +9018,7 @@ async function runChildFifoAndResidency(surface) {
     assert.ok(JSON.stringify(successor.request.messages).includes(secondPrompt), "后继 execution 必须消费同一冻结 queued 正文");
   }
   const terminalHistory = await loadThreadHistory(child);
-  const firstParts = terminalHistory.items[0].response_parts.map(partCoordinate);
+  const firstParts = terminalHistory.items[0].response_items.map(partCoordinate);
   const rootRows = await readRollout(child, "SELECT item_sequence FROM item_catalog WHERE turn_id=? AND turn_scope='turn_root'", [terminalHistory.items[1].turn_id]);
   assert.equal(rootRows.length, 1);
   const secondRoot = rootRows[0].item_sequence;
@@ -9343,7 +9340,7 @@ async function runReadRecovery(surfaces, reportOwners) {
   await testControl({ action: "release", operation_id: previousToolCallId, phase: "canonical.tool_result.before_commit" });
   const recovered = await assertRecoveredExecution(source, sent, before, calls,
     { expectedJobStatus: "completed", expectedExecutionOutcome: "completed", expectedTurnStatus: "completed" });
-  const readResults = recovered.turn.response_parts.filter((part) => part.kind === "tool_result");
+  const readResults = recovered.turn.response_items.filter((part) => part.kind === "tool_result");
   assert.equal(readResults.length, pages.length + 1, "每页只提交原 source call 的一个 ToolResult");
   assert.ok(readResults.every((part) => !String(part.result).includes("冻结之后的新素材")));
   const { sourceCallId: nextCallId, page: secondPage } = pages[0];
@@ -9367,7 +9364,7 @@ async function runReadRecovery(surfaces, reportOwners) {
       toolResponse(label, "invoke_extension_tool", { tool_name: "read_context", arguments: arguments_ }),
       finalResponse(`${label}-done`, `读取已拒绝：${code}。`),
     ]);
-    const errors = result.turn.response_parts.filter((part) => part.kind === "tool_result");
+    const errors = result.turn.response_items.filter((part) => part.kind === "tool_result");
     assert.equal(errors.length, 1, "每项业务失败只提交原工具调用的一个完整错误结果");
     assert.equal(errors[0].tool_name, "invoke_extension_tool");
     assert.equal(errors[0].status, "completed");
@@ -9376,7 +9373,7 @@ async function runReadRecovery(surfaces, reportOwners) {
     assert.equal(errorResult.result, code);
     await assertToolResultContinuation(source, result.calls, label, errorResult);
     assert.ok(!String(errors[0].result).includes("冻结素材"), "读取失败不能泄露冻结正文");
-    assert.deepEqual(result.turn.response_parts.filter((part) => part.kind === "final_text").map((part) => part.text),
+    assert.deepEqual(result.turn.response_items.filter((part) => part.kind === "final_text").map((part) => part.text),
       [`读取已拒绝：${code}。`]);
     assert.deepEqual(await readControl(target, targetEffects), effectsBefore, "无效读取不能创建目标 observation/page/inbox");
     assert.deepEqual(await observationPage(target, sourceCallId, "target"), frozen);
@@ -9408,7 +9405,7 @@ async function runReadCursorExpiry(surfaces, previous) {
   ]);
   const operationCreatedAt = Number.parseInt(result.calls[0].replaceAll("-", "").slice(0, 12), 16);
   assert.equal(operationCreatedAt, Date.parse(clock.wait_utc), "新 source operation 必须仍在原恢复窗口内，由旧 cursor 过期拒绝");
-  const errors = result.turn.response_parts.filter((part) => part.kind === "tool_result");
+  const errors = result.turn.response_items.filter((part) => part.kind === "tool_result");
   assert.equal(errors.length, 1);
   assert.equal(errors[0].tool_name, "invoke_extension_tool");
   assert.equal(errors[0].status, "completed");
@@ -9417,7 +9414,7 @@ async function runReadCursorExpiry(surfaces, previous) {
   assert.equal(errorResult.result, "read-snapshot-expired");
   await assertToolResultContinuation(source, result.calls, "read-expired-cursor", errorResult);
   assert.ok(!String(errors[0].result).includes("冻结素材"));
-  assert.deepEqual(result.turn.response_parts.filter((part) => part.kind === "final_text").map((part) => part.text),
+  assert.deepEqual(result.turn.response_items.filter((part) => part.kind === "final_text").map((part) => part.text),
     ["原 cursor 已过期，没有重新读取。"]);
   const after = await readControl(target, targetEffects);
   const original = new Set(before.map((row) => JSON.stringify(row)));
@@ -9462,7 +9459,7 @@ async function runWaitRecovery(surfaces) {
     await reopen();
     const recovered = await assertRecoveredExecution(source, sent, before, calls,
       { expectedJobStatus: "completed", expectedExecutionOutcome: "completed", expectedTurnStatus: "completed" });
-    const results = recovered.turn.response_parts.filter((part) => part.kind === "tool_result");
+    const results = recovered.turn.response_items.filter((part) => part.kind === "tool_result");
     assert.equal(results.length, 1);
     assert.match(String(results[0].result), /timed_out/);
     const saved = await observationPage(source, sourceCallId, "source");
@@ -9791,7 +9788,7 @@ async function runInitialAdmissionRecovery(surfaces) {
   const parentHistory = await loadThreadHistory(owner, { turn_ids: [sent.turnId] });
   assert.equal(parentHistory.items.length, 1);
   const recoveredTurn = parentHistory.items[0];
-  const canonicalResultParts = recoveredTurn.response_parts.filter((part) => part.kind === "tool_result"
+  const canonicalResultParts = recoveredTurn.response_items.filter((part) => part.kind === "tool_result"
     && part.tool_call_id === canonicalToolResult.tool_call_id);
   assert.equal(canonicalResultParts.length, 1, "公开 HTTP 历史必须暴露唯一的 typed unknown result");
   const canonicalResultPart = canonicalResultParts[0];
@@ -9881,7 +9878,7 @@ async function runInitialAdmissionRecovery(surfaces) {
   assert.equal(internal.session_id, modelCalls[0].session_id);
   assert.equal(internal.thread_id, modelCalls[0].thread_id);
   assert.equal(internal.status, "completed");
-  assert.deepEqual(internal.response_parts.filter((part) => part.kind === "text" || part.kind === "final_text").map((part) => part.text),
+  assert.deepEqual(internal.response_items.filter((part) => part.kind === "text" || part.kind === "final_text").map((part) => part.text),
     ["初始化报告的私有正文。"], "typed child history 必须保留同一初始 ModelCall 的精确响应正文");
   return { admissionKey, parentTurn, intent, bindingPreimage, requestPreimage, admission, bound, recovered, commits, childBinding, killed, restarted, parentTerminal: oldParentTerminal[0], displayed };
 }
@@ -10074,7 +10071,7 @@ async function runGeneratedInternalHistory(surfaces) {
   const pages = [];
   let cursor;
   const partIds = new Set();
-  const internal = { ...admission, session_id: target.sessionId, thread_id: target.threadId, display_parts: [], response_parts: [] };
+  const internal = { ...admission, session_id: target.sessionId, thread_id: target.threadId, display_items: [], response_items: [] };
   do {
     const page = await loadThreadHistory(target, { turns: undefined, execution_id: admission.execution_id, direction: cursor ? "before" : "tail", cursor });
     assert.equal(page.items.length, 0, "execution selector 不能返回既有用户 Turn");
@@ -10083,23 +10080,23 @@ async function runGeneratedInternalHistory(surfaces) {
     const entry = entries[0];
     assert.equal(entry.execution_id, admission.execution_id);
     assert.equal(entry.status, "completed");
-    const pageRecords = new Set([...entry.display_parts.map((part) => part.item_id), ...entry.response_parts.map((part) => part.source.item_id)]);
+    const pageRecords = new Set([...entry.display_items.map((part) => part.item_id), ...entry.response_items.map((part) => part.source.item_id)]);
     assert.ok(pageRecords.size <= 256, "每页 internal record 上限为 256");
-    for (const part of entry.response_parts) {
-      assert.ok(!partIds.has(part.part_id), "复合 cursor 不得重复 part");
-      partIds.add(part.part_id);
+    for (const part of entry.response_items) {
+      assert.ok(!partIds.has(part.id), "复合 cursor 不得重复 part");
+      partIds.add(part.id);
     }
-    internal.display_parts.push(...entry.display_parts);
-    internal.response_parts.push(...entry.response_parts);
+    internal.display_items.push(...entry.display_items);
+    internal.response_items.push(...entry.response_items);
     pages.push(page);
     cursor = page.has_more ? page.next_cursor : null;
     if (page.has_more) assert.equal(typeof cursor, "string");
   } while (cursor);
   assert.ok(pages.length > 1, "真实 internal execution 必须超过单页 256 record");
-  internal.response_parts.sort((left, right) => left.source.logical_item_ordinal - right.source.logical_item_ordinal || left.source.part_ordinal - right.source.part_ordinal);
-  internal.display_parts.sort((left, right) => left.logical_item_ordinal - right.logical_item_ordinal);
-  assert.equal(internal.display_parts.length, 1);
-  const safe = internal.display_parts[0];
+  internal.response_items.sort((left, right) => left.source.logical_item_ordinal - right.source.logical_item_ordinal);
+  internal.display_items.sort((left, right) => left.logical_item_ordinal - right.logical_item_ordinal);
+  assert.equal(internal.display_items.length, 1);
+  const safe = internal.display_items[0];
   assert.deepEqual([safe.item_id, safe.item_sequence, safe.kind, safe.text],
     [canonicalNotice.item_id, canonicalNotice.item_sequence, canonicalNotice.payload.display_part.kind, canonicalNotice.payload.display_part.text]);
   assert.deepEqual(Object.fromEntries(Object.entries(safe.provenance).filter(([, value]) => value !== null)),
@@ -10115,19 +10112,21 @@ async function runGeneratedInternalHistory(surfaces) {
   assert.equal(full.internal_executions.length, 1);
   assert.equal(full.internal_executions[0].execution_id, admission.execution_id);
   assert.equal(full.internal_executions[0].status, "completed");
-  assert.deepEqual(full.internal_executions[0].display_parts, internal.display_parts);
-  assert.deepEqual(full.internal_executions[0].response_parts, internal.response_parts, "独立 execution 与 composite 双 lane 读取不得静默丢失输出");
+  assert.deepEqual(full.internal_executions[0].display_items, internal.display_items);
+  assert.deepEqual(full.internal_executions[0].response_items, internal.response_items, "独立 execution 与 composite 双 lane 读取不得静默丢失输出");
   const membership = await readRollout(target,
     "SELECT m.item_id,m.logical_item_ordinal,m.visible,m.source_kind,m.context_selected,i.semantic_kind,i.payload_kind,i.projection_manifest_json FROM context_view_items m JOIN item_catalog i USING(item_id) JOIN branches b ON b.head_view_id=m.view_id JOIN database_meta d ON d.active_branch_id=b.branch_id WHERE m.visible=1 AND m.source_kind='display_only' AND i.execution_id=? ORDER BY m.logical_item_ordinal",
     [admission.execution_id]);
   assert.ok(membership.length > 256);
   const typedMembership = expectedTypedInternalHistoryMembership(membership);
   const finalResponseContent = finalResponse("generated-internal-final", "主会话已处理生成结果。");
-  const finalParts = internal.response_parts.filter((part) => part.source.item_id === typedMembership.finalCarrier.item_id);
-  assert.deepEqual(finalParts.map((part) => [part.kind, part.text, part.source.part_ordinal]), [
-    ["reasoning", finalResponseContent.reasoning, 0],
-    ["text", finalResponseContent.text, 1],
-  ], "canonical final 的 reasoning 与 text 必须各保留一次并落在原 typed part 坐标");
+  const finalParts = internal.response_items.filter((part) => part.source.model_call_id === typedMembership.finalCarrier.model_call_id
+    && ["reasoning", "text"].includes(part.kind));
+  assert.deepEqual(finalParts.map((part) => [part.kind, part.text]), [
+    ["reasoning", finalResponseContent.reasoning],
+    ["text", finalResponseContent.text],
+  ], "canonical final 的 reasoning 与 text 必须各保留一次并拥有各自 Item 身份");
+  assert.equal(new Set(finalParts.map(part => part.source.item_id)).size, 2, "思考与输出不能共享复合 Item 身份");
   const visibleRecords = new Map();
   const recordVisibleItem = (itemId, ordinal) => {
     const existingOrdinal = visibleRecords.get(itemId);
@@ -10137,8 +10136,8 @@ async function runGeneratedInternalHistory(surfaces) {
     }
     visibleRecords.set(itemId, ordinal);
   };
-  for (const part of internal.display_parts) recordVisibleItem(part.item_id, part.logical_item_ordinal);
-  for (const part of internal.response_parts) recordVisibleItem(part.source.item_id, part.source.logical_item_ordinal);
+  for (const part of internal.display_items) recordVisibleItem(part.item_id, part.logical_item_ordinal);
+  for (const part of internal.response_items) recordVisibleItem(part.source.item_id, part.source.logical_item_ordinal);
   assert.deepEqual([...visibleRecords].sort((left, right) => left[1] - right[1]),
     typedMembership.visibleMembership,
     "public history 必须逐项保留所有非 shadow membership 的 identity 和顺序；shadow 只能来自 final typed refs/replaces");
@@ -10149,7 +10148,7 @@ async function runGeneratedInternalHistory(surfaces) {
   const html = await threadSurface(target).locator(".chat-internal-execution-display").evaluateAll((elements) => elements.map((element) => element.outerHTML).join(""));
   for (const hidden of [prompt, privateResult, generatedId, generatedThread, run.run_id, definition.task_id, admission.execution_id, admission.job_id]) assert.ok(!html.includes(hidden), "notice DOM 只允许安全文本和固定标签");
   const defaultInclude = await loadCompleteThreadHistory(target, { include: undefined });
-  assert.ok(defaultInclude.internal_executions.flatMap((entry) => entry.display_parts).some((part) => part.item_id === safe.item_id), "默认 include 必须保留 internal 安全 notice");
+  assert.ok(defaultInclude.internal_executions.flatMap((entry) => entry.display_items).some((part) => part.item_id === safe.item_id), "默认 include 必须保留 internal 安全 notice");
   const assemblies = await readRollout(target, "SELECT session_id,thread_id,execution_id,turn_id,assembly_id,model_call_id,status,outcome FROM context_assemblies WHERE execution_id=?", [admission.execution_id]);
   assert.equal(assemblies.length, reportCalls.length);
   assert.deepEqual(assemblies.map((row) => row.model_call_id).sort(), [...reportCalls].sort(),
@@ -10183,14 +10182,14 @@ async function runGeneratedInternalHistory(surfaces) {
     assert.equal(page.items.length, 0, "已耗尽的 Turn lane 不得重复 root");
     frozenPages.push(page);
   }
-  const frozenParts = frozenPages.flatMap((page) => page.internal_executions.flatMap((entry) => entry.response_parts));
-  const frozenDisplays = frozenPages.flatMap((page) => page.internal_executions.flatMap((entry) => entry.display_parts));
-  assert.equal(new Set(frozenParts.map((part) => part.part_id)).size, frozenParts.length);
+  const frozenParts = frozenPages.flatMap((page) => page.internal_executions.flatMap((entry) => entry.response_items));
+  const frozenDisplays = frozenPages.flatMap((page) => page.internal_executions.flatMap((entry) => entry.display_items));
+  assert.equal(new Set(frozenParts.map((part) => part.id)).size, frozenParts.length);
   assert.equal(new Set(frozenDisplays.map((part) => part.item_id)).size, frozenDisplays.length);
-  assert.deepEqual(frozenParts.map((part) => part.part_id).sort(), internal.response_parts.map((part) => part.part_id).sort(), "冻结上界下的 internal 输出必须完整且只出现一次");
-  assert.deepEqual(frozenDisplays.map((part) => part.item_id).sort(), internal.display_parts.map((part) => part.item_id).sort());
+  assert.deepEqual(frozenParts.map((part) => part.id).sort(), internal.response_items.map((part) => part.id).sort(), "冻结上界下的 internal 输出必须完整且只出现一次");
+  assert.deepEqual(frozenDisplays.map((part) => part.item_id).sort(), internal.display_items.map((part) => part.item_id).sort());
   for (const page of frozenPages) {
-    const records = new Set(page.internal_executions.flatMap((entry) => [...entry.display_parts.map((part) => part.item_id), ...entry.response_parts.map((part) => part.source.item_id)]));
+    const records = new Set(page.internal_executions.flatMap((entry) => [...entry.display_items.map((part) => part.item_id), ...entry.response_items.map((part) => part.source.item_id)]));
     assert.ok(records.size <= 256);
   }
   const appended = await completeOwnerTurn(target, "首读之后追加新用户轮，旧 history cursor 必须明确 stale。", [
@@ -10232,8 +10231,8 @@ async function runGeneratedInternalHistory(surfaces) {
   const around = await loadCompleteThreadHistory(target, { direction: "around", anchor_turn_id: baseline.sent.turnId, turns: undefined, before_turns: 0, after_turns: 0 });
   assert.deepEqual(around.items.map((turn) => turn.turn_id), [baseline.sent.turnId]);
   const fork = await forkOwner(target);
-  const forkDisplay = fork.targetHistory.internal_executions.flatMap((entry) => entry.display_parts);
-  assert.deepEqual(forkDisplay.map((part) => [part.text, part.logical_item_ordinal]), internal.display_parts.map((part) => [part.text, part.logical_item_ordinal]), "fork 必须从既有 membership 重映射保真顺序");
+  const forkDisplay = fork.targetHistory.internal_executions.flatMap((entry) => entry.display_items);
+  assert.deepEqual(forkDisplay.map((part) => [part.text, part.logical_item_ordinal]), internal.display_items.map((part) => [part.text, part.logical_item_ordinal]), "fork 必须从既有 membership 重映射保真顺序");
   // 零 Turn 的首部 notice 与随后第一个用户 root 共用 view 坐标，不能制造用户活动。
   const head = await createProductSession(surfaces.c, "零 Turn 的首部生成 notice");
   const headReport = await createGeneratedReport(head, "head", [
@@ -10242,8 +10241,8 @@ async function runGeneratedInternalHistory(surfaces) {
   const zero = await loadCompleteThreadHistory(head);
   assert.deepEqual(zero.items, []);
   assert.equal(zero.internal_executions.length, 1);
-  const headNotice = zero.internal_executions[0].display_parts[0];
-  assert.equal(zero.internal_executions[0].display_parts.length, 1);
+  const headNotice = zero.internal_executions[0].display_items[0];
+  assert.equal(zero.internal_executions[0].display_items.length, 1);
   assert.equal(headNotice.kind, "generated_session_result");
   assert.equal(headNotice.text, headReport.displayText);
   assert.equal(headNotice.provenance.source_session_id, headReport.generatedId);
@@ -10272,8 +10271,8 @@ async function runGeneratedInternalHistory(surfaces) {
   await assertInternalHistory(head, headHistory, "generated head refresh");
   return { target: target.sessionId, generated: generatedId, definition, run, terminal, providerWireEvidence, baseline, roots,
     admission, admissionMetadata, admissionPreimage, canonicalNotice, notices, pages, membership, internal, assemblies, crossOwner,
-    snapshot: { appended, invalidDirection, stale, pageSizes: frozenPages.map((page) => ({ turns: page.items.length, records: page.internal_executions.reduce((sum, entry) => sum + entry.display_parts.length + entry.response_parts.length, 0) })),
-      partIds: frozenParts.map((part) => part.part_id), displayIds: frozenDisplays.map((part) => part.item_id) },
+    snapshot: { appended, invalidDirection, stale, pageSizes: frozenPages.map((page) => ({ turns: page.items.length, records: page.internal_executions.reduce((sum, entry) => sum + entry.display_items.length + entry.response_items.length, 0) })),
+      partIds: frozenParts.map((part) => part.id), displayIds: frozenDisplays.map((part) => part.item_id) },
     around, aroundPages, aroundDense, head: { sessionId: head.sessionId,
       report: { generatedId: headReport.generatedId, generatedThread: headReport.generatedThread,
         definition: headReport.definition, run: headReport.run, terminal: headReport.terminal,
@@ -10316,7 +10315,7 @@ async function runWeeklyReport(surfaces) {
   assert.equal(inbox[0].source_gateway_id, surfaces.b.gatewayId);
   assert.equal(inbox[0].state, "execution_bound");
   const history = await loadThreadHistory(weekly);
-  const toolResults = history.items[0].response_parts.filter((part) => part.kind === "tool_result");
+  const toolResults = history.items[0].response_items.filter((part) => part.kind === "tool_result");
   assert.equal(toolResults.length, 6);
   for (const text of ["Git：", "分析：", "实施："]) assert.ok(toolResults.some((part) => String(part.result).includes(text)),
     `真实 read tool result 缺少 ${text}: ${JSON.stringify(toolResults.map((part) => ({
@@ -10582,14 +10581,14 @@ async function runTeamActivation(surface, boundary, foreign) {
     ], [], { expectedJobStatus: "failed", expectedExecutionOutcome: "failed", expectedTurnStatus: "failed" });
     const publicMembershipError = "执行系统 I/O 失败: error=PermissionError, errno=None";
     assert.equal(foreignMember.job.error_message, publicMembershipError);
-    const memberResults = foreignMember.turn.response_parts.filter((part) => part.kind === "tool_result");
+    const memberResults = foreignMember.turn.response_items.filter((part) => part.kind === "tool_result");
     assert.equal(memberResults.length, 1, "业务失败只产生原工具调用的一个完整失败事实");
     assert.equal(memberResults[0].tool_name, "assign_team_task");
     assert.equal(memberResults[0].status, "completed", "完整错误结果的 Item 终态不冒充工具执行成功");
     assertBoundToolResult(owner, foreignMember.sent, foreignMember.turn, foreignMember.calls[0], membershipCallId, "assign_team_task");
     const toolMembershipError = `工具执行失败: tool=assign_team_task, call_id=${membershipCallId}: stage=tool-execution, error=PermissionError, errno=None`;
     assert.equal(memberResults[0].result, toolMembershipError);
-    assert.equal(foreignMember.turn.response_parts.filter((part) => part.kind === "final_text").length, 0);
+    assert.equal(foreignMember.turn.response_items.filter((part) => part.kind === "final_text").length, 0);
     const log = (await readFile(owner.backendLog, "utf8")).split("\n");
     const diagnostics = [publicMembershipError, toolMembershipError].map(message => {
       const entries = log.map((line, index) => ({ line, index })).filter(({ line }) => line.includes("[ERROR]")
@@ -10613,7 +10612,7 @@ async function runTeamActivation(surface, boundary, foreign) {
       ...forbiddenFields.map((field) => toolResponse(`${boundary}-foreign-${field}`, "send_message_to_session", { target_session_id: foreign.resource.uri, content: "禁止携带业务状态。", [field]: { status: "completed" } })),
       finalResponse(`${boundary}-negative-final`, "业务状态通信均已拒绝。"),
     ]);
-    const errors = statePayload.turn.response_parts.filter((part) => part.kind === "tool_result");
+    const errors = statePayload.turn.response_items.filter((part) => part.kind === "tool_result");
     assert.equal(errors.length, forbiddenFields.length);
     for (const [index, part] of errors.entries()) {
       assert.equal(part.tool_name, "send_message_to_session");
@@ -10973,7 +10972,7 @@ async function runMcpActivation(surface, boundary) {
       finalResponse(`${boundary}-mcp-removed-final`, "删除后的空目录与成对拒绝结果已确认。"),
     ]);
     const removedTurn = (await loadThreadHistory(owner, { turn_ids: [removed.sent.turnId] })).items[0];
-    const removedResults = removedTurn.response_parts.filter((part) => part.kind === "tool_result");
+    const removedResults = removedTurn.response_items.filter((part) => part.kind === "tool_result");
     assert.equal(removedResults.length, 1, "删除后的真实工具调用仍须只有一个成对结果");
     const removedResult = assertBoundToolResult(owner, removed.sent, removedTurn, removed.calls[0],
       `${boundary}-mcp-removed-call`, "invoke_extension_tool");

@@ -11,6 +11,8 @@
 
 系统 SHALL将compaction表达为SQLite中新的context view和控制事件，不创建新的JSONL segment或控制记录。摘要和保留的canonical item继续作为不可变item追加到rollout.jsonl，新的view通过item range/reference选择摘要和保留范围。实际compaction是source/root重建的prefix epoch边界；compaction事务提交view及`PendingPrefixEpochTransition(reason=compaction)`，但pending记录没有wire bytes且不是applied epoch。下一次真正model-call preparation可以精确复用source base/delta，也可以从activation coordinator冻结的ResourceRegistry内存snapshot取得tracked published revision并物化为完整source，然后把source decision、首个新epoch assembly seal与transition消费原子提交。仅为移除已处理 head-internal notice refs 的`runtime_notice_consumed` transition必须复用同一 transition/applied owner，不能当作compaction/rewind source boundary；与compaction同 seal 时由该 owner保留两个reason事实并原子提交。source restore/fork/copy consumers MUST 过滤 `runtime_notice_consumed`，不从其恢复source checkpoint或继承fork lineage。snapshot不可用时保留compaction view/transition但不产生半assembly或dispatch，且不读取文件、网络或其它provider。所有第一条真实用户消息后的summary/source完整或增量内容必须保持独立user-role item。source/detail失效不能被解释为物化理由来修复旧sealed assembly；精确恢复仍显式失败。
 
+后台生成 SHALL 只登记冻结替换提案，ready不构成compaction。应用时原owner必须核对当前selection、替换覆盖和全部尾部，并原子记录候选唯一消费、summary Item、新view和pending transition；尾部纯追加不一律使候选失效。未采用候选不属于fork历史；fork默认只物化选定的真实view，在目标第一次执行前走统一容量准备，不依赖父Thread候选，也不改变父view。
+
 #### Scenario: 压缩后继续运行
 
 - **WHEN** compaction 成功提交并开始下一轮 Agent 执行
@@ -25,6 +27,23 @@
 
 - **WHEN** `AGENTS.md` 或已应用的 skill source 在 compaction 前有 base A 和 A→B 增量
 - **THEN** compaction的新epoch可以继续精确引用A与A→B，也可以按明确materialization policy从冻结Registry activation snapshot取得并引用B的完整revision；仅owner声明`root_eligible`且实际新epoch重建时可合并唯一system root，`tail_only`仍为独立user-role item。A与A→B的item/provenance保持可审计，不被物理覆盖或删除；source/detail失效作为旧assembly明确错误，不能触发静默重建或当前源读取
+
+#### Scenario: fork时父Thread有未采用候选
+
+- **WHEN** 用户从父Thread选定范围创建fork，而父Thread正在生成或已保存未采用摘要
+- **THEN** fork只复制选定view及其原有必要正文依赖，不带入未采用候选或扩大来源范围；目标按自身模型准备，父Thread候选和active view不被目标压缩修改
+
+#### Scenario: 压缩后fork不展开摘要provenance
+
+- **WHEN** 用户选择的fork view包含已应用summary和保留尾部
+- **THEN** 保留该view的真实summary及尾部，按原fork正文依赖规则物化；摘要provenance用于审计，不因此把已排除原历史重新加入目标上下文
+
+#### Scenario: 仅物化摘要的fork再次压缩
+
+- **WHEN** 目标Thread保留来源摘要但未物化其全部原文，随后压缩该摘要及目标新增的闭合历史
+- **THEN** 沿原候选与派生请求链完成生成和采用，不继承来源候选任务；本次coverage反映实际摘要输入，新摘要provenance保持展开后的历史归属，预算模拟与采用一致
+- **AND** 原文回读沿已复制的行范围保留原位置，未物化原文明确返回detail-unavailable，不回读父Thread、不把摘要或派生输出冒充原文；目标后继候选仍可继续压缩
+- **AND** Agent Context仍能返回该真实selection；无法从未物化原消息组取得准确原消息数量时，沿既有optional计数字段表示不可得，并将原因纳入原partial_errors及分页预算，不伪造0或用当前记录数冒充原消息数
 
 ### Requirement: Rewind 在 SQLite 中创建新 branch 和 view
 
@@ -219,27 +238,27 @@ fork SHALL 如实保留复制范围内历史 checkpoint 的 channel、pending_se
 - **THEN** saver 将当前已提交 canonical selection 与完整 channel 快照作为根 checkpoint 保存，不写入孤儿 `parent_checkpoint_id`
 - **AND** 从该首个 Turn 发起 retry/regenerate/replay 时，系统通过当前 checkpoint 与统一 resolver 取得所需前缀，不因缺少内存父 checkpoint 返回 500
 
-### Requirement: 用户操作使用 Turn anchor，compaction 保留 Message anchor
+### Requirement: 用户操作使用 Turn anchor，compaction 使用语义 Item anchor
 
-系统 SHALL 继续允许用户可见的 rewind、replay 以及从历史 Turn 发起的上下文操作使用稳定的 `turn_id` 和 `inclusive`/`before` 语义；backend resolver MUST 通过 `RolloutCheckpointSaver` 读取已提交的 active-lineage source view，并解析到 `TurnRecord.root_input_item_id` 对应的 canonical item 起点，再在需要时解析到 `content_part_id`/fragment anchor。业务层和 projector 不得直接扫描 RolloutStorage、AppendWriter 或内部 context reader。内部 compaction、fork 和恢复流程可以直接使用细粒度 durable item anchor；interrupt 首先使用当前 stream 的内存 cursor/ItemDraft，只有需要跨重启恢复或审计时才保存对应的 item/content-part reference。request-only context reference 与 pending runtime notice 不属于 view，不能直接作为 durable operation anchor。Turn 入口由后端解析精确 view；消息 fork 入口固定点击 item，支持显式绑定其展示 view，后端按「Fork item 定位与前缀捕获保持一致」冻结真实来源，不要求调用方预知整体 revision，不传真实 offset 或物理 message 序号。全分支 item-only fork 定位与此处 Turn 的 active-lineage resolver 是不同的选择语义，不能借本项放宽 rewind/replay/compaction。
+系统 SHALL 继续允许用户可见的 rewind、replay 以及从历史 Turn 发起的上下文操作使用稳定的 `turn_id` 和 `inclusive`/`before` 语义；backend resolver MUST 通过 `RolloutCheckpointSaver` 读取已提交的 active-lineage source view，并解析到 `TurnRecord.root_input_item_id` 对应的 canonical item 起点。业务层和 projector 不得直接扫描 RolloutStorage、AppendWriter 或内部 context reader。内部 compaction、fork 和恢复流程可以直接使用细粒度 durable item anchor；interrupt 首先使用当前 stream 的内存 cursor/ItemDraft，只有需要跨重启恢复或审计时才保存对应的 item reference。request-only context reference 与 pending runtime notice 不属于 view，不能直接作为 durable operation anchor。Turn 入口由后端解析精确 view；消息 fork 入口固定点击 item，支持显式绑定其展示 view，后端按「Fork item 定位与前缀捕获保持一致」冻结真实来源，不要求调用方预知整体 revision，不传真实 offset 或物理 message 序号。全分支 item-only fork 定位与此处 Turn 的 active-lineage resolver 是不同的选择语义，不能借本项放宽 rewind/replay/compaction。
 
-任何将被继续执行或编译为 Provider request 的目标 view MUST 在 tool protocol 上闭合。若解析后的 item/content-part anchor 位于 assistant tool-call group 与任一匹配 terminal tool result 之间，resolver MUST 返回 `tool-protocol-boundary-conflict`，保持原 view 且不得创建新 view、branch、checkpoint 或 prefix epoch；响应可以提供不含内容正文的前后最近安全 anchor，但不得自动移动用户选择、合成 result 或按物理序号猜测边界。read-only history 可以保留 partial/incomplete group 用于审计，但不得把它标记为可执行。
+任何将被继续执行或编译为 Provider request 的目标 view MUST 在 tool protocol 上闭合。若解析后的 item anchor 位于 assistant tool-call group 与任一匹配 terminal tool result 之间，resolver MUST 返回 `tool-protocol-boundary-conflict`，保持原 view 且不得创建新 view、branch、checkpoint 或 prefix epoch；响应可以提供不含内容正文的前后最近安全 anchor，但不得自动移动用户选择、合成 result 或按物理序号猜测边界。read-only history 可以保留 partial/incomplete group 用于审计，但不得把它标记为可执行。
 
-系统 SHALL 保留 item 级定位能力。自动 compaction、用户主动 compaction、重放和 durable interrupt finalization 均可以使用 canonical item/content-part 作为边界；不得因为 Turn 或 LangChain message projection 存在而把操作强制对齐到 message 末尾。实时 interrupt 可以只停留在内存 cursor，不能因此要求每个 raw chunk 都成为 SQLite anchor。所有 durable anchor MUST 明确记录 `inclusive`/`before`、source view/branch 和可恢复性；content-part anchor 至少需要稳定 part identity、ordinal、hash/prefix hash 和 recovery capability，任意字符/token offset 不得单独作为 durable anchor。
+系统 SHALL 保留 item 级定位能力。自动 compaction、用户主动 compaction、重放和 durable interrupt finalization 均可以使用 canonical item 作为边界；不得因为 Turn 或 LangChain message projection 存在而把操作强制对齐到 message 末尾。实时 interrupt 可以只停留在内存 cursor，不能因此要求每个 raw chunk 都成为 SQLite anchor。所有 durable anchor MUST 明确记录 `inclusive`/`before`、source view/branch 和可恢复性，并使用当前格式的稳定语义Item身份；流式draft局部位置只作实时处理，不建立通用Part身份。任意字符/token offset、message数组索引或物理行号不得单独作为durable anchor。
 
 #### Scenario: Turn 操作解析到 tool call 之前
 
 - **WHEN** 用户从包含 reasoning、assistant output 和 tool call 的 Turn 发起 before replay
 - **THEN** resolver 将 Turn 入口解析为 tool call item 之前的精确 anchor，保留前置 item，不构造或修改 LangChain message 来表达边界
 
-#### Scenario: content part 中断
+#### Scenario: 语义 Item 流式中断
 
-- **WHEN** stream 在 assistant_output item 的某个 draft/content part 后被用户中断
-- **THEN** finalization 保存 partial 状态；只有跨重启恢复或审计需要时才保存 item/content-part 停止 reference，恢复不会把该事实扩展为完整 assistant message
+- **WHEN** stream 在 assistant_output item 的某个draft局部位置被用户中断
+- **THEN** finalization 保存 partial 状态；只有跨重启恢复或审计需要时才保存 item 停止reference，恢复不会把该事实扩展为完整 assistant message
 
 #### Scenario: item anchor 不属于 source view
 
-- **WHEN** 调用方提交的 item/content-part anchor 不在目标 branch/view 的有效 lineage 中
+- **WHEN** 调用方提交的 item anchor 不在目标 branch/view 的有效 lineage 中
 - **THEN** 系统返回明确的 stale/unreachable anchor 错误，不按最大 message sequence 或最新 checkpoint 静默替换边界
 
 #### Scenario: item anchor 切入 tool 调用与结果之间
@@ -260,7 +279,7 @@ fork SHALL 如实保留复制范围内历史 checkpoint 的 channel、pending_se
 
 #### Scenario: Compaction 切入 Turn 中间
 
-- **WHEN** compaction 的 canonical item/content-part anchor 位于 Turn 中间且满足 tool protocol closure
+- **WHEN** compaction 的 canonical item anchor 位于 Turn 中间且满足 tool protocol closure
 - **THEN** compaction 保存精确 cutoff、摘要与保留成员，不强制对齐 Turn 或 LangChain message 末尾
 - **AND** `context_view_turns` 只是完整可展示 Turn 的派生定位，不改变 canonical membership；Agent 的 `full` reader 依精确 view selection 恢复摘要与保留 item
 
@@ -269,6 +288,11 @@ fork SHALL 如实保留复制范围内历史 checkpoint 的 channel、pending_se
 - **WHEN** 用户通过 Turn 入口发起操作，但当前候选 view 只保留部分内容或 compaction summary，无法恢复所请求的精确 anchor 与必要正文
 - **THEN** resolver 继续沿 active lineage 查找符合该操作边界及协议闭合要求的可恢复 view
 - **AND** 没有合法来源时明确报告不可达或不可恢复，不把 summary-only view 冒充原始 Turn、不扩大用户选择；item-only fork 仍遵守其独立合同
+
+#### Scenario: 同一投影消息内部存在安全语义切点
+
+- **WHEN** 一条原assistant消息中的多个语义Item存在满足消息组重建、保护载荷和工具闭合的切点
+- **THEN** compaction可以在该Item边界规划，不强制保留整条LangChain消息或整个Turn；原声明顺序及工具执行关系不因摘要被重排
 
 ### Requirement: 所有 Turn anchor 操作共享解析器
 
@@ -616,3 +640,15 @@ fork SHALL 具名消费 `virtual-resource-addressing` requirement「资源目标
 
 - **WHEN** 调用方沿公开 fork 或目标创建 transfer 入口复用原 idempotency key，但改变显式 view、item、方向或模式
 - **THEN** 沿原创建 owner 拒绝该请求并返回 HTTP 409，保留同一请求的 request_id；原创建意图、capture 和目标身份不变，不重新定位或创建第二个目标；内部完整性 RuntimeError 仍作为服务端故障暴露，不归类为客户端状态冲突
+
+### Requirement: 压缩后所有执行和查询投影使用同一权威view
+
+active view selection SHALL 是当前有效上下文的唯一权威；Graph messages、Agent Context、replay、fork、历史及模型请求都必须通过原上下文owner解析其明确view。应用compaction时必须保存与checkpoint恢复一致的view绑定及必要channel版本，旧内存messages不得重新追加已排除成员。不得再维护按 `_summarization_event` 消息offset切割的独立有效上下文或空模型回复驱动的压缩续跑链；过去checkpoint事实保持不可变，但不作为当前读写的兼容fallback。
+
+#### Scenario: 应用候选后Graph保存旧内存通道
+- **WHEN** view已切换为摘要与保留尾部，下一Graph checkpoint仍携带压缩前messages
+- **THEN** 原owner依据已提交view及其恢复绑定核对／拒绝过期输入，不复活旧成员、不重复追加summary；后续真实请求及Agent Context显示同一selection
+
+#### Scenario: replay穿过多个压缩边界
+- **WHEN** 原Thread多次压缩后从合法历史anchor执行replay
+- **THEN** 使用该anchor解析得到的权威来源view及原协议闭合事实，不按最新event的旧数组索引截另一份历史；新分支和当前查询均沿原owner恢复

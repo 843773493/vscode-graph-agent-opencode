@@ -46,7 +46,7 @@ def canonical_reader(registry_db, request):
             return storage.read_items(session, thread, item_ids=(item_id,), connection=connection)[0]
         if request.param == "checkpoint":
             with storage.jsonl_path(session, thread_id=thread).open("rb") as stream:
-                return storage._read_v2_item_at(
+                return storage._read_item_at(
                     connection, stream, sequence=sequence, offset=offset, length=length,
                 )
         return storage._read_canonical_item_from_catalog(

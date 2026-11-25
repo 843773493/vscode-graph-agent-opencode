@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
@@ -125,11 +126,10 @@ class RolloutInternalConvergenceMixin:
         assembly_id: str | None,
         checkpoint_ns: str,
         failure: Mapping[str, object] | None = None,
+        completion_deadline: datetime | None = None,
     ) -> int:
         if outcome == ControlOutcome.COMPLETED_EMPTY.value and items:
             raise ValueError("completed_empty internal execution 不得包含 canonical item")
-        if outcome == ControlOutcome.COMPLETED.value and not items:
-            raise ValueError("completed internal execution 必须包含 canonical output item")
         for item in items:
             if item.turn_id is not None or item.turn_scope is not None:
                 raise ValueError(
@@ -207,6 +207,8 @@ class RolloutInternalConvergenceMixin:
                     "internal terminal 幂等键冲突：item identity/content 不一致"
                 )
             return committed.commit_id
+        if completion_deadline is not None and datetime.now(UTC) >= completion_deadline:
+            raise TimeoutError("derived-deadline-exceeded: 派生结果在写入前已超过绝对期限")
         if control_correction:
             lost_row = connection.execute(
                 "SELECT commit_id FROM storage_commits WHERE subject_id=? AND idempotency_key=? "
@@ -221,6 +223,21 @@ class RolloutInternalConvergenceMixin:
                 "internal execution 已终态但 terminal convergence commit 缺失: "
                 f"execution_id={execution_id}, outcome={current_outcome}"
             )
+
+        if outcome == ControlOutcome.COMPLETED.value and not items:
+            # 原输出已由 checkpoint/stream writer 提交，终态只核可见归属，不复制正文。
+            output = connection.execute(
+                "SELECT 1 FROM item_catalog item "
+                "JOIN checkpoint_namespace_state state ON state.checkpoint_ns=? "
+                "JOIN branches branch ON branch.branch_id=state.active_branch_id "
+                "JOIN context_view_items member ON member.view_id=branch.head_view_id "
+                "AND member.item_id=item.item_id AND member.visible=1 "
+                "WHERE item.execution_id=? AND item.turn_id IS NULL "
+                "AND item.semantic_kind='assistant_output' AND item.status='completed' LIMIT 1",
+                (checkpoint_ns, execution_id),
+            ).fetchone()
+            if output is None:
+                raise ValueError("completed internal execution 缺少当前 view 可见的 canonical output item")
 
         if assembly_id is not None:
             assembly = connection.execute(
@@ -360,5 +377,7 @@ class RolloutInternalConvergenceMixin:
                 "UPDATE database_meta SET history_view_revision=history_view_revision+1, updated_at=? WHERE singleton_id=1",
                 (_now(),),
             )
+        if completion_deadline is not None and datetime.now(UTC) >= completion_deadline:
+            raise TimeoutError("derived-deadline-exceeded: 派生结果在提交前已超过绝对期限")
         self._storage._commit_connection(connection)
         return commit_id

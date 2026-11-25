@@ -101,7 +101,6 @@ def _project_wire_snapshot(
     if model_capacity is not None and model_capacity.capacity_known:
         budget = request.budget(model_capacity)
         if budget.exceeds_capacity:
-            # TODO: 统一准备接入完整候选后，在此之前模拟并采用；不能先封存超限请求。
             raise mark_public_failure(ContextCapacityError(budget))
     # snapshot 来自本次 composer，只替换 wire；冷读仍独立验证所有 hash。
     snapshot = replace(
@@ -165,7 +164,7 @@ def seal_snapshot(
     source_refs = tuple(
         entry.ref for entry in snapshot.selection
         if entry.ref.ref_type == "canonical_item" and (
-            entry.included or snapshot.selection_policy == "summary_candidate"
+            entry.included or snapshot.selection_policy == "derived_request"
         )
     )
     tool_refs = tuple(

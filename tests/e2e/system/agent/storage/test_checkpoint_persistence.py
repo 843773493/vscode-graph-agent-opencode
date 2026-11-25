@@ -107,7 +107,7 @@ async def test_checkpoint_save_reload_and_survive_restart(
 
     first_records = _read_rollout_messages(rollout_jsonl)
     assert first_records, "第一次运行后 rollout JSONL 文件为空"
-    assert all(record["format_version"] == 2 for record in first_records)
+    assert all(record["format_version"] == 3 for record in first_records)
     assert all(record["record_type"] == "item" for record in first_records)
     assert {
         record["wire_role"]

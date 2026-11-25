@@ -161,12 +161,12 @@ async def test_pending_controls_policy_remove_without_reordering(job_service_fac
         original = connection.execute("SELECT turn_id,turn_ordinal,root_input_item_id FROM turn_records ORDER BY turn_ordinal").fetchall()
     removed = await service.remove_pending(session_id, "msg_queued")
     assert [item.message_id for item in removed.requests] == ["msg_tail"]
-    assert [item.message_id for item in await store.load(session_id)] == ["msg_tail"]
+    assert [item.input.message_id for item in (await store.load(session_id)).records] == ["msg_tail"]
     extra = await accepted("also queued", "msg_extra")
     assert len((await service.list_pending(session_id)).requests) == 2
     cleared = await service.clear_pending(session_id)
     assert cleared.requests == [] and cleared.active_job_id == active.job_id
-    assert await store.load(session_id) == []
+    assert (await store.load(session_id)).records == ()
     cancelled_jobs = {queued.job_id, tail.job_id, extra.job_id}
     with saver._storage.storage.read_connection(session_id, thread_id, "") as connection:
         assert connection.execute("SELECT turn_id,turn_ordinal,root_input_item_id FROM turn_records ORDER BY turn_ordinal").fetchall()[:3] == original
@@ -565,7 +565,7 @@ async def test_clear_thread_pending_preserves_sibling_fifo_active_jobs_and_durab
         (item.message_id, item.enqueue_sequence, item.position, item.delivery_policy) for item in sibling.requests
     ]
     assert child_snapshot.active_job_id == sibling.active_job_id
-    assert [item.message_id for item in await store.load(session_id)] == ["msg_child_queued", "msg_child_tail"]
+    assert [item.input.message_id for item in (await store.load(session_id)).records] == ["msg_child_queued", "msg_child_tail"]
     with saver._storage.storage.read_connection(session_id, main, "") as connection:
         assert {row[0] for row in connection.execute("SELECT job_id FROM executions WHERE outcome='cancelled'")} == {
             jobs["msg_main_queued"].job_id, jobs["msg_main_tail"].job_id,
@@ -573,5 +573,5 @@ async def test_clear_thread_pending_preserves_sibling_fifo_active_jobs_and_durab
     # 原 Session 级入口仍显式清空所有余下 Thread，不取消当前执行。
     all_cleared = await service.clear_pending(session_id)
     assert all_cleared.thread_id is None and all_cleared.requests == []
-    assert await store.load(session_id) == []
+    assert (await store.load(session_id)).records == ()
     assert service._jobs[jobs["msg_child_active"].job_id].status == "running"

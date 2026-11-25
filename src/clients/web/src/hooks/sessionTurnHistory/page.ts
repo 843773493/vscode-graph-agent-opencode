@@ -569,8 +569,8 @@ export function useAroundTurnLoader({
       signal.throwIfAborted();
       if (!isCurrentRequest()) throw new Error("轮次定位请求的会话线程已切换");
       if (page.thread_id !== currentTimeline.threadId) throw new Error("指定轮次历史的 thread owner 与请求不一致");
-      if (context && ![...page.items.flatMap(turn => turn.response_parts ?? []),
-        ...(page.internal_executions ?? []).flatMap(execution => execution.response_parts)].some(part =>
+      if (context && ![...page.items.flatMap(turn => turn.response_items ?? []),
+        ...(page.internal_executions ?? []).flatMap(execution => execution.response_items)].some(part =>
         part.kind === "context_notice" && part.context_model_call_id === context.model_call_id && part.context_anchor === context.anchor)) {
         throw new Error(t("chat.process.positionLost"));
       }

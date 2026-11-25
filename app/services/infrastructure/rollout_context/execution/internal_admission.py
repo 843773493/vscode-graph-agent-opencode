@@ -108,7 +108,7 @@ class RolloutInternalExecutionAdmissionMixin(RolloutExecutionAdmissionReadMixin)
                 raise ValueError("internal admission 首条 item 必须是 pending_next_turn runtime_notice")
             if dict(request_input) != {"kind": "runtime_notice", "payload": notice_item.payload}:
                 raise ValueError("internal admission request preimage 与实际 notice 不一致")
-        elif request_input.get("kind") not in {"seed_reference", "compaction_reference"}:
+        elif request_input.get("kind") not in {"seed_reference", "derived_reference"}:
             raise ValueError("无 notice 的 internal admission 只允许冻结 seed 或摘要引用")
         payload_hash = sha256_jcs(internal_execution_request_preimage(
             session_id=session_id,
@@ -136,7 +136,7 @@ class RolloutInternalExecutionAdmissionMixin(RolloutExecutionAdmissionReadMixin)
             field="checkpoint_ns",
             allow_empty=True,
         )
-        self._storage._require_v2_runtime(connection)
+        self._storage._require_current_rollout_format(connection)
         existing = connection.execute(
             "SELECT execution_id, turn_id, execution_origin, job_id, "
             "admission_idempotency_key, admission_payload_hash, "

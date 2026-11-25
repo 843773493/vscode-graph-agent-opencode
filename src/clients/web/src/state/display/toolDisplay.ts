@@ -211,7 +211,8 @@ export function deriveToolRowDisplay(
 ): ToolRowDisplay {
   if (isTerminalToolItem(item)) {
     const resultRecord = toolResultRecord(item);
-    const previewText = terminalToolCollapsedText(item, resultRecord);
+    const previewText = item.declared ? t("chat.tool.executionUnavailable")
+      : item.active ? t("chat.tool.running", item.toolName) : terminalToolCollapsedText(item, resultRecord);
     return {
       previewText,
       detailsContent: includeExpandedContent
@@ -241,7 +242,7 @@ export function deriveToolRowDisplay(
     fieldText(resultRecord, "content") ||
     item.resultText;
   return {
-    previewText: result.trim()
+    previewText: item.declared ? t("chat.tool.executionUnavailable") : result.trim()
       ? t("chat.tool.returned", prefix, compactInline(result, 80))
       : path.trim()
         ? t("chat.tool.processing", prefix, compactInline(path, 80))

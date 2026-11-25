@@ -21,7 +21,8 @@
 │   │   ├── resources.py                        资源身份、URI 与视图准入
 │   │   └── projection.py / pagination.py       内容投影与统一游标、字符预算、分片
 │   ├── session_context_fork_service.py          Fork来源与转移
-│   └── context_compaction_service.py            Thread 空闲准入下的手动压缩预览与请求登记
+│   ├── context_compaction_service.py            Thread 空闲准入下的手动压缩预览与请求登记
+│   └── derived_execution_service.py             首次冻结派生输入、幂等受理及有限观察
 ├── Turn历史
 │   └── session_turn_history/                    Job Turn读取和可见页投影
 ├── 会话状态与资源

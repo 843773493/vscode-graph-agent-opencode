@@ -17,6 +17,7 @@ import { ConfigurationProxyFields } from '../../../web/src/components/settings/C
 import { definitionObject, definitionValue } from '../../../web/src/components/settings/ConfigurationEntities.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { ILogService } from '../../upstream/src/vs/platform/log/common/log.js';
+import { errorSummary } from '../../../web/src/utils/errorMessage.js';
 
 /** 原设置树之外只补充业务来源与保存状态；窗口设置不渲染此区域。 */
 export class SettingsContextHeader extends Disposable {
@@ -120,7 +121,7 @@ export class SettingsContextHeader extends Disposable {
     this.warning.hidden = !warning;
     let draft: Record<string, unknown>;
     try { draft = source.readDraft(); } catch (error) {
-      this.inheritance?.render(createElement('p', { role: 'alert' }, error instanceof Error ? error.message : String(error)));
+      this.inheritance?.render(createElement('p', { role: 'alert' }, errorSummary(error)));
       this.layout(); return;
     }
     const local = definitionValue(draft, ['settings', 'network', 'proxy']);

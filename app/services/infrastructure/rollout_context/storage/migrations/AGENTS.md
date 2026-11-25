@@ -2,6 +2,10 @@
 
 保存 rollout 当前结构及显式 assembly refs 18→19、状态版本引用19→20、消息版本20→21迁移及assembly共享内容21→22、view成员共享22→23、执行队列23→24、Skill选择次序24→25、view创建顺序25→26、执行调度与异步留言26→27、团队投递回执27→28，以及 Thread 暂停意图28→29结构。
 
+当前 SQLite31 的 `reasoning_blocks` 按 canonical `item_id` 保存单行安全视图。未验收开发数据没有自动30→31升级；支持来源与显式转换由原维护 owner 核定，不以重建表或改版本号吸收旧数据。
+
+当前结构不创建 `item_parts`／`operation_anchors`；语义内容只使用 canonical Item locator 和原操作 owner 的冻结 view。Provider block 来源保留于原 typed projection manifest，不另存通用 Part 索引。冻结旧来源 fixture 不随当前结构改写。
+
 ```text
 migrations/
 ├── rollout.sql       canonical 主结构

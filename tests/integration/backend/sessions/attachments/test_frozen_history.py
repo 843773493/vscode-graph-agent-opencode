@@ -60,20 +60,21 @@ def integration_workspace_config_path(integration_workspace_config_path: str) ->
     """只在本测试复制的配置中声明图片能力，不依赖当前模型目录。"""
     path = Path(integration_workspace_config_path)
     config = commentjson.loads(path.read_text(encoding="utf-8"))
-    primary = next(provider for provider in config["llm"]["providers"] if provider["id"] == "primary")
-    primary["api_mode"]["model_info"]["supports_vision"] = True
+    config["profiles"]["provider.primary"]["settings"]["model_options"]["api_mode"]["model_info"]["supports_vision"] = True
     path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return str(path)
 
 
 def plan(target: HistoryTarget, session: str, thread: str, replies: list[dict[str, object]]) -> list[str]:
     config = commentjson.loads((target.workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-    provider = next(provider for provider in config["llm"]["providers"] if provider["id"] == "primary")
+    provider = config["settings"]["workspace"]["llm"]["providers"]["primary"]
+    model = provider["models"]["default"]["model"]
+    endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
     cassettes = [build_cassette(
-        asset_id="attachment-frozen-history", model=provider["model"],
-        url=provider["endpoint"] + "/chat/completions",
+        asset_id="attachment-frozen-history", model=model,
+        url=endpoint + "/chat/completions",
         frames=chat_completion_frames(
-            response_id=f"chatcmpl-attachment-history-{index}", model=provider["model"],
+            response_id=f"chatcmpl-attachment-history-{index}", model=model,
             deltas=({"role": "assistant", **reply},),
             finish_reason="tool_calls" if "tool_calls" in reply else "stop",
         ),

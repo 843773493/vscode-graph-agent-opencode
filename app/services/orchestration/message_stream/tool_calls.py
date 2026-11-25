@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 
 from langchain_core.messages import ToolMessage
 
@@ -15,10 +16,26 @@ from app.abstractions.turn_terminal_status import (
 )
 from app.agents.tool_result_text import tool_output_status
 from app.core.identifier import create_prefixed_id
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ToolExecutionEvidence,
+)
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.services.orchestration.event_stream.contracts import CanonicalItemObserverError
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCallbackBinding:
+    tool_call_id: str
+    started_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveToolExecution:
+    tool_call_id: str
+    tool_name: str
+    evidence: ToolExecutionEvidence | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,18 +66,42 @@ class MessageStreamToolCallsMixin:
             completion_reason="user_approval", error=None if successful else tool_result_content_text(message.content),
         )
 
-    def _tool_call_binding(self, callback_run_id: str) -> asyncio.Future[str]:
+    def _tool_call_binding(self, callback_run_id: str) -> asyncio.Future[ToolCallbackBinding]:
         binding = self._tool_call_bindings_by_callback_run_id.get(callback_run_id)
         if binding is None:
             binding = asyncio.get_running_loop().create_future()
             self._tool_call_bindings_by_callback_run_id[callback_run_id] = binding
         return binding
 
-    async def tool_call_for_callback(self, callback_run_id: str) -> str:
+    async def tool_binding_for_callback(self, callback_run_id: str) -> ToolCallbackBinding:
         """事件先到也只等待真实 callback 的身份交接，不按名称或参数猜调用。"""
         # callback 和事件各消费一次；交接保留至本次 step 结束，失败回报不能
         # 在事件已取走身份后重新创建一个无人消费的 Future。
         return await asyncio.shield(self._tool_call_binding(callback_run_id))
+
+    def register_tool_start(
+        self, model_call_id: str, tool_call_id: str, callback_run_id: str,
+    ) -> None:
+        """源端 callback 冻结开始观察，并复用原身份交接，不另存计时表。"""
+        started_at = datetime.now(UTC).isoformat()
+        call_id = self.claim_tool_call_id(model_call_id, tool_call_id)
+        binding = self._tool_call_binding(callback_run_id)
+        if binding.done():
+            raise RuntimeError(f"工具开始回调重复绑定: {callback_run_id}")
+        binding.set_result(ToolCallbackBinding(call_id, started_at))
+
+    def observe_tool_completion(self, callback_run_id: str) -> None:
+        """inline callback 在流通知发布前记录结束；内部嵌套工具没有独立绑定。"""
+        binding = self._tool_call_bindings_by_callback_run_id.get(callback_run_id)
+        if binding is None:
+            return
+        call_id = binding.result().tool_call_id
+        execution_id = self.resumed_tool_execution_id(call_id, callback_run_id)
+        active = self._active_tool_executions.get(execution_id)
+        if active is not None and active.evidence is not None and active.evidence.execution_completed_at is None:
+            self._active_tool_executions[execution_id] = replace(active, evidence=replace(
+                active.evidence, execution_completed_at=datetime.now(UTC).isoformat(),
+            ))
 
     def reject_tool_start(self, callback_run_id: str, error: BaseException) -> None:
         binding = self._tool_call_binding(callback_run_id)
@@ -74,11 +115,12 @@ class MessageStreamToolCallsMixin:
         self, model_call_id: str, tool_call_id: str, callback_run_id: str,
     ) -> None:
         """真实 callback 绑定原调用，工具体只在该 attempt 持久开始后执行。"""
-        call_id = self.claim_tool_call_id(model_call_id, tool_call_id)
-        binding = self._tool_call_binding(callback_run_id)
-        if binding.done():
-            raise RuntimeError(f"工具开始回调重复绑定: {callback_run_id}")
-        binding.set_result(call_id)
+        binding = await self.tool_binding_for_callback(callback_run_id)
+        call_id = self._tool_call_ids_by_provider_key.get((model_call_id, provider_tool_call_id(
+            ItemProjectionIdentity(model_call_id=model_call_id), tool_call_id,
+        )))
+        if call_id is None or binding.tool_call_id != call_id:
+            raise RuntimeError(f"工具开始回调与原调用不一致: {callback_run_id}")
         expected_attempt = self.resumed_tool_execution_id(call_id, callback_run_id)
         completed_attempt = self._completed_tool_result_execution_by_call_id.get(call_id)
         if completed_attempt == expected_attempt:
@@ -96,12 +138,13 @@ class MessageStreamToolCallsMixin:
         tool_execution_id: str,
         tool_call_id: str,
         tool_name: str,
+        started_at: str | None = None,
     ) -> None:
         if tool_execution_id in self._completed_tool_execution_ids:
             return
         previous = self._active_tool_executions.get(tool_execution_id)
         if previous is not None:
-            if previous != (tool_call_id, tool_name):
+            if (previous.tool_call_id, previous.tool_name) != (tool_call_id, tool_name):
                 raise RuntimeError("恢复 tool attempt 与原 call/name 不一致")
             return
         tool_call_id = self._resolve_tool_call_id(tool_call_id)
@@ -109,6 +152,7 @@ class MessageStreamToolCallsMixin:
             self._tool_call_model_call_ids[tool_call_id] = self.current_model_call_id
         model_call_id = self._tool_call_model_call_ids[tool_call_id]
         tool_invocation_id = self._tool_invocation_id_for(tool_call_id)
+        evidence = None
         try:
             if tool_call_id not in self._completed_tool_call_ids:
                 if self.writer is not None:
@@ -131,7 +175,7 @@ class MessageStreamToolCallsMixin:
                     )
                 self._completed_tool_call_ids.add(tool_call_id)
             if self.writer is not None:
-                await self.writer.commit(
+                event = await self.writer.commit(
                     "tool.started",
                     {
                         "tool_execution_id": tool_execution_id,
@@ -139,6 +183,7 @@ class MessageStreamToolCallsMixin:
                         "tool_invocation_id": tool_invocation_id,
                         "tool_attempt_id": tool_execution_id,
                         "tool_name": tool_name,
+                        "started_at": started_at,
                     },
                     model_call_id=model_call_id,
                     tool_execution_id=tool_execution_id,
@@ -146,6 +191,13 @@ class MessageStreamToolCallsMixin:
                     tool_invocation_id=tool_invocation_id,
                     tool_attempt_id=tool_execution_id,
                 )
+                evidence = ToolExecutionEvidence(
+                    session_id=event["session_id"], thread_id=event["thread_id"],
+                    turn_stream_id=event["turn_stream_id"],
+                    tool_invocation_id=tool_invocation_id, tool_attempt_id=tool_execution_id,
+                    tool_execution_id=tool_execution_id,
+                    started_seq=event["event_seq"], started_at=started_at,
+                ) if started_at is not None else None
         except BaseException as error:
             pending = self._pending_tool_starts.get(tool_call_id)
             if pending is not None and not pending.done():
@@ -154,7 +206,7 @@ class MessageStreamToolCallsMixin:
                 else:
                     pending.set_exception(error)
             raise
-        self._active_tool_executions[tool_execution_id] = (tool_call_id, tool_name)
+        self._active_tool_executions[tool_execution_id] = ActiveToolExecution(tool_call_id, tool_name, evidence)
         pending = self._pending_tool_starts.pop(tool_call_id, None)
         if pending is not None:
             pending.set_result((tool_execution_id, tool_name))
@@ -170,9 +222,9 @@ class MessageStreamToolCallsMixin:
         if call_id is None or call_id in self._completed_tool_result_call_ids:
             return
         attempts = [
-            (execution_id, tool_name)
-            for execution_id, (active_call_id, tool_name) in self._active_tool_executions.items()
-            if active_call_id == call_id
+            (execution_id, execution.tool_name)
+            for execution_id, execution in self._active_tool_executions.items()
+            if execution.tool_call_id == call_id
         ]
         if len(attempts) > 1:
             raise RuntimeError(f"工具调用绑定了多个 active attempt: {call_id}")
@@ -190,9 +242,9 @@ class MessageStreamToolCallsMixin:
     async def _require_tool_attempt(self, call_id: str) -> tuple[str, str]:
         """只认实际 on_tool_start；request 消息 ID 不能充当 attempt。"""
         attempts = [
-            (execution_id, tool_name)
-            for execution_id, (active_call_id, tool_name) in self._active_tool_executions.items()
-            if active_call_id == call_id
+            (execution_id, execution.tool_name)
+            for execution_id, execution in self._active_tool_executions.items()
+            if execution.tool_call_id == call_id
         ]
         if len(attempts) > 1:
             raise RuntimeError(f"工具调用绑定了多个 active attempt: {call_id}")
@@ -277,7 +329,8 @@ class MessageStreamToolCallsMixin:
         completion_reason: str,
         error: str,
     ) -> None:
-        attempts = dict(self._active_tool_executions)
+        attempts = {key: (value.tool_call_id, value.tool_name)
+                    for key, value in self._active_tool_executions.items()}
         for tool_execution_id, pending in self._pending_tool_completions.items():
             attempts.setdefault(
                 tool_execution_id,
@@ -374,6 +427,11 @@ class MessageStreamToolCallsMixin:
             }
             if error is not None:
                 payload["error"] = error
+            evidence = self._freeze_tool_execution(
+                tool_execution_id, normalized_status, normalized_outcome,
+            )
+            if evidence is not None:
+                payload["execution_completed_at"] = evidence.execution_completed_at
             observer_error: Exception | None = None
             if self._canonical_item_sink is not None:
                 result_outcome = (
@@ -394,6 +452,7 @@ class MessageStreamToolCallsMixin:
                     tool_invocation_id=tool_invocation_id, tool_attempt_id=tool_execution_id,
                     tool_name=tool_name,
                     content=result, artifact=artifact, tool_outcome=result_outcome,
+                    tool_execution=evidence,
                 )
                 try:
                     item = await self._tool_result_sink(completion)
@@ -406,6 +465,9 @@ class MessageStreamToolCallsMixin:
                     # 已提交结果只更新既有运行镜像，失败清理不得再生成同 ID 的结果。
                     observer_error = observer_failure.observer_error
                 else:
+                    evidence = item.tool_execution
+                    if evidence is not None:
+                        payload["execution_completed_at"] = evidence.execution_completed_at
                     if result_outcome == "unknown":
                         # canonical 是唯一正文来源；收尾不得把先提交的成功/失败改成未知。
                         persisted = item.payload
@@ -436,6 +498,18 @@ class MessageStreamToolCallsMixin:
             await self._commit_pending_tool_completion(pending)
             if observer_error is not None:
                 raise observer_error
+
+    def _freeze_tool_execution(
+        self, execution_id: str, status: str, outcome: str,
+    ) -> ToolExecutionEvidence | None:
+        """在持久化前冻结真实完成观察；重入保留第一次观察，不用重试时间补写。"""
+        active = self._active_tool_executions.get(execution_id)
+        if active is None or active.evidence is None:
+            return None
+        evidence = active.evidence
+        if outcome in {"outcome_unknown", "execution_lost"}:
+            return replace(evidence, status=status, outcome=outcome, execution_completed_at=None)
+        return replace(evidence, status=status, outcome=outcome)
 
     def _pending_tool_completion(
         self,

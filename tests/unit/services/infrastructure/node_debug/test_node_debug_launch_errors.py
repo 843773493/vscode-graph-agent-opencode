@@ -82,6 +82,26 @@ async def debug_launch_context(tmp_path: Path) -> AsyncIterator[DebugLaunchConte
 
 
 @pytest.mark.asyncio
+async def test_debug_control_connection_disables_ambient_websocket_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.infrastructure.node_debug.process import plugin_runtime
+
+    failure = ConnectionError("控制通道不可达")
+    connect = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(plugin_runtime, "connect", connect)
+    monkeypatch.setattr(plugin_runtime, "get_gateway_local_token", lambda: "local-control-token")
+    binding = node_debug_binding_snapshot()
+    connection = SimpleNamespace(resolve_gateway_url=lambda: "http://control.invalid", resolve_timeout_seconds=lambda: 3)
+    with pytest.raises(ConnectionError) as caught:
+        await NodeDebugPluginRuntime.connect(binding=binding, workspace_id=binding.workspace_id,
+            connection=connection, request_id="req-debug-control", run_id="run-control")
+    assert caught.value is failure
+    options = connect.await_args.kwargs
+    assert options["proxy"] is None
+    assert options["open_timeout"] == 3
+    assert options["additional_headers"]["X-Request-ID"] == "req-debug-control"
+
+
+@pytest.mark.asyncio
 async def test_plugin_launch_rejection_is_not_replayed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

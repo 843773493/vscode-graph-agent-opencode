@@ -28,7 +28,7 @@ async def test_provider_rejection_keeps_native_diagnostics_out_of_history_and_tr
     case = source_case
     session_id, thread_id, _ = await _target(case)
     config = commentjson.loads((case.workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-    endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
+    endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
     locations = ("/private/provider-request.sqlite", r"C:\private\provider-request.sqlite", r"\\target\private\provider-request.sqlite")
     cassette = build_cassette(
         asset_id="provider-rejection", model="e2e-stub-model", url=endpoint + "/chat/completions",

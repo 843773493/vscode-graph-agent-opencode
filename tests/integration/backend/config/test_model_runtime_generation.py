@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from boxteam_plugin_sdk.lifecycle import LifetimeScope
 
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING
 from app.core.workspace_identity import load_or_create_workspace_id
@@ -233,3 +234,54 @@ async def test_captured_environment_route_changes_generation_without_option_revi
         same.release()
     finally:
         second.release()
+
+
+async def test_model_and_background_recipe_remain_on_one_snapshot_during_reload(runtime_case, monkeypatch):
+    """构造第一候选后发布新配置，剩余候选、容量及秘密引用仍属于原快照。"""
+    from app.runtime import provider_model
+
+    case = runtime_case
+    old = case.config.get_snapshot()
+    frozen_before = case.config.freeze_model_recipe(case.config.resolve_agent_model("default", None))
+    runtime = case.config.get_agent_runtime_config("default")
+    credentials = await case.config.prepare_llm_credentials(runtime["models"])
+    built, resume = threading.Event(), threading.Event()
+    original = provider_model.build_model_from_provider
+    model_inputs = []
+
+    def paused_build(provider, runtime_config, **kwargs):
+        model = original(provider, runtime_config, **kwargs)
+        model_inputs.append(dict(provider))
+        if len(model_inputs) == 1:
+            built.set()
+            if not resume.wait(timeout=15):
+                raise TimeoutError("配置竞争测试没有释放候选构造")
+        return model
+
+    monkeypatch.setattr(provider_model, "build_model_from_provider", paused_build)
+    scope = LifetimeScope("model-recipe-snapshot-race")
+    task = None
+    try:
+        with case.config.use_llm_credentials(credentials):
+            task = asyncio.create_task(asyncio.to_thread(
+                prepare_agent_model, "default", case.config, lifetime_scope=scope,
+            ))
+        assert await asyncio.to_thread(built.wait, 10)
+        case.document["profiles"]["primary"]["settings"]["model_options"]["endpoint"] = "http://updated-model.invalid/v1"
+        case.source.write_text(json.dumps(case.document), encoding="utf-8")
+        assert await case.config.reload()
+        assert case.config.get_snapshot() is not old
+        resume.set()
+        setup = await asyncio.wait_for(task, timeout=10)
+        assert setup.recipe_for(setup.model) == frozen_before
+        assert all(provider["endpoint"] == "http://model.invalid/v1" for provider in model_inputs)
+        assert case.config.freeze_model_recipe(case.config.resolve_agent_model("default", None))["endpoint"] == "http://updated-model.invalid/v1"
+        for model, recipe in setup.model_recipes:
+            assert "initial-" not in str(recipe)
+            assert recipe["endpoint"] == "http://model.invalid/v1"
+            assert setup.recipe_for(model) is recipe
+    finally:
+        resume.set()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        await scope.close()

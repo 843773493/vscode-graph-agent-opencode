@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { useCallback, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../../../../../shared/core/i18n/index.js";
@@ -339,7 +340,7 @@ export default function GatewayConnectionDialog({
           </button>
         </header>
 
-        {error ? <div className="gateway-connection-error" role="alert">{error}</div> : null}
+        {error ? <div className="gateway-connection-error failure-summary" role="alert">{failureSummary(error)}</div> : null}
 
         <div className="gateway-connection-dialog-content" aria-busy={loading || submitting}>
           {page === "ssh-select" ? (

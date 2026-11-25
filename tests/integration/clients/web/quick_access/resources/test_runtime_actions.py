@@ -56,7 +56,7 @@ async def test_manage_runtime_resources_without_opening_details(
             config_path=workspace / ".boxteam/workspace.jsonc",
             schema_path=context.project_root / "configs/workspace_schema.jsonc")
         config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+        config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
             "url"
         ] = str(client.base_url).rstrip("/")
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

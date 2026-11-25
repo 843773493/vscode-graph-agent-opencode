@@ -81,7 +81,7 @@ class RolloutMessageMaterializerMixin:
             # 同一批消息只读同一事务；commit 与历史授权共用成功校验，
             # 每条 item 的 locator、正文和投影仍逐条核验，下一批重新检查。
             read_item = partial(
-                self._storage._read_v2_item_at,
+                self._storage._read_item_at,
                 validated_commits=set(), validated_scopes=set(),
             )
             for (

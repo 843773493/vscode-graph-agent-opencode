@@ -19,7 +19,6 @@ from app.services.infrastructure.rollout_context.runtime.composer import (
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
 )
-from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
 from app.services.mapping.itemized.selection import committed_context_refs
 
 
@@ -175,18 +174,8 @@ class ContextPlanCompositionMixin:
         session_id = snapshot.session_id
         thread_id = snapshot.thread_id
         checkpoint_ns = snapshot.checkpoint_ns
-        # stream 与 checkpoint sink 都保留自己的 canonical carrier；计划
-        # 只能选择其中一个。这里在 Saver composition owner 内复用唯一的
-        # typed provenance 去重规则，保证晚到的 stream shadow 不会因物理
-        # append 顺序落到对应 tool result 之后。storage 仍只提供事实与
-        # view membership，不承担 Provider projection 规则。
-        excluded_item_ids = superseded_item_ids(committed_items)
-        committed_refs = tuple(
-            ref
-            for ref in committed_context_refs(
-                committed_items, session_id=session_id, thread_id=thread_id,
-            )
-            if ref.ref_id not in excluded_item_ids
+        committed_refs = committed_context_refs(
+            committed_items, session_id=session_id, thread_id=thread_id,
         )
         refs = list(committed_refs)
         seen_overlay_bindings: set[tuple[str, str]] = set()

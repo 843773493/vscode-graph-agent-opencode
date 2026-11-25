@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from itertools import groupby
+from itertools import groupby, pairwise
 
 from langchain_core.messages import (
     BaseMessage,
@@ -13,6 +13,8 @@ from langchain_core.messages import (
     messages_from_dict,
 )
 
+from app.domain.itemized.compaction import CanonicalTextRange, summary_output_text
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.epoch.prefix_epoch import (
     AppendedItemRef,
     ProviderProfileItemFrame,
@@ -23,17 +25,17 @@ from app.domain.itemized.epoch.source_protocol import (
     parse_source_blocks,
 )
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import selection_ref_identity
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.selection import ContextSelectionEntry
+from app.domain.itemized.serde.registry import parse_context_ref
 from app.services.mapping.itemized.canonical_langchain import (
     project_canonical_items,
-    project_summary_source,
-    summary_retry_variants,
-    summary_source_groups,
-    validate_summary_source,
+    project_derived_summary_message,
 )
+from app.services.mapping.itemized.carrier_dedup import projection_message_group_id
 from app.services.mapping.itemized.selection import (
     resolve_selected_item,
     resolve_selected_request_body,
@@ -48,10 +50,10 @@ def project_canonical_prefix_frames(
     start_ordinal: int,
 ) -> tuple[tuple[ProviderProfileItemFrame, ...], tuple[str, ...]]:
     """按 typed assistant 分组映射 frame；user/tool/source 保持独立。"""
-    def group_key(item: CanonicalItemRecord) -> tuple[str, str]:
+    def group_key(item: CanonicalItemRecord) -> tuple[str, str | None, str | None, str]:
         if item.semantic_kind in {"assistant_output", "reasoning", "tool_call"}:
-            return "assistant", item.message_group_id or item.item_id
-        return "item", item.item_id
+            return "assistant", *projection_message_group_id(item)
+        return "item", None, None, item.item_id
 
     frames: list[ProviderProfileItemFrame] = []
     selected_ids: list[str] = []
@@ -77,6 +79,20 @@ def project_canonical_prefix_frames(
     return tuple(frames), tuple(selected_ids)
 
 
+def project_text_range(item: CanonicalItemRecord, part: CanonicalTextRange) -> BaseMessage:
+    """先按安全 canonical 合同投影，再切纯文本；不拆工具、媒体或受保护载荷。"""
+    from app.domain.itemized.identity.refs import ContextRef
+
+    if (part.ref != ContextRef.canonical_item(item, session_id=part.ref.session_id, thread_id=part.ref.thread_id)
+            or item.semantic_kind not in {"user_input", "assistant_output"}
+            or item.payload_kind != "text" or part.ref.protection != "public"):
+        raise ValueError("compaction-text-range-invalid: 只能分片公开的独立纯文本 Item")
+    messages = project_canonical_items((item,), include_runtime_notices=True, include_summaries=True, preserve_order=True)
+    if len(messages) != 1 or not isinstance(messages[0].content, str) or len(messages[0].content) != part.text_length:
+        raise ValueError("compaction-text-range-invalid: 安全投影与冻结文本长度不一致")
+    return messages[0].model_copy(update={"content": messages[0].content[part.start:part.end]})
+
+
 def project_sealed_prefix(
     plan: ContextRequestPlan,
     binding: ContextSealBinding,
@@ -86,7 +102,7 @@ def project_sealed_prefix(
     """每一 wire frame 都必须对应同一 assembly 的真实 canonical/source selection。"""
     if binding.prefix.assembly_id != plan.assembly_id:
         raise ValueError("source-mismatch: prefix 与 sealed plan assembly 不一致")
-    if any(entry.included and entry.ref.ref_type == "canonical_item"
+    if plan.selection_policy != "derived_request" and any(entry.included and entry.ref.ref_type == "canonical_item"
            and entry.ref.thread_id != plan.thread_id for entry in plan.selection):
         raise ValueError("source-mismatch: stable prefix 不得跨 thread 拼接 canonical refs")
     entries = {
@@ -95,6 +111,12 @@ def project_sealed_prefix(
     }
     contributions = {source.contribution_id: source for source in plan.contributions}
     canonical_entries = {selection_ref_identity(entry.ref): entry for entry in plan.selection if entry.ref.ref_type == "canonical_item"}
+    canonical_by_id: dict[str, ContextSelectionEntry] = {}
+    for entry in entries.values():
+        if entry.ref.ref_type == "canonical_item":
+            if entry.ref.ref_id in canonical_by_id:
+                raise ValueError("source-mismatch: canonical frame item owner 不唯一")
+            canonical_by_id[entry.ref.ref_id] = entry
     used: set[tuple[str, ...]] = set()
     root = binding.root
     if root is not None:
@@ -133,7 +155,6 @@ def project_sealed_prefix(
     replacements = SourceReplacementIndex()
     messages: list[BaseMessage] = []
     groups: dict[tuple[str, ...], tuple[list[dict[str, object]], int]] = {}
-    retry_variants: dict[tuple[str, ...], dict[str, tuple[BaseMessage, ...]]] = {}
     for frame in binding.prefix.state.frames:
         if frame.source_protocol is not None:
             for block in parse_source_blocks(frame.content, expected_version=frame.source_protocol):
@@ -175,36 +196,41 @@ def project_sealed_prefix(
                 validated.append((source, body))
             source, body = validated[0]
             if source.contribution_kind == "model_message":
-                if plan.selection_policy != "summary_candidate" or not isinstance(body, Mapping):
+                if plan.selection_policy != "derived_request" or not isinstance(body, Mapping):
                     raise ValueError("source-mismatch: model_message 只能属于摘要候选")
                 projected = messages_from_dict([body["message"]])[0]
                 if {"human": "user", "ai": "assistant", "tool": "tool"}.get(projected.type) != frame.role:
                     raise ValueError("source-mismatch: 摘要候选消息角色不一致")
-                group = []
-                for item_id in body["item_ids"]:
-                    if ("canonical_item", item_id, plan.thread_id) not in items:
-                        raise ValueError("source-mismatch: 摘要候选 canonical 来源已丢失")
-                    selected = canonical_entries.get(("canonical_item", item_id, plan.thread_id))
-                    if selected is None:
-                        raise ValueError("source-mismatch: 摘要候选 canonical 来源没有封存")
-                    group.append(resolve_selected_item(selected, items))
-                ordinal, separator, phase = source.source_revision.partition(":")
-                if not separator or not ordinal.isdecimal() or phase not in {"initial", "tool_free", "visible_text"}:
-                    raise ValueError("source-mismatch: 摘要候选重试身份非法")
-                retry_ids = tuple(body["retry_source_item_ids"])
-                if retry_ids not in retry_variants:
-                    # 同次投影的相同有序重试中段只校验、投影一次；不能为每帧重做整段历史。
-                    retry_items = []
-                    for item_id in retry_ids:
-                        selected = canonical_entries.get(("canonical_item", item_id, plan.thread_id))
-                        if selected is None:
-                            raise ValueError("source-mismatch: 摘要重试中段没有封存 canonical 来源")
-                        retry_items.append(resolve_selected_item(selected, items))
-                    retry_messages = [project_summary_source(value) for value in summary_source_groups(retry_items).values()]
-                    retry_variants[retry_ids] = summary_retry_variants(retry_messages) if retry_items else {}
-                if retry_ids and int(ordinal) == 0:
-                    raise ValueError("source-mismatch: 初始候选不能声明重试变换来源")
-                validate_summary_source(projected, group, retry_variants=retry_variants[retry_ids].get(projected.id, ()))
+                if set(body) != {"message", "result_ref", "output_refs", "dispatch_ref", "coverage"}:
+                    raise ValueError("source-mismatch: 合并摘要缺少精确结果 provenance")
+                result_ref = DetailRef.from_dict(body["result_ref"])
+                dispatch_ref = SealedContextDispatchRef.from_dict(body["dispatch_ref"])
+                result_ref.require_owner(plan.session_id, plan.thread_id)
+                output_refs = tuple(parse_context_ref(value) for value in body["output_refs"])
+                if not output_refs:
+                    raise ValueError("source-mismatch: 合并摘要缺少原 canonical outputs")
+                outputs = []
+                for output_ref in output_refs:
+                    output_entry = canonical_entries.get(selection_ref_identity(output_ref))
+                    if output_entry is None or output_entry.ref != output_ref:
+                        raise ValueError("source-mismatch: 合并摘要没有封存原 canonical output")
+                    output = resolve_selected_item(output_entry, items)
+                    identity = output.projection_identity
+                    if identity is None or identity.model_call_id != dispatch_ref.callback_model_call_id:
+                        raise ValueError("source-mismatch: 合并摘要原 output/model-call 不一致")
+                    outputs.append(output)
+                if (any(left.item_sequence >= right.item_sequence for left, right in pairwise(outputs))
+                    or not isinstance(projected, HumanMessage)
+                    or message_to_dict(projected) != message_to_dict(project_derived_summary_message(
+                        "".join(summary_output_text(output) for output in outputs), message_id=ref.ref_id,
+                    ))):
+                    raise ValueError("source-mismatch: 合并摘要正文与 canonical output 不一致")
+                for value in body["coverage"]:
+                    covered = parse_context_ref(value)
+                    selected = canonical_entries.get(selection_ref_identity(covered))
+                    if selected is None or selected.ref != covered:
+                        raise ValueError("source-mismatch: 合并摘要缺少冻结 coverage")
+                    resolve_selected_item(selected, items)
                 messages.append(projected)
                 used.add(("request_only", ref.ref_id, plan.thread_id))
                 continue
@@ -234,7 +260,7 @@ def project_sealed_prefix(
             used.add(("request_only", ref.ref_id, plan.thread_id))
             continue
         content = frame.content
-        if not isinstance(content, Mapping) or set(content) != {"item_ids", "message"}:
+        if not isinstance(content, Mapping) or set(content) not in ({"item_ids", "message"}, {"item_ids", "message", "text_range"}):
             raise ValueError("source-mismatch: canonical wire frame manifest 非法")
         ids = content["item_ids"]
         if not isinstance(ids, list) or not ids or not all(isinstance(identity, str) for identity in ids):
@@ -242,10 +268,24 @@ def project_sealed_prefix(
         key = tuple(ids)
         if ref.ref_id != key[0]:
             raise ValueError("source-mismatch: canonical frame primary ref 不一致")
+        if "text_range" in content:
+            part = CanonicalTextRange.from_dict(content["text_range"])
+            entry = canonical_by_id.get(part.ref.ref_id)
+            if (plan.selection_policy != "derived_request" or key != (part.ref.ref_id,)
+                    or entry is None or entry.ref != part.ref or key in groups):
+                raise ValueError("source-mismatch: 文本分片必须对应唯一的派生原件 selection")
+            projected = project_text_range(resolve_selected_item(entry, items), part)
+            if (message_to_dict(projected) != content["message"]
+                    or {"human": "user", "ai": "assistant"}[projected.type] != frame.role):
+                raise ValueError("source-mismatch: 文本分片与实际 canonical 正文不一致")
+            messages.append(projected)
+            groups[key] = ([content["message"]], 1)
+            used.add(selection_ref_identity(entry.ref))
+            continue
         if key not in groups:
             selected = []
             for item_id in key:
-                entry = entries.get(("canonical_item", item_id, plan.thread_id))
+                entry = canonical_by_id.get(item_id)
                 if entry is None or entry.ref.ref_type != "canonical_item":
                     raise ValueError("source-mismatch: canonical frame source 未被选入")
                 selected.append(resolve_selected_item(entry, items))
@@ -265,7 +305,7 @@ def project_sealed_prefix(
             raise ValueError("source-mismatch: canonical frame wire role 不一致")
         messages.append(projected)
         groups[key] = expected, index + 1
-        used.update(("canonical_item", item_id, plan.thread_id) for item_id in key)
+        used.update(selection_ref_identity(canonical_by_id[item_id].ref) for item_id in key)
     if any(index != len(expected) for expected, index in groups.values()) or used != set(entries):
         raise ValueError("source-mismatch: sealed selection 与最终 wire frames 未完整联校")
     return messages

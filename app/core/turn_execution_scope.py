@@ -35,7 +35,7 @@ _CURRENT_TURN_SCOPE: ContextVar[TurnExecutionScope | None] = ContextVar(
 )
 
 
-def set_current_turn_execution_scope(scope: TurnExecutionScope) -> Token[TurnExecutionScope | None]:
+def set_current_turn_execution_scope(scope: TurnExecutionScope | None) -> Token[TurnExecutionScope | None]:
     return _CURRENT_TURN_SCOPE.set(scope)
 
 

@@ -13,7 +13,7 @@ from langgraph.types import Send
 
 from app.agents.execution_checkpoint import (
     checkpoint_accepted_execution_input,
-    persist_final_assistant_checkpoint,
+    finalize_assistant_checkpoint,
 )
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.core.checkpoint_config import build_checkpoint_config
@@ -32,7 +32,6 @@ from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting import PromptSection, internal_message_factory
-from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
@@ -154,7 +153,7 @@ def accept_runtime_input():
                 session_id, thread_id, job_id=job_id,
                 claim_owner="checkpoint-test", previous_generation=0,
             )
-        return saver.accepted_user_message(session_id, thread_id=thread_id, job_id=job_id, message_id=message.response_metadata["message_id"])
+        return saver.accepted_user_message(session_id, thread_id=thread_id, job_id=job_id, message_id=message.response_metadata["message_id"])[1]
     return accept
 
 
@@ -197,33 +196,31 @@ async def test_checkpoint_accepted_execution_input_is_idempotent(
     )
 
     message = accept_runtime_input(saver, tmp_path, session_id, thread_id, message, "job_user_checkpoint", "admission-job-user-checkpoint")
+    arguments = {
+        "checkpointer": saver, "session_id": session_id, "thread_id": thread_id,
+        "job_id": "job_user_checkpoint", "message_id": message.response_metadata["message_id"],
+        "execution_binding": UserExecutionIdentity(
+            job_id="job_user_checkpoint", turn_id="turn_user_checkpoint",
+            admission_idempotency_key="admission-job-user-checkpoint",
+        ),
+    }
 
     with session_thread_owner_scope(
         MutationIntentOwner(session_id, thread_id),
         langgraph_thread_id=thread_id,
     ):
-        assert (
-            checkpoint_accepted_execution_input(
-                checkpointer=saver,
-                session_id=session_id,
-                thread_id=thread_id,
-                job_id="job_user_checkpoint",
-                admission_idempotency_key="admission-job-user-checkpoint",
-                message=message,
-            )
-            is True
-        )
-        assert (
-            checkpoint_accepted_execution_input(
-                checkpointer=saver,
-                session_id=session_id,
-                thread_id=thread_id,
-                job_id="job_user_checkpoint",
-                admission_idempotency_key="admission-job-user-checkpoint",
-                message=message,
-            )
-            is False
-        )
+        before = saver.get_tuple(config)
+        resumed = checkpoint_accepted_execution_input(**arguments, write_checkpoint=False)
+        assert resumed.checkpointed is False
+        assert resumed.message == message
+        assert saver.get_tuple(config) == before
+        consumed = checkpoint_accepted_execution_input(**arguments)
+        assert consumed.checkpointed is True
+        assert consumed.message == message
+        repeated = checkpoint_accepted_execution_input(**arguments)
+        assert repeated.checkpointed is False
+        assert repeated.message == message
+        assert repeated.admission == consumed.admission == resumed.admission
     execution_id = saver.execution_for_turn(
         session_id,
         thread_id=thread_id,
@@ -234,6 +231,7 @@ async def test_checkpoint_accepted_execution_input_is_idempotent(
         thread_id=thread_id,
         execution_id=execution_id,
     )
+    assert consumed.admission == admission
     assert admission.job_id == "job_user_checkpoint"
     assert admission.turn_id == "turn_user_checkpoint"
     assert admission.job_id != admission.turn_id
@@ -285,7 +283,7 @@ def test_persist_internal_execution_keeps_notice_outside_user_turn_history(
         admission_idempotency_key="internal-goal:resume-1",
     )
     saver.admit_internal_execution(session_id, thread_id=thread_id, job_id="job_internal_goal", intent=intent, message=message)
-    message = saver.accepted_internal_message(session_id, thread_id=thread_id, job_id="job_internal_goal", message_id=intent.message_id, intent=intent)
+    message = saver.accepted_internal_message(session_id, thread_id=thread_id, job_id="job_internal_goal", message_id=intent.message_id, intent=intent)[1]
 
     with session_thread_owner_scope(
         MutationIntentOwner(session_id, thread_id),
@@ -297,10 +295,9 @@ def test_persist_internal_execution_keeps_notice_outside_user_turn_history(
                 session_id=session_id,
                 thread_id=thread_id,
                 job_id="job_internal_goal",
-                admission_idempotency_key=intent.admission_idempotency_key,
-                message=message,
-                execution_intent=intent,
-            )
+                message_id=intent.message_id,
+                execution_binding=intent,
+            ).checkpointed
             is False
         )
 
@@ -401,19 +398,19 @@ async def test_checkpoint_accepted_execution_input_discards_stale_execution_task
                 session_id=session_id,
                 thread_id=thread_id,
                 job_id="job_after_stale_task",
-                admission_idempotency_key="admission-job-after-stale-task",
-                message=message,
-            )
+                message_id=message.response_metadata["message_id"],
+                execution_binding=UserExecutionIdentity(job_id="job_after_stale_task", turn_id=message.response_metadata["message_metadata"]["turn_id"], admission_idempotency_key="admission-job-after-stale-task"),
+            ).checkpointed
             is True
         )
         assert checkpoint_accepted_execution_input(
-            checkpointer=saver,
-            session_id=session_id,
-            thread_id=thread_id,
-            job_id="job_after_stale_task",
-            admission_idempotency_key="admission-job-after-stale-task",
-            message=message,
-        ) is False
+                   checkpointer=saver,
+                   session_id=session_id,
+                   thread_id=thread_id,
+                   job_id="job_after_stale_task",
+                   message_id=message.response_metadata["message_id"],
+                   execution_binding=UserExecutionIdentity(job_id="job_after_stale_task", turn_id=message.response_metadata["message_metadata"]["turn_id"], admission_idempotency_key="admission-job-after-stale-task"),
+               ).checkpointed is False
 
     with session_thread_owner_scope(
         MutationIntentOwner(session_id, thread_id),
@@ -495,11 +492,10 @@ async def test_internal_seed_checkpoint_keeps_graph_messages_and_cleans_stale_ta
         arguments = {
             "checkpointer": saver, "session_id": session_id, "thread_id": thread_id,
             "job_id": "job-seed-reference",
-            "admission_idempotency_key": seed_execution_intent.admission_idempotency_key,
-            "message": None, "execution_intent": seed_execution_intent,
+            "message_id": seed_execution_intent.message_id, "execution_binding": seed_execution_intent,
         }
-        assert checkpoint_accepted_execution_input(**arguments) is stale_tasks
-        assert checkpoint_accepted_execution_input(**arguments) is False
+        assert checkpoint_accepted_execution_input(**arguments).checkpointed is stale_tasks
+        assert checkpoint_accepted_execution_input(**arguments).checkpointed is False
         latest = await saver.aget_tuple(config)
     messages = checkpoint_messages(saver, latest)
     assert len(messages) == 1
@@ -520,174 +516,73 @@ async def test_internal_seed_checkpoint_keeps_graph_messages_and_cleans_stale_ta
 
 
 @pytest.mark.asyncio
-async def test_persist_final_assistant_checkpoint_appends_replacement(
-    tmp_path,
-    session_bundle_factory,
+async def test_finalize_reuses_original_checkpoint_and_usage(
+    tmp_path, session_bundle_factory,
 ):
     session_id = "ses_019c3e8835447c678e07a55a9cc127fc"
     session_bundle_factory(tmp_path, session_id)
-    reasoning_text = "用户只要求回复 OK。"
-    final_text = "OK"
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     thread_id = saver._storage.storage.main_thread_id(session_id)
     turn_id = "turn-standard-assistant"
-    admission = _accept_user_turn(
-        saver,
-        session_id=session_id,
-        thread_id=thread_id,
-        message_id="msg_user",
-        turn_id=turn_id,
-        job_id="job-standard-assistant",
-        payload="只回复 OK",
-    )
+    admission = _accept_user_turn(saver, session_id=session_id, thread_id=thread_id,
+        message_id="msg_user", turn_id=turn_id, job_id="job-standard-assistant", payload="只回复 OK")
+    content = [
+        {"type": "reasoning", "reasoning": "用户只要求回复 OK。"},
+        {"type": "text", "text": "OK"},
+    ]
     config = build_checkpoint_config(thread_id)
-    checkpoint = {
-        "channel_values": {
-            "messages": [
-                HumanMessage(
-                    content="只回复 OK",
-                    response_metadata={
-                        "message_id": "msg_user",
-                        "created_at": MESSAGE_TIME.isoformat(),
-                        "updated_at": MESSAGE_TIME.isoformat(),
-                        "message_metadata": {"turn_id": turn_id},
-                    },
-                ),
-                AIMessage(
-                    content=final_text,
-                    name="default",
-                    response_metadata={
-                        "message_id": "msg_intermediate",
-                        "model_call_id": "model-call-final",
-                        "created_at": MESSAGE_TIME.isoformat(),
-                        "updated_at": MESSAGE_TIME.isoformat(),
-                    },
-                ),
-            ],
-        },
-        "channel_versions": {"messages": "1"},
-        "updated_channels": ["messages"],
-        "id": "ckpt-mixed",
-    }
     with (
-        session_thread_owner_scope(
-            MutationIntentOwner(session_id, thread_id),
-            langgraph_thread_id=thread_id,
-        ),
+        session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id),
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
     ):
-        await saver.aput(
-            config,
-            checkpoint,
-            {"source": "test", "step": 1, "writes": {}},
-            {"messages": "1"},
-        )
-
+        saver.put(config, {
+            "id": "ckpt-original-final",
+            "channel_values": {"messages": [
+                HumanMessage(id="msg_user", content="只回复 OK", response_metadata={"message_metadata": {"turn_id": turn_id}}),
+                AIMessage(id="msg_original", content=content,
+                    response_metadata={"model_call_id": "model-call-final"},
+                    usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+                                    "input_token_details": {"cache_read": 80}}),
+            ]},
+            "channel_versions": {"messages": "1"}, "updated_channels": ["messages"],
+        }, {"source": "test", "step": 1, "writes": {}}, {"messages": "1"})
+        before = saver.get_tuple(config)
+        jsonl = saver._storage.storage.jsonl_path(session_id, "", thread_id=thread_id)
+        original_bytes = jsonl.read_bytes()
+        finalized = []
+        finalize_assistant_checkpoint(checkpointer=saver, thread_id=thread_id,
+            message_id="msg_original", on_finalize=finalized.append)
+        after = saver.get_tuple(config)
+        assert after.checkpoint == before.checkpoint
+        assert jsonl.read_bytes() == original_bytes
+        assert len(finalized) == 1
+        assert finalized[0].id == "msg_original"
+        assert finalized[0].content == content
+        assert "phase" not in finalized[0].response_metadata
+        assert finalized[0] == checkpoint_messages(saver, before)[-1]
+        assert not any(relation["relation"] == "replaces"
+                       for relation in finalized[0].response_metadata.get("provenance_relations", []))
+        for invalid_id in (None, "missing", "msg_user"):
+            with pytest.raises(ValueError):
+                finalize_assistant_checkpoint(checkpointer=saver, thread_id=thread_id,
+                    message_id=invalid_id, on_finalize=finalized.append)
+        assert len(finalized) == 1
+        assert jsonl.read_bytes() == original_bytes
     with (
-        session_thread_owner_scope(
-            MutationIntentOwner(session_id, thread_id),
-            langgraph_thread_id=thread_id,
-        ),
-        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        RolloutCheckpointSaver(sessions_dir=tmp_path) as cold,
+        session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id),
     ):
-        changed = persist_final_assistant_checkpoint(
-            checkpointer=saver,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            content_blocks=(
-                {
-                    "type": "reasoning",
-                    "reasoning": reasoning_text,
-                    "id": "part_reasoning",
-                    "index": 0,
-                },
-                {
-                    "type": "text",
-                    "text": final_text,
-                    "id": "part_answer",
-                    "index": 1,
-                },
-            ),
-            final_text=final_text,
-            message_id="msg_assistant",
-            message_created_at=MESSAGE_TIME,
-            token_usage=ModelTokenUsagePayload(
-                input_tokens=100,
-                output_tokens=20,
-                total_tokens=120,
-                cache_read_input_tokens=80,
-                model_calls=2,
-                reported_model_calls=2,
-            ),
-        )
-
-    assert changed is True
-    plan = saver.compose_committed_context_plan(
-        session_id,
-        thread_id=thread_id,
-        plan_id="plan-standard-assistant",
-        tool_set=ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
-        include_pending_notices=False,
-    )
-    canonical_ref_ids = [ref.ref_id for ref in plan.refs]
-    assert "item-msg_intermediate" not in canonical_ref_ids
-    assert "item-msg_assistant" in canonical_ref_ids
-    with session_thread_owner_scope(
-        MutationIntentOwner(session_id, thread_id),
-        langgraph_thread_id=thread_id,
-    ):
-        latest = await saver.aget_tuple(config)
-    assert latest is not None
-    messages = checkpoint_messages(saver, latest)
-    assistant = messages[-1]
-    assert isinstance(assistant, AIMessage)
-    assert assistant.response_metadata["phase"] == "final_answer"
-    assert assistant.id == "msg_assistant"
-    assert assistant.response_metadata["message_id"] == "msg_assistant"
-    assert assistant.response_metadata["provenance_relations"][-1] == {
-        "relation": "replaces",
-        "target_kind": "projection_message",
-        "target_id": "msg_intermediate",
-        "target_model_call_id": "model-call-final",
-    }
-    assert isinstance(assistant.response_metadata["created_at"], str)
-    assert (
-        assistant.response_metadata["updated_at"]
-        == assistant.response_metadata["created_at"]
-    )
-    assert assistant.tool_calls == []
-    assert assistant.content == [
-        {
-            "type": "reasoning_content",
-            "reasoning_content": reasoning_text,
-        },
-        {"type": "text", "text": final_text},
-    ]
-
-    messages_page = await build_message_service(tmp_path, checkpointer=saver).list(
-        session_id, limit=10
-    )
-    assert messages_page.items[-1].content == final_text
-    assert messages_page.items[-1].metadata["token_usage"] == {
-        "input_tokens": 100,
-        "output_tokens": 20,
-        "total_tokens": 120,
-        "cache_read_input_tokens": 80,
-        "model_calls": 2,
-        "reported_model_calls": 2,
-    }
-
-    message_service = build_message_service(tmp_path, checkpointer=saver)
-    state_snapshot = await message_service.get_agent_state_messages(session_id)
-    records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
-    state_assistant = records[-1]
-    assert state_assistant["role"] == "assistant"
-    assert state_assistant["response_metadata"]["phase"] == "final_answer"
-    # design 5.2：诊断快照保留 reasoning/text carrier，展示文本由历史投影提供。
-    assert state_assistant["content"] == [
-        {"type": "reasoning_content", "reasoning_content": reasoning_text},
-        {"type": "text", "text": final_text},
-    ]
+        restored = cold.get_tuple(config)
+        assistant = checkpoint_messages(cold, restored)[-1]
+        assert assistant.id == "msg_original" and assistant.content == content
+        assert assistant.response_metadata["token_usage"] == {
+            "input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+            "cache_read_input_tokens": 80, "model_calls": 1, "reported_model_calls": 1,
+        }
+        items = cold.read_canonical_items(session_id, thread_id)
+        assert len([item for item in items if item.wire_role == "assistant"]) == 2
+        assert sum("token_usage" in item.extensions.get("boxteam.checkpoint.annotations", {}).get("value", {})
+                   for item in items) == 1
 
 
 @pytest.mark.asyncio
@@ -707,7 +602,7 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
     job_id = "job-final-provenance"
     model_call_id = str(uuid4())
     source_message_id = f"lc_run--{model_call_id}"
-    final_message_id = "msg_final_provenance"
+    final_message_id = source_message_id
     admission = _accept_user_turn(
         saver,
         session_id=session_id,
@@ -749,6 +644,7 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
                         AIMessage(
                             id=source_message_id,
                             content="最终回答",
+                            usage_metadata={"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
                             response_metadata={
                                 "context_revision": "context-final-provenance",
                                 "provenance_relations": [source_relation],
@@ -794,25 +690,9 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
             ),
         )
         await adapter.register(model_call_id, 1, "reasoning-checkpoint")
-        assert persist_final_assistant_checkpoint(
-            checkpointer=saver,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            content_blocks=(
-                {"type": "text", "text": "最终回答", "id": "part_answer", "index": 0},
-            ),
-            final_text="最终回答",
-            message_id=final_message_id,
-            message_created_at=MESSAGE_TIME,
-            token_usage=ModelTokenUsagePayload(
-                input_tokens=11,
-                output_tokens=7,
-                total_tokens=18,
-                model_calls=1,
-                reported_model_calls=1,
-            ),
-            preserve_content_part_refs=True,
-            before_persist=adapter.converge_final_message,
+        finalize_assistant_checkpoint(
+            checkpointer=saver, thread_id=thread_id, message_id=final_message_id,
+            on_finalize=adapter.converge_final_message,
         )
         await adapter.converge_final_checkpoint(final_message_id)
         stored_items = saver._storage.storage.read_items(session_id, thread_id)
@@ -821,8 +701,8 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
         assert by_id[f"item-{source_message_id}"].projection_identity.model_call_id == (
             final_item.projection_identity.model_call_id
         ) == model_call_id
-        assert final_item.projection_identity.phase == "final_answer"
-        assert final_item.projection_identity.content_part_refs[0].id == "part_answer"
+        assert final_item.projection_identity.phase is None
+        assert final_item.projection_identity.content_part_refs == ()
         assert final_item.source_manifest.source_revision == "context-final-provenance"
         assert final_item.extensions["example.provider_fact"] == extension
         assert final_item.extensions["boxteam.checkpoint.annotations"]["value"][
@@ -830,12 +710,6 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
         ]["total_tokens"] == 18
         assert [relation.to_dict() for relation in final_item.provenance_relations] == [
             source_relation,
-            {
-                "relation": "replaces",
-                "target_kind": "projection_message",
-                "target_id": source_message_id,
-                "target_model_call_id": model_call_id,
-            },
         ]
         assert final_item.turn_id == turn_id
         assert final_item.producer_ref["invocation_id"] == admission.execution_id
@@ -923,6 +797,14 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
         job_id="job-encrypted-reasoning",
         payload="问题",
     )
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_item_001",
+        "status": "completed",
+        "content": [],
+        "encrypted_content": "encrypted-reasoning",
+        "summary": [],
+    }
     config = build_checkpoint_config(thread_id)
     with (
         session_thread_owner_scope(
@@ -943,7 +825,7 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
                                 "message_metadata": {"turn_id": turn_id}
                             },
                         ),
-                        AIMessage(content="回答"),
+                        AIMessage(id="msg_assistant", content=[reasoning_item, {"type": "text", "text": "回答"}]),
                     ]
                 },
                 "channel_versions": {"messages": "1"},
@@ -953,14 +835,7 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
             {"source": "test", "step": 1, "writes": {}},
             {"messages": "1"},
         )
-    reasoning_item = {
-        "type": "reasoning",
-        "id": "rs_item_001",
-        "status": "completed",
-        "content": [],
-        "encrypted_content": "encrypted-reasoning",
-        "summary": [],
-    }
+
 
     with (
         session_thread_owner_scope(
@@ -969,25 +844,14 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
         ),
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
     ):
-        assert persist_final_assistant_checkpoint(
-            checkpointer=saver,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            content_blocks=(
-                reasoning_item,
-                {"type": "text", "text": "回答"},
-            ),
-            final_text="回答",
-            message_id="msg_assistant",
-            message_created_at=MESSAGE_TIME,
-        )
+        finalized = []
+        finalize_assistant_checkpoint(checkpointer=saver, thread_id=thread_id,
+            message_id="msg_assistant", on_finalize=finalized.append)
+        assert finalized[0].content == [reasoning_item, {"type": "text", "text": "回答"}]
         latest = await saver.aget_tuple(config)
     assert latest is not None
     assistant = checkpoint_messages(saver, latest)[-1]
-    assert assistant.content[0] == {
-        "type": "reasoning_items",
-        "reasoning_items": [reasoning_item],
-    }
+    assert assistant.content[0] == reasoning_item
     assert assistant.content[1] == {"type": "text", "text": "回答"}
     assert assistant.additional_kwargs == {}
 
@@ -1035,7 +899,9 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_source(
         name="python_exec",
     )
     final_message = AIMessage(
-        content=final_text,
+        id="msg_intermediate_final",
+        content=[{"type": "reasoning_content", "reasoning_content": final_reasoning},
+                 {"type": "text", "text": final_text}],
         name="default",
         response_metadata={
             "message_id": "msg_intermediate_final",
@@ -1074,7 +940,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_source(
     )
     reminder_intent = InternalExecutionIntent(message_id=reminder_message_id, execution_id="execution-checkpoint-reminder", admission_idempotency_key="admission-checkpoint-reminder")
     saver.admit_internal_execution(session_id, thread_id=thread_id, job_id="job-checkpoint-reminder", intent=reminder_intent, message=reminder_message)
-    reminder_message = saver.accepted_internal_message(session_id, thread_id=thread_id, job_id="job-checkpoint-reminder", message_id=reminder_message_id, intent=reminder_intent)
+    reminder_message = saver.accepted_internal_message(session_id, thread_id=thread_id, job_id="job-checkpoint-reminder", message_id=reminder_message_id, intent=reminder_intent)[1]
     with (
         session_thread_owner_scope(
             MutationIntentOwner(session_id, thread_id),
@@ -1096,14 +962,13 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_source(
             {"messages": "1"},
         )
         assert checkpoint_accepted_execution_input(
-            checkpointer=saver,
-            session_id=session_id,
-            thread_id=thread_id,
-            job_id="job-checkpoint-reminder",
-            admission_idempotency_key="admission-checkpoint-reminder",
-            message=reminder_message,
-            execution_intent=reminder_intent,
-        ) is False
+                   checkpointer=saver,
+                   session_id=session_id,
+                   thread_id=thread_id,
+                   job_id="job-checkpoint-reminder",
+                   message_id=reminder_intent.message_id,
+                   execution_binding=reminder_intent,
+               ).checkpointed is False
     reminder_item = saver.get_canonical_item(
         session_id,
         thread_id=thread_id,
@@ -1166,30 +1031,11 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_source(
         ),
         execution_admission_scope(user_admission, langgraph_thread_id=thread_id),
     ):
-        changed = persist_final_assistant_checkpoint(
-            checkpointer=saver,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            content_blocks=(
-                {
-                    "type": "reasoning",
-                    "reasoning": final_reasoning,
-                    "id": "part_final_reasoning",
-                    "index": 0,
-                },
-                {
-                    "type": "text",
-                    "text": final_text,
-                    "id": "part_final_answer",
-                    "index": 1,
-                },
-            ),
-            final_text=final_text,
-            message_id="msg_assistant",
-            message_created_at=MESSAGE_TIME,
-        )
+        finalized = []
+        finalize_assistant_checkpoint(checkpointer=saver, thread_id=thread_id,
+            message_id="msg_intermediate_final", on_finalize=finalized.append)
+        assert finalized[0].id == "msg_intermediate_final"
 
-    assert changed is True
     state_snapshot = await build_message_service(
         tmp_path, checkpointer=saver
     ).get_agent_state_messages(session_id)

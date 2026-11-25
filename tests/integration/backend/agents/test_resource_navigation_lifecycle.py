@@ -132,7 +132,7 @@ async def test_navigation_keeps_target_across_activation_reconnect_and_read_fail
     before = await target.client.get("/api/gateway/config/reload-status")
     assert before.status_code == 200, before.text
     config = commentjson.loads(original)
-    config.setdefault("permissions", {}).setdefault("federation", {}).setdefault("rules", []).append({
+    config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {}).setdefault("federation", {}).setdefault("rules", []).append({
         "capability": "read", "effect": "deny", "origin_gateway_id": other.gateway_id,
     })
     try:

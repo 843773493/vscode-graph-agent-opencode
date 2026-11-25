@@ -7,7 +7,7 @@ import type { AppState } from "../../types/frontend";
 import { mountViewStateController } from "../../tests/fixtures/session/sessionViewState";
 
 const value: SessionViewState = { gateway_id: "gateway-test", thread_id:"thread-main", workspace_id: "workspace", session_id: "session", reading_anchor: {node_key:nodeKey({kind:"turn",id:"turn-1"},"header"),content_position:{block:0,offset_px:0},viewport_offset_px:45}, disclosures:{},
-  follow_latest: false, projection_version: 2, tool_details_expanded: true, updated_at: "2026-10-30T00:00:00Z" };
+  follow_latest: false, projection_version: 3, tool_details_expanded: true, updated_at: "2026-10-30T00:00:00Z" };
 const mounted: Array<{ unmount: () => void }> = [];
 const restores: Array<() => void> = [];
 afterEach(() => { mounted.splice(0).forEach(item => item.unmount()); restores.splice(0).forEach(restore => restore()); });

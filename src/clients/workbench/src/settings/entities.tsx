@@ -277,7 +277,11 @@ export class ConfigurationEntityView extends Disposable {
     this.nodeTargets.clear();
     if (provider) this.nodeTargets.set(this.nodeKey({ provider_id: selector.provider_id }), { ...provider, version: this.source.model.textEditorModel!.getVersionId() });
     this.rememberNode(selector, target.path, changes.some(change => change.path[0] === 'extends') ? {} : target.options);
-    if (selector.model_id === undefined && changes.some(({ path }) => path[0] === 'model_options' && ['endpoint', 'custom_llm_provider', 'api_key', 'api_mode', 'request_options'].includes(String(path[1])))) {
+    // 目录只消费连接信息；采样、流式及能力声明变化不触发额外联网。
+    if (selector.model_id === undefined && changes.some(({ path }) => path[0] === 'extends' || path[0] === 'network'
+      || path[0] === 'model_options' && (['endpoint', 'custom_llm_provider', 'api_key', 'auth'].includes(String(path[1]))
+        || path[1] === 'api_mode' && (path.length === 2 || path[2] === 'protocol')
+        || path[1] === 'request_options' && (path.length === 2 || path[2] === 'default_headers')))) {
       this.connectionEdits.set(selector.provider_id, (this.connectionEdits.get(selector.provider_id) ?? 0) + 1);
     }
     this.render();
@@ -360,7 +364,6 @@ export class ConfigurationEntityView extends Disposable {
       if (this.source.model.textEditorModel!.getVersionId() !== version) throw new Error(t('configuration.entities.definitionChanged', id));
       this.editNode({ provider_id: id, ...(modelId === undefined ? {} : { model_id: modelId }) }, ['model_options', 'api_key'], credential);
       if (modelId === undefined) {
-        this.connectionEdits.set(id, (this.connectionEdits.get(id) ?? 0) + 1);
         this.commitConnection(id);
       }
     }

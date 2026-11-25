@@ -91,7 +91,7 @@ class SessionContextRevisionChangedError(RuntimeError):
 class AgentContextState(TypedDict):
     records: list[dict[str, object]]
     checkpoint_id: str
-    raw_message_count: int
+    raw_message_count: int | None
     compacted: bool
     compaction_cutoff: int | None
 

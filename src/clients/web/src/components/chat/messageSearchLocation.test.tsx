@@ -45,14 +45,14 @@ test("工具命中只展开具备原 canonical 结果身份的详情，不跳到
   const item: Extract<TimelineItem, { kind: "aggregated_tool" }> = {
     kind: "aggregated_tool", id: "tool-a", toolName: "read_file", toolCallId: "shared", inputText: "", resultText: "",
     timestamp: null, rawStart: {}, rawEnd: {}, active: false,
-    responseSources: [{ part_id: "part-a", kind: "tool_result", source: { item_id: "result-a", message_sequence: 1 } }],
+    responseSources: [{ id: "part-a", kind: "tool_result", source: { item_id: "result-a", message_sequence: 1 } }],
   };
   let renderer!: ReturnType<typeof create>;
   let mounted = 0;
   act(() => { renderer = create(<MessageSearchLocationContext.Provider value={{ message, close: () => {}, onMount: () => { mounted += 1; } }}>
     <MessageSearchLocation turnId="turn-tool" />
     <ToolRow item={item} showRawDetails={false} />
-    <ToolRow item={{ ...item, id: "other-tool", responseSources: [{ part_id: "other", kind: "tool_result", source: { item_id: "result-b", message_sequence: 2 } }] }} showRawDetails={false} />
+    <ToolRow item={{ ...item, id: "other-tool", responseSources: [{ id: "other", kind: "tool_result", source: { item_id: "result-b", message_sequence: 2 } }] }} showRawDetails={false} />
   </MessageSearchLocationContext.Provider>, { createNodeMock: element => element.type === "mark" ? {} : null }); });
   try {
     expect(mounted).toBe(1);

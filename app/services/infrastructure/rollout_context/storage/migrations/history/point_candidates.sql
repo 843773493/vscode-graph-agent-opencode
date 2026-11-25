@@ -9,6 +9,13 @@ WITH page_candidates AS MATERIALIZED (
         AND membership.visible = 1 AND membership.source_kind = 'display_only'
         AND item.turn_id IS NULL AND execution.execution_origin = 'internal'
         AND execution.turn_id IS NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM storage_commits admission
+            WHERE admission.commit_kind = 'execution_admission'
+                AND admission.subject_id = execution.execution_id
+                AND admission.idempotency_key = 'internal-admission:' || execution.admission_idempotency_key
+                AND json_extract(admission.metadata_json, '$.request_input.kind') = 'derived_reference'
+        )
         AND membership.logical_item_ordinal <= :upper
         AND (:execution_id IS NULL OR execution.execution_id = :execution_id)
         {page_predicates}

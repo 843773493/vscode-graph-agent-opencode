@@ -24,8 +24,6 @@ def test_assemble_agent_injects_job_service() -> None:
     resource_activation = MagicMock()
     skill_catalog = MagicMock()
 
-    graph_binding_store = MagicMock()
-    graph_binding_store.load_graph_binding.return_value = DEEP_AGENT_GRAPH_BINDING
     with (
         patch("app.runtime.agent_runtime.prepare_agent_model"),
         patch("app.agents.graph_binding.GRAPH_FACTORY_REGISTRY.resolve") as resolve_factory,
@@ -43,7 +41,7 @@ def test_assemble_agent_injects_job_service() -> None:
             job_event_bus=MagicMock(),
             dependency_provider=dependency_provider,
             mcp_tools=mcp_tools,
-            graph_binding_store=graph_binding_store,
+            graph_binding=DEEP_AGENT_GRAPH_BINDING,
             model_visibility_overrides=visibility_overrides,
             resource_registry=resource_registry,
             resource_activation=resource_activation,

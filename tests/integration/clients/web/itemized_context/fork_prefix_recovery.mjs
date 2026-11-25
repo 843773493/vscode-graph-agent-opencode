@@ -140,7 +140,7 @@ try {
   const before = await history(source);
   assert.deepEqual(before.items.map(turn => turn.turn_id), facts.sourceTurnIds);
   const earlier = before.items[0];
-  const finalPart = earlier.response_parts.find(part => part.kind === "final_text" && part.final);
+  const finalPart = earlier.response_items.find(part => part.kind === "final_text" && part.final);
   assert(finalPart?.source.item_id, "较早回答必须有来自真实执行的稳定 canonical item");
   facts.sourceHistory = before;
   facts.phase = "earlier-prefix-fork";
@@ -168,7 +168,7 @@ try {
   facts.child = child;
   const imported = await history(child);
   assert.deepEqual(imported.items.map(turn => turn.turn_id), [earlier.turn_id]);
-  assert.deepEqual(imported.items[0].response_parts, earlier.response_parts);
+  assert.deepEqual(imported.items[0].response_items, earlier.response_items);
   facts.importedHistory = imported;
   await assertPrefixVisible(await openChild(child), earlier.turn_id);
   assert.deepEqual(await history(source), before, "分支发布与页面打开不能改写 source 历史");

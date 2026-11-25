@@ -10,18 +10,19 @@ from app.domain.itemized.enums import ControlOutcome, PayloadKind, SemanticKind
 from app.domain.itemized.records import RuntimeNoticePayload
 from app.schemas.internal_v2.turn import (
     InternalDisplayProvenanceDTO,
-    InternalExecutionDisplayPartDTO,
+    InternalExecutionDisplayItemDTO,
     InternalExecutionHistoryDTO,
-    TurnResponsePartDTO,
+    ToolExecutionSummaryDTO,
+    TurnResponseItemDTO,
 )
 from app.services.mapping.itemized.history_turns.projection import (
     HistoryProjectionBudget,
-    bounded_text,
+    bounded_response_item,
 )
-from app.services.mapping.turn_response_parts import (
-    activity_parts_from_projection,
-    response_part_order,
-    response_parts_from_internal_item,
+from app.services.mapping.turn_response_items import (
+    activity_items_from_projection,
+    response_item_order,
+    response_items_from_internal_item,
 )
 
 if TYPE_CHECKING:
@@ -34,8 +35,8 @@ if TYPE_CHECKING:
 class _InternalExecutionHistoryProjection:
     source: InternalExecutionHistoryEntry
     outcome: str
-    display_parts: list[InternalExecutionDisplayPartDTO] = field(default_factory=list)
-    response_parts: list[TurnResponsePartDTO] = field(default_factory=list)
+    display_items: list[InternalExecutionDisplayItemDTO] = field(default_factory=list)
+    response_items: list[TurnResponseItemDTO] = field(default_factory=list)
 
 
 def build_internal_execution_history(
@@ -69,10 +70,14 @@ def build_internal_execution_history(
             )
 
         item = entry.item
+        execution = ToolExecutionSummaryDTO.model_validate(entry.tool_execution.to_dict()) if entry.tool_execution is not None else None
         if entry.activity is not None:
-            activity = [{**member, **(entry.coordinates or {}).get(member["part_ordinal"], {}), "elapsed_ms": entry.elapsed_ms if index == 0 else 0}
+            activity = [{**member, **(entry.coordinates or {}),
+                         "tool_execution": entry.tool_execution.to_dict() if entry.tool_execution is not None else None,
+                         "tool_outcome": entry.tool_outcome,
+                         "elapsed_ms": entry.elapsed_ms if index == 0 else 0}
                 for index, member in enumerate(entry.activity["activity_items"])]
-            projection.response_parts.extend(activity_parts_from_projection({"activity_items": activity},
+            projection.response_items.extend(activity_items_from_projection({"activity_items": activity},
                 mode="summary", include=fields | {"activity_outline"}, tool_call_ids=None))
             continue
         if item is None:
@@ -93,8 +98,8 @@ def build_internal_execution_history(
                 display_part is not None
                 and display_part.kind == "generated_session_result"
             ):
-                projection.display_parts.append(
-                    InternalExecutionDisplayPartDTO(
+                projection.display_items.append(
+                    InternalExecutionDisplayItemDTO(
                         kind=display_part.kind,
                         text=display_part.text,
                         item_id=item.item_id,
@@ -106,26 +111,18 @@ def build_internal_execution_history(
                         ),
                     )
                 )
-        parts = response_parts_from_internal_item(
+        parts = response_items_from_internal_item(
                 item,
                 include=fields,
                 logical_item_ordinal=entry.logical_item_ordinal,
                 elapsed_ms=entry.elapsed_ms,
             )
-        projection.response_parts.extend(part.model_copy(update={"source":part.source.model_copy(
-            update=(entry.coordinates or {}).get(part.source.part_ordinal, {}))}) for part in parts)
+        projection.response_items.extend(part.model_copy(update={"tool_execution": execution, "tool_outcome": entry.tool_outcome, "source":part.source.model_copy(
+            update=entry.coordinates or {})}) for part in parts)
 
     # 与同页 Turn 消费同一个正文预算；保留全部成员身份和明确截断事实。
     for projection in projections.values():
-        for index, part in enumerate(projection.response_parts):
-            changes: dict[str, object] = {}
-            truncated = part.truncated
-            for name in ("text", "arguments", "result"):
-                value = getattr(part, name)
-                if value is not None:
-                    changes[name], limited = bounded_text(value, budget)
-                    truncated = truncated or limited
-            projection.response_parts[index] = part.model_copy(update={**changes, "truncated": truncated})
+        projection.response_items = [bounded_response_item(part, budget) for part in projection.response_items]
 
     return [
         InternalExecutionHistoryDTO(
@@ -138,13 +135,13 @@ def build_internal_execution_history(
             terminal_commit_id=projection.source.terminal_commit_id,
             created_at=projection.source.created_at,
             updated_at=projection.source.updated_at,
-            display_parts=sorted(
-                projection.display_parts,
+            display_items=sorted(
+                projection.display_items,
                 key=lambda part: part.logical_item_ordinal,
             ),
-            response_parts=sorted(
-                projection.response_parts,
-                key=response_part_order,
+            response_items=sorted(
+                projection.response_items,
+                key=response_item_order,
             ),
         )
         for projection in projections.values()

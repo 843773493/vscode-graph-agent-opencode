@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import subprocess
@@ -12,7 +13,9 @@ from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
+import commentjson
 import httpx
+import pytest
 from langchain_core.messages import AnyMessage, messages_to_dict
 from langchain_core.runnables import RunnableConfig
 
@@ -28,6 +31,9 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     acheckpoint_messages,
+)
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    canonical_message_anchor,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -59,6 +65,25 @@ from tests.support.processes.workspace import terminate_process
 from tests.support.sealed_request_audit import logged_provider_wire
 
 
+@pytest.fixture(scope="module", autouse=True)
+def provider_compaction_config(e2e_workspace_config_path: str) -> None:
+    """手动压缩不依赖自动阈值；主调用和摘要均使用同一真实 Provider。"""
+    path = Path(e2e_workspace_config_path)
+    config = commentjson.loads(path.read_text(encoding="utf-8"))
+    settings = config["settings"]["workspace"]
+    settings.setdefault("context", {})["compaction"] = {"apply_policy": "on_demand"}
+    settings.setdefault("ui", {})["auto_summarize"] = False
+    # 使用明确模型，避免免费路由每次切换模型令摘要语义验收不可复核。
+    settings["llm"]["providers"]["backup_1"]["models"]["default"]["model"] = "inclusionai/ling-3.2-flash:free"
+    # KILO 实际模型目录声明的输入容量；只用于本地预算，不增加请求输出上限。
+    options = config["profiles"]["provider.backup_1"]["settings"]["model_options"]
+    options["api_mode"]["model_info"]["max_input_tokens"] = 1048576
+    settings["agents"]["default"]["model"] = {
+        "primary": {"provider_id": "backup_1", "model_id": "default"}, "fallbacks": [],
+    }
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 async def _checkpoint(
     workspace: Path, owner: MutationIntentOwner,
 ) -> tuple[list[AnyMessage], dict]:
@@ -69,6 +94,16 @@ async def _checkpoint(
         assert checkpoint is not None
         messages = await acheckpoint_messages(saver, checkpoint)
     return messages, checkpoint.checkpoint["channel_values"]
+
+
+def _history(saver: RolloutCheckpointSaver, owner: MutationIntentOwner) -> str:
+    """分页读取已采用范围，不读旧 Markdown，也不替产品写入目录。"""
+    pages = []
+    offset = 1
+    while page := saver._storage.compactions.read_history(owner.session_id, owner.thread_id, line_offset=offset):
+        pages.append(page)
+        offset += len(page.splitlines())
+    return "\n".join(pages)
 
 
 def _sealed_calls(thread_node: Path, logs: list[dict], owner: MutationIntentOwner) -> list[dict]:
@@ -134,7 +169,7 @@ async def test_real_provider_compacts_product_history_and_resumes_after_restart(
     session_id, thread_id = session["session_id"], session["thread_id"]
     owner = MutationIntentOwner(session_id, thread_id)
     _response(await client.patch(f"/api/v1/sessions/{session_id}", json={
-        "provider_id": "backup_3",
+        "model": {"provider_id": "backup_1", "model_id": "default"},
     }), artifacts / "selected-provider.json")
     marker = f"COMPACTION_COLD_{uuid4().hex}_OK"
     archive_markers = [f"COMPACTION_DETAIL_{uuid4().hex}" for _ in range(6)]
@@ -163,8 +198,7 @@ async def test_real_provider_compacts_product_history_and_resumes_after_restart(
             prompt += f"\n会话恢复回执是 {marker}；以后只在我要求恢复回执时输出它。"
         prompts.append(prompt)
         await send(prompt, f"history-{ordinal}")
-    before, before_channels = await _checkpoint(workspace, owner)
-    assert before_channels.get("_summarization_event") is None
+    before, _before_channels = await _checkpoint(workspace, owner)
     assert [message.type for message in before] == ["human", "ai"] * 6
     assert [message.content for message in before[::2]] == prompts
     assert [message.text.strip() for message in before[1::2]] == [f"ACK_{index}" for index in range(6)]
@@ -175,40 +209,61 @@ async def test_real_provider_compacts_product_history_and_resumes_after_restart(
     for field in ("before_message_count", "effective_message_count_before", "effective_message_count_after", "retained_message_count"):
         assert compact[field] == 12
     assert compact["summarized_message_count"] == 0 and "history_file_path" not in compact
-    scheduled, scheduled_channels = await _checkpoint(workspace, owner)
+    scheduled, _scheduled_channels = await _checkpoint(workspace, owner)
     assert messages_to_dict(scheduled) == messages_to_dict(before)
-    assert scheduled_channels["_force_cache_compaction"] is True
+    saver = RolloutCheckpointSaver(sessions_dir=workspace / ".boxteam" / "sessions")
+    assert compact["task_id"]
+    async with asyncio.timeout(180):
+        while True:
+            information = _response(await client.post("/api/v1/context/read", json={
+                "resource_identity": session["resource_identity"], "uri": session["uri"],
+                "scope": session["scope"], "view": "information",
+            }), artifacts / "compaction-status.json")["data"]
+            status = next(item["data"]["compaction"] for item in information["items"] if item["kind"] == "information")
+            candidate = status["candidate"]
+            assert candidate["task_id"] == compact["task_id"]
+            assert candidate["task_status"] not in {"failed", "cancelled", "reconcile_required"}, candidate
+            if candidate["status"] == "ready" and candidate["task_status"] == "completed":
+                break
+            await asyncio.sleep(.25)
+    frozen = saver._storage.compactions.read(session_id, thread_id, candidate["candidate_id"])
+    result = saver._storage.compactions.read_result(session_id, thread_id, candidate["candidate_id"])
+    assert result is not None and result.coverage == frozen.refs
+    assert marker in result.text, "摘要必须保留首轮明确约定的恢复回执，不能仅概括为存在背景资料"
+    assert all((ref.session_id, ref.thread_id) == (session_id, thread_id) for ref in frozen.refs)
+    assert saver._storage.compactions.read_history(session_id, thread_id) == "", "ready 不能提前发布原文目录"
+    ready, _ready_channels = await _checkpoint(workspace, owner)
+    assert messages_to_dict(ready) == messages_to_dict(before), "后台生成不能切换主 checkpoint"
     compact_job_id = await send("执行已安排的压缩，只回复 COMPACTED_OK，不要调用工具。", "compact-trigger")
-    messages, channels = await _checkpoint(workspace, owner)
-    assert messages_to_dict(messages[:len(before)]) == messages_to_dict(before)
+    messages, _channels = await _checkpoint(workspace, owner)
     assert messages[-1].text.strip() == "COMPACTED_OK"
-    event = channels["_summarization_event"]
-    _save(artifacts / "compaction-event.json", {
-        **event, "cache_prefix_messages": messages_to_dict(event["cache_prefix_messages"]),
-        "summary_message": messages_to_dict([event["summary_message"]]),
-    })
-    assert event["strategy"] == "cache_preserving" and channels["_force_cache_compaction"] is False
-    prefix = event["cache_prefix_messages"]
-    cutoff = event["cutoff_index"]
-    assert 2 <= len(prefix) < cutoff < len(before)
-    assert len(prefix) % 2 == 0, "缓存前缀停在已完成轮次之后；安全摘要切点可以位于轮次内"
-    assert messages_to_dict(prefix) == messages_to_dict(before[:len(prefix)])
-    assert event["cutoff_message_id"] == before[cutoff - 1].id
-    summary = event["summary_message"]
-    assert summary.additional_kwargs["lc_source"] == "summarization"
+    assert saver._storage.compactions.current_status(session_id, thread_id)["status"] == "applied"
+    summary, = [message for message in messages if message.response_metadata.get("compaction_summary") is True]
+    assert summary.id == f"summary-{frozen.candidate_id}" and result.text in summary.content
     assert "read_compaction_history(line_offset=1, limit=200)" in str(summary.content)
     assert "session-artifacts/" not in str(summary.content) and "history.md" not in str(summary.content)
+    covered_ids = {ref.ref_id for ref in frozen.refs}
+    retained = [message for message in before if canonical_message_anchor(message) not in covered_ids]
+    ordinary = [message for message in messages if message.id != summary.id]
+    assert messages_to_dict(ordinary[:-2]) == messages_to_dict(retained)
+    assert ordinary[-2].type == 'human'
+    assert ordinary[-2].content == "执行已安排的压缩，只回复 COMPACTED_OK，不要调用工具。"
+    assert ordinary[-1].type == 'ai' and ordinary[-1].text.strip() == "COMPACTED_OK"
+    assert not covered_ids & {canonical_message_anchor(message) for message in messages}
     resolver = get_session_path_resolver(workspace / ".boxteam" / "sessions")
     session_node = resolver.resolve_session_node(session_id)
     thread_node = resolver.resolve_thread_node(session_id, thread_id)
     history_file = session_node / "context" / thread_id / "history.md"
-    history_bytes = history_file.read_bytes()
-    archive = history_bytes.decode()
-    assert "Summarized at" in archive
+    assert not history_file.exists()
+    archive = _history(saver, owner)
+    assert archive
+    _save(artifacts / "compaction-candidate.json", {"frozen": frozen.to_dict(), "result": result.detail()})
+    (artifacts / "compaction-original-lines.txt").write_text(archive, encoding="utf-8")
     for ordinal, archive_marker in enumerate(archive_markers):
-        assert (archive_marker in archive) == (len(prefix) <= ordinal * 2 < cutoff)
+        assert (archive_marker in archive) == (canonical_message_anchor(before[ordinal * 2]) in covered_ids)
     logs = await _audit_log_api(client, session_node, session_id, artifacts, phase="live")
-    assert len([log for log in logs if log["job_id"] == compact_job_id]) == 2, "摘要调用及后继回复各派发一次"
+    assert len([log for log in logs if log["job_id"] == compact_job_id]) == 1, "ready 采用不能再次生成摘要"
+    assert len([log for log in logs if log["job_id"].startswith("summary-job:")]) == 1
     snapshots = _sealed_calls(thread_node, logs, owner)
     _save(artifacts / "live-sealed-assemblies.json", snapshots)
     request = {"direction": "head", "turns": len(turn_ids), "include": ["user", "text", "final_response", "metadata"]}
@@ -222,14 +277,15 @@ async def test_real_provider_compacts_product_history_and_resumes_after_restart(
     provenance_backend_start("provider-compaction-cold-backend")
     cold = _response(await client.post(f"/api/v1/sessions/{session_id}/history", json=request), artifacts / "cold-history.json")["data"]
     assert cold["items"] == live["items"]
-    cold_messages, cold_channels = await _checkpoint(workspace, owner)
+    cold_messages, _cold_channels = await _checkpoint(workspace, owner)
     assert messages_to_dict(cold_messages) == messages_to_dict(messages)
-    assert cold_channels["_summarization_event"] == event
-    assert cold_channels["_force_cache_compaction"] is False
+    cold_saver = RolloutCheckpointSaver(sessions_dir=workspace / ".boxteam" / "sessions")
+    assert cold_saver._storage.compactions.read(session_id, thread_id, frozen.candidate_id) == frozen
+    assert cold_saver._storage.compactions.read_result(session_id, thread_id, frozen.candidate_id) == result
     assert await _audit_log_api(client, session_node, session_id, artifacts, phase="cold") == logs
     assert _sealed_calls(thread_node, logs, owner) == snapshots
     assert _checkpoint_state(thread_node) == storage_before
-    assert history_file.read_bytes() == history_bytes
+    assert _history(cold_saver, owner) == archive and not history_file.exists()
     continuation = "不要调用工具。只回复我们第一轮约定的完整会话恢复回执，不加其它内容。"
     assert marker not in continuation
     continued_job_id = await send(continuation, "continued")
@@ -244,11 +300,11 @@ async def test_real_provider_compacts_product_history_and_resumes_after_restart(
     continued_calls = [log for log in continued_logs if log["job_id"] == continued_job_id]
     assert len(continued_calls) == 1
     assert sum(message["content"] == summary.content for message in continued_calls[0]["request"]["messages"]) == 1
-    assert history_file.read_bytes() == history_bytes
+    assert _history(cold_saver, owner) == archive and not history_file.exists()
     _save(artifacts / "compaction-audit.json", {
         "status": "passed", "session_id": session_id, "thread_id": thread_id, "turn_ids": turn_ids,
         "compact_job_id": compact_job_id, "continued_job_id": continued_job_id,
-        "prefix_message_ids": [message.id for message in prefix], "cutoff_message_id": event["cutoff_message_id"],
+        "candidate_id": frozen.candidate_id, "coverage": [ref.to_dict() for ref in frozen.refs],
         "assemblies": all_snapshots,
         "boundary": "real_gateway_backend_external_provider_async_execution_safe_restart",
     })

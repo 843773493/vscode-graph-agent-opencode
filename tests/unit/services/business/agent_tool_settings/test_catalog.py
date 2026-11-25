@@ -19,7 +19,6 @@ from app.agents.tools.extension_invocation import (
     create_extension_catalog_resolver_from_tools,
 )
 from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
-from app.services.infrastructure.config import build_config_snapshot
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogPublication
 from app.services.infrastructure.mcp.tool_definitions import definition_from_tool
@@ -75,7 +74,7 @@ def test_current_definitions_include_real_custom_schema_and_policy_identity(cata
     catalog_case.dependencies.get_session_service.assert_not_called()
 
 
-def test_warm_read_isolated_and_invalidated_by_published_config(catalog_case, monkeypatch):
+def test_warm_read_isolated_and_invalidated_by_published_config(catalog_case, monkeypatch, workspace_config_snapshots):
     catalog, config = catalog_case.catalog, catalog_case.config
     original = catalog._build_definitions
     builds = []
@@ -92,7 +91,7 @@ def test_warm_read_isolated_and_invalidated_by_published_config(catalog_case, mo
     assert builds == ["default"]
     payload = old.to_dict()
     payload["agents"]["default"]["tools"]["custom"][0]["description"] = "已更新"
-    current = build_config_snapshot(payload, source_paths=())
+    current = workspace_config_snapshots.build(payload, graph=catalog_case.config.get_snapshot().graph)
     with config.publication_lock:
         config._snapshot_store.initialize(current)
     # 当前管理目录不能把外层旧 pinned 配置与当前 MCP publication 拼接。
@@ -104,7 +103,7 @@ def test_warm_read_isolated_and_invalidated_by_published_config(catalog_case, mo
     assert len(catalog._cache) == 1
 
 
-def test_publication_can_advance_while_factory_is_running(catalog_case, monkeypatch):
+def test_publication_can_advance_while_factory_is_running(catalog_case, monkeypatch, workspace_config_snapshots):
     entered, finish = Event(), Event()
     catalog, config, publication = catalog_case.catalog, catalog_case.config, catalog_case.publication
     original = catalog._build_definitions
@@ -124,7 +123,7 @@ def test_publication_can_advance_while_factory_is_running(catalog_case, monkeypa
             with config.publication_lock:
                 payload = config.get_active_snapshot().to_dict()
                 payload["agents"]["default"]["instructions"]["system_prompt"] = "new"
-                current = build_config_snapshot(payload, source_paths=())
+                current = workspace_config_snapshots.build(payload, graph=config.get_snapshot().graph)
                 config._snapshot_store.initialize(current)
                 catalog_case.publication = replace(publication, binding_ref=replace(publication.binding_ref, generation=publication.binding_ref.generation + 1))
         finally:

@@ -8,16 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from deepagents.backends.state import StateBackend
-from langchain.agents.middleware import ModelRequest, ModelResponse
-from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from langchain_core.messages import AIMessage, HumanMessage
 
-from app.agents.summarization.factory import (
-    create_cache_preserving_summarization_middleware,
-)
-from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
-from app.domain.context_compaction import CompactionPolicy
+from app.runtime.context_compaction import AgentSummarizationCompactor
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config_service import ConfigService
 
@@ -57,12 +49,15 @@ async def test_policy_uses_actual_parent_chain_and_keeps_frozen_execution_snapsh
         "target_fraction": 0.55, "apply_policy": "next_request",
     }
     assert case.service.is_automatic_compaction_enabled() is False
+    runtime = AgentSummarizationCompactor(config_service=case.service, saver=None, registry=None, sessions=None)
+    assert runtime.policy() == (case.service.get_compaction_policy(), False)
     case.document["settings"]["workspace"]["context"]["compaction"]["apply_fraction"] = 0.8
     case.document["settings"]["workspace"]["ui"]["auto_summarize"] = True
     case.source.write_text(json.dumps(case.document), encoding="utf-8")
     assert await case.service.reload()
     assert case.service.get_compaction_policy().apply_fraction == 0.8
     assert case.service.is_automatic_compaction_enabled() is True
+    assert runtime.policy() == (case.service.get_compaction_policy(), True)
     with case.service.use_snapshot(before):
         assert case.service.get_compaction_policy().apply_fraction == 0.9
         assert case.service.is_automatic_compaction_enabled() is False
@@ -80,47 +75,3 @@ async def test_invalid_effective_policy_is_rejected_before_publication(policy_co
     with pytest.raises(ValueError):
         await case.service.reload()
     assert case.service.get_snapshot() is before
-
-
-@pytest.mark.parametrize("automatic_enabled,max_input_tokens", [(False, 1000), (True, None)])
-@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
-async def test_disabled_or_unknown_capacity_passes_original_request_without_compaction(
-    automatic_enabled, max_input_tokens, use_async,
-):
-    model = FakeListChatModel(responses=[], profile=(
-        {"max_input_tokens": max_input_tokens} if max_input_tokens is not None else {}
-    ))
-    middleware = create_cache_preserving_summarization_middleware(
-        model, StateBackend(), compaction_preflight=NoDurableOwnerCompactionPreflight(),
-        policy=CompactionPolicy(), automatic_enabled=automatic_enabled,
-    )
-    messages = [HumanMessage(content="x" * 340) for _ in range(10)]
-    request = ModelRequest(model=model, messages=messages, tools=[])
-    assert 850 < middleware._count_request_tokens(request, messages) < 1000
-    seen = []
-    expected = ModelResponse(result=[AIMessage(content="直接执行")])
-
-    def dispatch(value):
-        seen.append(value)
-        return expected
-
-    async def adispatch(value):
-        return dispatch(value)
-
-    result = await middleware.awrap_model_call(request, adispatch) if use_async else middleware.wrap_model_call(request, dispatch)
-    assert result is expected
-    assert len(seen) == 1
-    assert seen[0].messages == messages
-    # 手动请求不受自动开关影响，仍必须进入原规划与durable边界检查。
-    with pytest.raises(RuntimeError, match="compaction preflight 缺少 runtime"):
-        middleware._prepare_cache_compaction(request.override(state={"_force_cache_compaction": True}))
-
-
-def test_custom_apply_threshold_is_the_execution_trigger():
-    model = FakeListChatModel(responses=[], profile={"max_input_tokens": 1000})
-    middleware = create_cache_preserving_summarization_middleware(
-        model, StateBackend(), compaction_preflight=NoDurableOwnerCompactionPreflight(),
-        policy=CompactionPolicy(apply_fraction=0.9), automatic_enabled=True,
-    )
-    assert not middleware._should_summarize([], 899)
-    assert middleware._should_summarize([], 900)

@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.internal_v2.derived_execution import DerivedItemReferenceDTO
 from app.schemas.internal_v2.llm_request_log import LLMRequestLogMatchDTO
 from app.schemas.internal_v2.session_navigation.thread_search import (
     SessionThreadSearchResultDTO,
@@ -125,8 +126,20 @@ class SealedContextContentReference(BaseModel):
     contribution_id: str = Field(min_length=1, max_length=256)
 
 
+class ExecutionOutputContentReference(DerivedItemReferenceDTO):
+    """完整派生结果的精确引用，不改变普通历史的可见选择。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["execution_output"] = "execution_output"
+    execution_id: str = Field(min_length=1, max_length=256)
+    item_id: str = Field(min_length=1, max_length=256)
+    content_hash: str = Field(min_length=1, max_length=256)
+
+
 ContextContentReference = Annotated[
-    CanonicalContextContentReference | SealedContextContentReference, Field(discriminator="kind"),
+    CanonicalContextContentReference | SealedContextContentReference | ExecutionOutputContentReference,
+    Field(discriminator="kind"),
 ]
 
 
@@ -143,6 +156,8 @@ class ThreadItemInspectionRequest(BaseModel):
             raise ValueError("必须且只能提供一个真实 Item、消息 ID 或冻结内容引用")
         if isinstance(self.content_ref, SealedContextContentReference) and self.operation != "content":
             raise ValueError("冻结 contribution 引用仅用于读取来源正文")
+        if isinstance(self.content_ref, ExecutionOutputContentReference) and self.operation not in {"content", "content_metadata"}:
+            raise ValueError("执行输出引用仅用于读取结果正文或格式")
         return self
 
 

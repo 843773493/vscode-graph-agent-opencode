@@ -12,10 +12,11 @@ import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspa
 import { createManagementTargetLifecycle } from '../managementTarget.js';
 import { gateway } from '../agentApi.js';
 import { manageConfig, readPluginBindings, writeOnlyFields, type Scope } from '../settings/pluginConfiguration.js';
+import { errorDiagnostic, errorMessage } from '../../../web/src/utils/errorMessage.js';
+import { copyTextToClipboard } from '../../../web/src/utils/clipboard.js';
 
 export type PackageManifest = NonNullable<PluginInventoryResultDTO['packages'][number]['manifest']>;
 export type PackagePlugin = PackageManifest['plugins'][number];
-export const pluginError = (error: unknown) => error instanceof Error ? error.message : String(error);
 function pluginService(plugin: PackagePlugin): string | undefined {
   return plugin.contributes?.debuggers.length ? 'debugger' : plugin.contributes?.services[0]?.service_type;
 }
@@ -56,9 +57,8 @@ export class PluginScope extends Disposable {
   private revision = 0;
   bindings: readonly PluginBinding[] = [];
   runtime: PluginRuntimeStatusDTO | undefined;
-  error: string | undefined;
-  constructor(readonly scope: Scope, readonly target: PluginTarget, readonly workspace: GatewayWorkspaceRequestTarget | undefined,
-    private readonly notifications: INotificationService) {
+  error: unknown;
+  constructor(readonly scope: Scope, readonly target: PluginTarget, readonly workspace: GatewayWorkspaceRequestTarget | undefined) {
     super();
     this._register(toDisposable(() => { this.revision++; this.controller.abort(); this.lifecycle.dispose(); }));
     this.lifecycle.signal.addEventListener('abort', () => this.controller.abort(this.lifecycle.signal.reason), { once: true });
@@ -74,14 +74,16 @@ export class PluginScope extends Disposable {
         this.runtime = snapshot;
         if (previous && JSON.stringify(previous.configured_bindings.filter(binding => binding.workspace_id === this.workspace?.workspace_id))
           !== JSON.stringify(snapshot.configured_bindings.filter(binding => binding.workspace_id === this.workspace?.workspace_id))) {
-          void this.refreshBindings().catch(error => { if (!this.controller.signal.aborted) this.notifications.error(pluginError(error)); });
+          void this.refreshBindings().catch(error => {
+            if (!this.controller.signal.aborted) { this.error = error; this.changed.fire(); }
+          });
         }
         this.changed.fire();
         void first.complete();
       }).catch(error => {
         if (this.controller.signal.aborted) return;
         if (!first.isSettled) void first.error(error);
-        else { this.error = pluginError(error); this.changed.fire(); this.notifications.error(this.error); }
+        else { this.error = error; this.changed.fire(); }
       });
       if (await raceTimeout(first.p.then(() => true), DEFAULT_API_REQUEST_TIMEOUT_MS) !== true) {
         this.controller.abort();
@@ -137,12 +139,17 @@ export function pluginActions(state: PluginScope, manifest: PackageManifest, plu
   const action = (id: string, label: string, run: () => Promise<unknown>) => {
     const item = new Action(id, label, undefined, true, async () => {
       item.enabled = false;
+      let failure: unknown;
       try { lifecycle.check(); await run(); lifecycle.check(); }
-      catch (error) { notifications.error(pluginError(error)); }
+      catch (error) { failure = error; }
       finally {
         item.enabled = true;
-        if (!lifecycle.signal.aborted) await state.refreshBindings().catch(error => notifications.error(pluginError(error)));
+        if (!lifecycle.signal.aborted) {
+          try { await state.refreshBindings(); }
+          catch (error) { failure = failure === undefined ? error : new AggregateError([failure, error], errorMessage(failure)); }
+        }
       }
+      if (failure !== undefined) notifications.error(failure instanceof Error ? failure : errorMessage(failure));
     });
     actions.push(item);
   };
@@ -164,5 +171,13 @@ export function pluginActions(state: PluginScope, manifest: PackageManifest, plu
       }));
     }
   }
+  if (status?.error || state.error) actions.push(new Action('plugin.copyDiagnostic', t('shell.copyDiagnostic'), undefined, true, async () => {
+    const diagnostic = [`Gateway: ${target.gateway_id}`, `Plugin: ${manifest.package_id}/${plugin.id}`,
+      ...(workspace ? [`Workspace: ${workspace.workspace_id}`] : []),
+      ...(status?.instance ? [`Instance: ${status.instance.instance_id}`] : []),
+      ...[status?.error, state.error].filter(error => error !== undefined).map(error => errorDiagnostic(error))].join('\n');
+    try { await copyTextToClipboard(diagnostic); }
+    catch (error) { notifications.error(error instanceof Error ? error : errorMessage(error)); }
+  }));
   return actions;
 }

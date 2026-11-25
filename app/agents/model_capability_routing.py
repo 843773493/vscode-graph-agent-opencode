@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
@@ -21,7 +21,6 @@ from app.agents.provider_capabilities import (
     parse_provider_capabilities,
 )
 from app.core.failures import failure_detail, is_provider_failure
-from app.core.model_request_context import current_summary_candidate
 from app.core.turn_execution_scope import ScopeCancelledError
 from app.domain.context_compaction import ContextCapacityError
 
@@ -37,12 +36,32 @@ class ProviderModelCandidate:
 
 
 MODEL_FAILED_CUSTOM_EVENT = "boxteam_model_failed"
-_SELECTED_PROVIDER: ContextVar[BaseChatModel | None] = ContextVar("boxteam_selected_provider", default=None)
+_SELECTED_PROVIDER: ContextVar[ProviderModelCandidate | None] = ContextVar("boxteam_selected_provider", default=None)
 
 
 def current_selected_provider() -> BaseChatModel | None:
     """只在本次路由选择的实际候选内授权投影，不跨请求保留。"""
-    return _SELECTED_PROVIDER.get()
+    candidate = _SELECTED_PROVIDER.get()
+    return None if candidate is None else candidate.model
+
+
+class ProviderCapabilityError(RuntimeError):
+    """实际模型请求的必要能力不足；属于本地候选拒绝。"""
+
+
+def require_provider_capabilities(model: BaseChatModel, messages: Iterable[object]) -> None:
+    """只核已投影的实际请求；能力取本次候选或构造时冻结的模型 profile。"""
+    candidate = _SELECTED_PROVIDER.get()
+    if candidate is not None and candidate.model is model:
+        capabilities = candidate.capabilities
+    else:
+        profile = model.profile or {}
+        capabilities = frozenset({"text_input", *(capability for name, capability in (
+            ("image_inputs", "image_input"), ("audio_inputs", "audio_input"), ("video_inputs", "video_input"),
+        ) if profile.get(name) is True)})
+    missing = detect_required_capabilities_from_messages(messages) - capabilities
+    if missing:
+        raise ProviderCapabilityError(f"provider-capability-insufficient: 当前实际请求缺少模型输入能力 [{', '.join(sorted(missing))}]")
 
 
 def _response_has_visible_output(
@@ -94,36 +113,12 @@ def _failure_payload(
 
 
 class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
-    """每次模型请求前根据完整消息上下文选择满足能力要求的模型。"""
+    """按配置顺序准备候选，由实际投影核验容量和能力后才发送。"""
 
     def __init__(self, candidates: Sequence[ProviderModelCandidate]) -> None:
         if not candidates:
             raise ValueError("CapabilityRoutingMiddleware 至少需要一个模型候选")
         self._candidates = tuple(candidates)
-
-    def _matching_candidates(
-        self,
-        request: ModelRequest[Any],
-    ) -> tuple[ProviderModelCandidate, ...]:
-        required = detect_required_capabilities_from_messages(request.messages)
-        matching = tuple(
-            candidate
-            for candidate in self._candidates
-            if required.issubset(candidate.capabilities)
-        )
-        if matching:
-            return matching
-
-        required_text = ", ".join(sorted(required))
-        configured = ", ".join(
-            f"{candidate.provider_id}({', '.join(sorted(candidate.capabilities))})"
-            for candidate in self._candidates
-        )
-        raise RuntimeError(
-            f"当前模型上下文需要输入能力 [{required_text}]，"
-            f"但没有匹配的 provider。已配置 provider: {configured}。"
-            "请在 provider.api_mode.model_info 中配置对应的 supports_* 能力。"
-        )
 
     def wrap_model_call(
         self,
@@ -131,14 +126,14 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
         last_error: Exception | None = None
-        candidates = self._matching_candidates(request)
+        candidates = self._candidates
         for index, candidate in enumerate(candidates):
-            token = _SELECTED_PROVIDER.set(candidate.model)
+            token = _SELECTED_PROVIDER.set(candidate)
             try:
                 response = handler(request.override(model=candidate.model))
-            except ContextCapacityError as error:
+            except (ContextCapacityError, ProviderCapabilityError) as error:
                 last_error = error
-                logger.info("模型候选容量不足: provider_id=%s model=%s: %s",
+                logger.info("模型候选准备拒绝: provider_id=%s model=%s: %s",
                             candidate.provider_id, candidate.model_id, error)
                 continue
             except ScopeCancelledError:
@@ -161,10 +156,8 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
             finally:
                 _SELECTED_PROVIDER.reset(token)
 
-            # 摘要响应由摘要 owner 决定无工具/最小系统重试，避免路由先吞掉空正文。
             if (
-                current_summary_candidate() is not None
-                or index == len(candidates) - 1
+                index == len(candidates) - 1
                 or _response_has_visible_output(response)
             ):
                 return response
@@ -189,14 +182,14 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
         last_error: Exception | None = None
-        candidates = self._matching_candidates(request)
+        candidates = self._candidates
         for index, candidate in enumerate(candidates):
-            token = _SELECTED_PROVIDER.set(candidate.model)
+            token = _SELECTED_PROVIDER.set(candidate)
             try:
                 response = await handler(request.override(model=candidate.model))
-            except ContextCapacityError as error:
+            except (ContextCapacityError, ProviderCapabilityError) as error:
                 last_error = error
-                logger.info("模型候选容量不足: provider_id=%s model=%s: %s",
+                logger.info("模型候选准备拒绝: provider_id=%s model=%s: %s",
                             candidate.provider_id, candidate.model_id, error)
                 continue
             except ScopeCancelledError:
@@ -218,10 +211,8 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
             finally:
                 _SELECTED_PROVIDER.reset(token)
 
-            # 摘要响应由摘要 owner 决定无工具/最小系统重试，避免路由先吞掉空正文。
             if (
-                current_summary_candidate() is not None
-                or index == len(candidates) - 1
+                index == len(candidates) - 1
                 or _response_has_visible_output(response)
             ):
                 return response

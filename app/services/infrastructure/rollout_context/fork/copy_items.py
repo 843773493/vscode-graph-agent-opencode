@@ -11,8 +11,10 @@ from typing import TYPE_CHECKING
 from app.core.atomic_fs import native_io_path
 from app.core.sqlite_state import load_sql
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.serde.registry import parse_context_ref
 from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,
 )
@@ -231,7 +233,7 @@ def select_view_prefix(
                 "WHERE selected.visited=0 ORDER BY item.item_sequence LIMIT ?", (_BATCH_SIZE,),
             ).fetchall()
             for item_id, sequence, offset, length, visible in items:
-                item = storage._read_v2_item_at(
+                item = storage._read_item_at(
                     connection, stream, sequence=sequence, offset=offset, length=length,
                 )
                 connection.execute("UPDATE fork_selected_items SET visited=1 WHERE item_id=?", (item_id,))
@@ -379,6 +381,11 @@ def select_view_prefix(
                         _include_context_ref(connection, entry.ref)
                     if entry.detail_ref is not None:
                         _include_detail(connection, entry.detail_ref)
+                included_sources = {entry.contribution_id for entry in assembly.selection if entry.included}
+                for contribution in assembly.contributions:
+                    binding = contribution.source_binding
+                    if contribution.contribution_id in included_sources and binding is not None and binding.summary_result_ref is not None:
+                        _include_detail(connection, binding.summary_result_ref)
                 if row[1] is not None:
                     _include_detail(connection, detail_ref_from_key(row[1]))
                 connection.execute(
@@ -435,6 +442,16 @@ def select_view_prefix(
                     _value, record = parse_detail_payload(path.read_bytes(), detail_ref=ref)
                     if record.content_hash != row[2]:
                         raise ValueError("source-mismatch: captured detail 与权威 manifest hash 不一致")
+                    if record.detail_kind == "compaction_result":
+                        manifest = _value["detail"]
+                        dispatch = SealedContextDispatchRef.from_dict(manifest["dispatch_ref"])
+                        for value in manifest["output_refs"]:
+                            _include_context_ref(connection, parse_context_ref(value))
+                        connection.execute(
+                            "INSERT INTO fork_selected_assemblies(assembly_id,expand_body) VALUES (?,0) "
+                            "ON CONFLICT(assembly_id) DO UPDATE SET expand_body=MAX(expand_body,0),"
+                            "visited=CASE WHEN expand_body<0 THEN 0 ELSE visited END", (dispatch.assembly_id,),
+                        )
                 elif row[1]:
                     raise ValueError("detail-unavailable: required 正文依赖不可用")
                 connection.execute("UPDATE fork_selected_details SET visited=1 WHERE detail_ref=?", (key,))
@@ -570,14 +587,13 @@ def _prune_prefix_facts(connection: sqlite3.Connection) -> None:
         "JOIN fork_selected_items selected ON selected.item_id=item.item_id "
         "WHERE item.jsonl_offset=messages.jsonl_offset AND item.jsonl_length=messages.jsonl_length)",
     )
-    for table in ("message_projections", "reasoning_blocks"):
-        connection.execute(
-            f"DELETE FROM {table} WHERE message_sequence NOT IN (SELECT message_sequence FROM messages)",
-        )
+    connection.execute(
+        "DELETE FROM message_projections WHERE message_sequence NOT IN (SELECT message_sequence FROM messages)",
+    )
     connection.execute(
         "DELETE FROM tool_calls WHERE assistant_message_sequence NOT IN (SELECT message_sequence FROM messages)",
     )
-    for table in ("item_resource_references", "item_catalog", "item_projections", "item_parts", "operation_anchors"):
+    for table in ("item_resource_references", "item_catalog", "item_projections", "reasoning_blocks"):
         connection.execute(
             f"DELETE FROM {table} WHERE item_id NOT IN (SELECT item_id FROM fork_selected_items)",
         )

@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 
 from langchain_core.messages import (
@@ -369,6 +369,14 @@ class ContextOwnerMixin(
     ) -> ProviderContextRequest:
         """预算与 seal 共用冻结材料；不创建 assembly 或刷新 CSM／工具目录。"""
         snapshot = context.assembly
+        # 能力核对必须在 Provider 对不支持媒体降级之前消费实际选集。
+        # 非原生分支的消息本身就是该语义投影，复用同一结果。
+        semantic_messages = None
+        if isinstance(wire_profile, ResponsesWireProfile):
+            semantic_messages = self.project_message_attachment_refs(snapshot.session_id, snapshot.thread_id, project_context_plan(
+                context.plan, items, include_runtime_notices=True, include_summaries=True,
+                request_only_content=request_content, seal_binding=snapshot.seal_binding,
+            ))
         projection = self._project_context_projection(
             snapshot.session_id, snapshot.thread_id, context, items, request_content,
             include_runtime_notices=True, include_summaries=True,
@@ -378,6 +386,7 @@ class ContextOwnerMixin(
         )
         return ProviderContextRequest(
             projection=projection,
+            semantic_messages=tuple(projection.messages if semantic_messages is None else semantic_messages),
             wire_request=normalize_wire_request(finalize_provider_wire(
                 messages=projection.messages, tools=projection.tools,
                 native_request=None if projection.native is None else projection.native["request"],
@@ -546,6 +555,7 @@ class ContextOwnerMixin(
         thread_id: str,
         *,
         checkpoint_ns: str = "",
+        item_ids: Iterable[str] | None = None,
     ) -> tuple[CanonicalItemRecord, ...]:
         """按精确 SessionThread 提供已提交 canonical item 的只读 API。"""
         return tuple(
@@ -553,6 +563,7 @@ class ContextOwnerMixin(
                 session_id,
                 thread_id,
                 checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
+                item_ids=item_ids,
             )
         )
 

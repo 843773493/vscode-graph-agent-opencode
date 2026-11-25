@@ -51,13 +51,19 @@ def tool_test_run_environment(request: pytest.FixtureRequest) -> Iterator[dict[s
     model, provider_id, model_id = "tool-test-replay-model", "tool-test-replay", "file-tools"
     model_ref = {"provider_id": provider_id, "model_id": model_id}
     endpoint = "https://tool-test.invalid/v1"
-    payload["llm"]["providers"] = {provider_id: {
-        "defaults": {"endpoint": endpoint, "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
-            "custom_llm_provider": "openai", "api_mode": {"protocol": "chat_completions",
-                "supports_reasoning": {"reasoning_content": False}, "model_info": {"supports_function_calling": True}}},
-        "models": {model_id: {"model": model}, "catalog-only": {"model": model}},
+    workspace_settings = payload["settings"]["workspace"]
+    workspace_settings["llm"]["providers"] = {provider_id: {
+        "config_ref": "#/profiles/provider.tool-test-replay",
+        "models": {model_id: {"model": model, "config_ref": f"context:provider/{provider_id}"},
+                   "catalog-only": {"model": model, "config_ref": f"context:provider/{provider_id}"}},
     }}
-    for agent in payload["agents"].values():
+    payload["profiles"]["provider.tool-test-replay"] = {
+        "extends": "context:workspace",
+        "settings": {"model_options": {"endpoint": endpoint, "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
+            "custom_llm_provider": "openai", "api_mode": {"protocol": "chat_completions",
+                "supports_reasoning": {"reasoning_content": False}, "model_info": {"supports_function_calling": True}}}},
+    }
+    for agent in workspace_settings["agents"].values():
         agent["model"] = {"primary": model_ref, "fallbacks": []}
     configuration.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     fixture_root = runtime / "model-stream-fixture"

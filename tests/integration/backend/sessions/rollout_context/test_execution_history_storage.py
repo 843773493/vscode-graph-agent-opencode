@@ -82,10 +82,10 @@ def history_target(
     ports = integration_ports_for_file(Path(request.node.path))
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = config["llm"]["providers"]["primary"]
+    provider = config["settings"]["workspace"]["llm"]["providers"]["primary"]
     provider["models"]["default"]["model"] = "e2e-stub-model"
-    provider["defaults"]["api_key"] = ""
-    config["agents"]["default"]["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
+    config["profiles"]["provider.primary"]["settings"]["model_options"]["api_key"] = ""
+    config["settings"]["workspace"]["agents"]["default"]["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     with model_stream_replay(
         context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
@@ -351,7 +351,7 @@ async def test_same_workload_tools_restart_and_storage_measurements(
         loaded = await client.post(f"/api/v1/sessions/{session}/history", json={"direction": "head", "turns": 10})
         assert loaded.status_code == 200, loaded.text
         clicked, = [item for item in loaded.json()["data"]["items"] if item["turn_id"] == deep_turn]
-        final_part, = [part for part in clicked["response_parts"] if part["kind"] == "final_text"]
+        final_part, = [part for part in clicked["response_items"] if part["kind"] == "final_text"]
         point = await client.get(f"/api/v1/sessions/{session}/fork-source-point", params={
             "mode": "view_prefix_fork", "item_id": final_part["source"]["item_id"],
             "source_view_id": clicked["source_view_id"], "source_view_revision": clicked["source_view_revision"],
@@ -392,7 +392,7 @@ async def test_same_workload_tools_restart_and_storage_measurements(
         await _complete(client, session, "压缩已完成的历史，然后继续。")
         with sqlite3.connect(index) as connection:
             assert connection.execute("SELECT count(*) FROM item_catalog WHERE semantic_kind='compaction_summary'").fetchone() == (1,)
-            assert connection.execute("SELECT count(*) FROM context_assemblies WHERE json_extract(snapshot_json,'$.selection_policy')='summary_candidate'").fetchone() == (1,)
+            assert connection.execute("SELECT count(*) FROM context_assemblies WHERE json_extract(snapshot_json,'$.selection_policy')='derived_request'").fetchone() == (1,)
         summary_wire = _wire(target, {session})
         assert len(summary_wire) == 15
         _verify_frozen_history(index, summary_wire)

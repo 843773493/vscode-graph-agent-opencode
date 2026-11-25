@@ -505,7 +505,7 @@ async def test_job_control_cancel_queued_job_removes_it_from_queue(job_service_f
     assert service._pending_queue.queued_job_ids(session_id) == ()
     successor = await accepted("successor", "msg_successor")
     assert service._pending_queue.queued_job_ids(session_id) == (successor.job_id,)
-    assert saver.accepted_user_message(session_id, thread_id=thread_id, job_id=queued.job_id, message_id="msg_queued").content == "queued"
+    assert saver.accepted_user_message(session_id, thread_id=thread_id, job_id=queued.job_id, message_id="msg_queued")[1].content == "queued"
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT turn_id,turn_ordinal,root_input_item_id FROM turn_records WHERE turn_id=?", (turn_id,)).fetchone() == original
         assert connection.execute("SELECT outcome FROM executions WHERE job_id=?", (queued.job_id,)).fetchone() == ("cancelled",)

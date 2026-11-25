@@ -42,19 +42,18 @@ from app.agents.structured_prompt_validation_middleware import (
     StructuredPromptValidationMiddleware,
 )
 from app.agents.structured_tool_call_middleware import StructuredToolCallMiddleware
-from app.agents.summarization.factory import (
-    create_cache_preserving_summarization_middleware,
-)
 from app.agents.summarization.tool_middleware import (
-    CachePreservingSummarizationToolMiddleware,
+    CompactionToolsMiddleware,
 )
 from app.agents.tool_confirmation_middleware import ToolConfirmationMiddleware
 from app.agents.tool_identity import ToolDefinitionLike, tool_definition_name
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
-from app.domain.context_compaction import CompactionPolicy
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.runtime.context_compaction import AgentSummarizationCompactor
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
 )
@@ -63,9 +62,6 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
-)
-from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
-    CompactionPreflightPort,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
@@ -121,6 +117,18 @@ def build_deep_agent_tool_middleware(
 ) -> tuple[SourceOwnedTodoListMiddleware, FilesystemMiddleware]:
     """完整构造模型无关的工具；执行可见性在声明检查后应用。"""
     todo_middleware = SourceOwnedTodoListMiddleware(system_prompt="", tool_description=TODO_TOOL_DESCRIPTION)
+    return todo_middleware, build_workspace_filesystem_middleware(
+        backend=backend, workspace_root=workspace_root, resource_navigation=resource_navigation,
+        text_mutations=text_mutations, artifact_reader=artifact_reader, permissions=permissions,
+    )
+
+
+def build_workspace_filesystem_middleware(
+    *, backend: BackendProtocol, workspace_root: Path,
+    resource_navigation: ResourceNavigation, text_mutations: WorkspaceTextMutationOwner,
+    artifact_reader: ResourceFileReader | None, permissions: list[FilesystemPermission] | None,
+) -> FilesystemMiddleware:
+    """正式 Thread 与派生执行共用唯一文件工具构造和权限装配。"""
     filesystem_middleware = FilesystemMiddleware(
         backend=backend,
         system_prompt="",
@@ -139,7 +147,7 @@ def build_deep_agent_tool_middleware(
         filesystem_middleware,
         FILESYSTEM_INTERNAL_TOOL_DENYLIST,
     )
-    return todo_middleware, filesystem_middleware
+    return filesystem_middleware
 
 
 def build_deep_agent_middleware(
@@ -148,9 +156,10 @@ def build_deep_agent_middleware(
     backend: BackendProtocol,
     tool_middleware: tuple[SourceOwnedTodoListMiddleware, FilesystemMiddleware],
     resolved_skills: PublishedSkillCatalog | None,
-    compaction_preflight: CompactionPreflightPort,
-    compaction_policy: CompactionPolicy,
-    automatic_compaction_enabled: bool,
+    compaction_runtime: AgentSummarizationCompactor | None,
+    compaction_owner: MutationIntentOwner,
+    agent_id: str,
+    preferred_model: ModelReferenceDTO | None = None,
     context_source_manager: ContextSourceManager | None = None,
     source_registry: WorkspaceFileResourceRegistry | None = None,
     context_source_reactor: ContextSourceReactor | None = None,
@@ -185,20 +194,14 @@ def build_deep_agent_middleware(
     if filesystem_middleware.tools:
         middleware_stack.append(filesystem_middleware)
 
-    # after_model 按注册顺序逆序执行；压缩 continuation 必须先跳到下一
-    # model task，避免审批 hook 再次处理历史中已经执行完毕的工具调用。
     if custom_tool_confirmation_names or interrupt_on:
         middleware_stack.append(
             ToolConfirmationMiddleware(custom_tool_confirmation_names, interrupt_on=interrupt_on)
         )
 
-    summarization = create_cache_preserving_summarization_middleware(
-        model, backend, compaction_preflight=compaction_preflight,
-        policy=compaction_policy, automatic_enabled=automatic_compaction_enabled,
-    )
     middleware_stack.extend([
-        summarization,
-        CachePreservingSummarizationToolMiddleware(summarization, system_prompt=None),
+        CompactionToolsMiddleware(compactor=compaction_runtime, owner=compaction_owner,
+                                  agent_id=agent_id, preferred_model=preferred_model),
         StructuredToolCallMiddleware(),
     ])
     # D3-B 起 AGENTS 来源注册由 WorkspaceSkillsMiddleware 的唯一 CSM 链承载，

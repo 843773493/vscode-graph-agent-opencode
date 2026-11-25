@@ -18,8 +18,8 @@ import {
   workspaceDirectoryMatchesQuery,
   workspacePathSearchParts,
 } from "../../../utils/selection/workspaceDirectorySelection";
-import { errorMessage } from "../../../utils/errorMessage";
-import { HttpRequestError } from "../../../api/http";
+import { errorSummary } from "../../../utils/errorMessage";
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import {
   buildWorkspaceAddGatewayChoices,
   type WorkspaceAddGatewayChoice,
@@ -50,7 +50,7 @@ export default function WorkspaceAddDialogContent({
   const [showHiddenDirectories, setShowHiddenDirectories] = useState(false);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const gatewaySearchRef = useRef<HTMLInputElement | null>(null);
   const directoryRequestRef = useRef(0);
 
@@ -101,9 +101,7 @@ export default function WorkspaceAddDialogContent({
       } catch (loadError) {
         if (directoryRequestRef.current !== requestNumber) return;
         setListing(null);
-        const message = loadError instanceof HttpRequestError && loadError.requestId
-          ? `${errorMessage(loadError)} · request_id=${loadError.requestId}` : errorMessage(loadError);
-        setError(t("gateway.workspaceDetails.directoryFailed", gateway.name, gateway.connectionId ?? "local", message));
+        setError(loadError);
       } finally {
         if (directoryRequestRef.current === requestNumber) setLoading(false);
       }
@@ -210,6 +208,7 @@ export default function WorkspaceAddDialogContent({
 
   const handleConfirm = async () => {
     if (!selectedGateway || submitting || !selectedPath) return;
+    const requestNumber = directoryRequestRef.current;
     setSubmitting(true);
     setError(null);
     try {
@@ -218,13 +217,11 @@ export default function WorkspaceAddDialogContent({
         root_path: selectedPath,
         create_directory: false,
       });
-      onClose();
+      if (directoryRequestRef.current === requestNumber) onClose();
     } catch (submitError) {
-      const message = submitError instanceof HttpRequestError && submitError.requestId
-        ? `${errorMessage(submitError)} · request_id=${submitError.requestId}` : errorMessage(submitError);
-      setError(t("gateway.workspaceDetails.directoryFailed", selectedGateway.name, selectedGateway.connectionId ?? "local", message));
+      if (directoryRequestRef.current === requestNumber) setError(submitError);
     } finally {
-      setSubmitting(false);
+      if (directoryRequestRef.current === requestNumber) setSubmitting(false);
     }
   };
 
@@ -356,8 +353,8 @@ export default function WorkspaceAddDialogContent({
 
         <div className="workspace-add-results" aria-busy={loading || submitting}>
           {error ? (
-            <div className="workspace-add-error" role="alert">
-              {error}
+            <div className="workspace-add-error failure-summary" role="alert">
+              {errorSummary(error)}
             </div>
           ) : null}
 
@@ -381,13 +378,13 @@ export default function WorkspaceAddDialogContent({
                   />
                   <span>
                     <strong>{gateway.name}</strong>
-                    <small title={gateway.error ?? undefined}>
+                    <small>
                       <i className={`workspace-add-status-dot ${gateway.status}`} />
                       {gateway.kind === "local" ? t("gateway.workspaceAdd.localDevice") : gateway.detail} · {gateway.statusLabel}
                     </small>
                     {gateway.error ? (
-                      <small className="workspace-add-gateway-error" title={gateway.error}>
-                        {gateway.error}
+                      <small className="workspace-add-gateway-error failure-summary">
+                        {failureSummary(gateway.error)}
                       </small>
                     ) : null}
                   </span>

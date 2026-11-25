@@ -303,8 +303,8 @@ def test_internal_only_tail_returns_safe_typed_display_and_composite_cursor(
         budget=HistoryProjectionBudget(),
     )
     assert projected[0].status == "completed"
-    assert projected[0].display_parts[0].logical_item_ordinal == 20
-    assert projected[0].display_parts[0].text == "子会话已生成并返回结果。"
+    assert projected[0].display_items[0].logical_item_ordinal == 20
+    assert projected[0].display_items[0].text == "子会话已生成并返回结果。"
     assert "prompt" not in str(projected[0].model_dump(mode="json"))
 
 
@@ -347,10 +347,10 @@ def test_internal_body_uses_remaining_page_budget_and_keeps_member_identity() ->
             producer_ref={"producer_kind": "runtime", "producer_id": "fixture"}))
         for index in range(1, 4))
     execution, = build_internal_execution_history(entries, include=("internal", "reasoning_detail"), budget=budget)
-    assert [part.source.item_id for part in execution.response_parts] == [f"reasoning-{index}" for index in range(1, 4)]
-    assert sum(len(part.text) for part in execution.response_parts) <= 30
-    assert execution.response_parts[0].text == "r" * 20
-    assert all(part.truncated for part in execution.response_parts[1:])
+    assert [part.source.item_id for part in execution.response_items] == [f"reasoning-{index}" for index in range(1, 4)]
+    assert sum(len(part.text) for part in execution.response_items) <= 30
+    assert execution.response_items[0].text == "r" * 20
+    assert all(part.truncated for part in execution.response_items[1:])
 
 
 @pytest.mark.parametrize(
@@ -623,7 +623,7 @@ def test_stale_history_revision_requires_both_revision_values() -> None:
         )
 
 
-def test_cursor_rejects_physical_item_sequence_v2_shape(
+def test_cursor_rejects_physical_item_sequence_shape(
     history_setup: _HistorySetup,
 ) -> None:
     reader = history_setup.reader
@@ -651,6 +651,50 @@ def test_cursor_rejects_physical_item_sequence_v2_shape(
             indexed,
             policy=None,
         )
+
+
+@pytest.mark.parametrize("version", [1, 2, 3.0, True])
+def test_cursor_rejects_previous_or_non_integer_version_before_reading(
+    history_setup: _HistorySetup, version: object,
+) -> None:
+    reader = history_setup.reader
+    payload = reader._decode_cursor_payload(_cursor(
+        reader, history_setup.snapshot, direction="before",
+        turn_ordinal=4, logical_item_ordinal=80,
+    ))
+    assert payload["version"] == 3
+    payload["version"] = version
+    cursor = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    with pytest.raises(InvalidTurnCursorError, match="版本不受支持"):
+        reader._load_indexed_history(
+            "session-1", TurnHistoryLoadRequest(direction="before", cursor=cursor),
+            history_setup.indexed_history, policy=None,
+        )
+    assert reader._context_reader.turn_queries == []
+    assert reader._context_reader.internal_queries == []
+
+
+def test_cursor_rejects_part_coordinate_in_current_version(
+    history_setup: _HistorySetup,
+) -> None:
+    reader = history_setup.reader
+    payload = reader._decode_cursor_payload(_cursor(
+        reader, history_setup.snapshot, direction="before",
+        turn_ordinal=4, logical_item_ordinal=80,
+    ))
+    payload["part_ordinal"] = 1
+    cursor = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    with pytest.raises(InvalidTurnCursorError, match="字段非法"):
+        reader._load_indexed_history(
+            "session-1", TurnHistoryLoadRequest(direction="before", cursor=cursor),
+            history_setup.indexed_history, policy=None,
+        )
+    assert reader._context_reader.turn_queries == []
+    assert reader._context_reader.internal_queries == []
 
 
 def test_cursor_accepts_zero_logical_item_ordinal(

@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../shared/core/failurePresentation";
 import { gatewayWorkspaceKey, type GatewayWorkspaceRequestTarget, type WorkspaceOwner } from "../../../web/src/api/workspaceIdentity.js";
 import { t } from '../../../shared/core/i18n/index.js';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -124,7 +125,7 @@ function WorkspaceConnections({ workspace, input, active, kind, commands, notifi
   const currentThread = input ? { session_id: input.owner.sessionId, thread_id: input.owner.threadId } : null;
   if (!ready) return <div className="native-workspace-panel-product panel-feedback-host" aria-busy={!currentStatus}>
     {currentStatus ? <div className="panel-feedback" role={pluginError ? 'alert' : 'status'}>
-      {pluginError ?? (currentStatus?.snapshot
+      {pluginError ? failureSummary(pluginError) : (currentStatus?.snapshot
         ? `${t(kind === 'terminal' ? 'resources.kind.terminal' : 'resources.kind.browser')} · ${!binding ? t('plugins.unbound')
           : !binding.enabled ? t('plugins.disabled') : pluginStateLabel(slot?.state ?? 'waiting')}`
         : t('plugins.loading'))}
@@ -133,7 +134,7 @@ function WorkspaceConnections({ workspace, input, active, kind, commands, notifi
     </div> : null}
   </div>;
   return <div ref={container} className="native-workspace-panel-product panel-feedback-host">
-    {currentStatus?.error ? <div className="panel-feedback" role="alert">{currentStatus.error}<button type="button" onClick={() => setRetry(value => value + 1)}>{t('workbench.panel.retryInitialize')}</button></div> : null}
+    {currentStatus?.error ? <div className="panel-feedback" role="alert">{failureSummary(currentStatus.error)}<button type="button" onClick={() => setRetry(value => value + 1)}>{t('workbench.panel.retryInitialize')}</button></div> : null}
     {kind === 'browser' ? <WarmConfirmProvider><BrowserContent controller={controller} workspaceId={gatewayWorkspaceKey(workspace)}
       currentThread={currentThread} selectedId={selected} onSelect={setSelected} renderToolbar={toolbar} /></WarmConfirmProvider>
     : <section className="terminal-panel native-workspace-panel-product" data-testid="terminal-panel">
@@ -176,7 +177,7 @@ function WorkspaceToolManager({ workspace, active, reveal }: { workspace: Gatewa
     }).catch(cause => { if (!disposed) setError(String(cause)); });
     return () => { disposed = true; };
   }, [workspace.gateway_id, workspace.workspace_id, reveal?.agentId]);
-  if (error) return <div className="native-workspace-panel-product panel-feedback-host"><p className="panel-feedback" role="alert">{error}</p></div>;
+  if (error) return <div className="native-workspace-panel-product panel-feedback-host"><p className="panel-feedback" role="alert">{failureSummary(error)}</p></div>;
   if (!agents) return <div className="native-workspace-panel-product" aria-busy="true" />;
   if (!agents.length) return <p role="status">{t('composer.tools.noAgents')}</p>;
   const agent = agents.find(item => item.agent_id === selected);
@@ -224,7 +225,7 @@ function WorkspacePanelView({ editors, kind, visible, commands, notifications, r
   const selectedWorkspace = current;
   return <div className={`native-workspace-panel panel-feedback-host${kind === 'automation' ? ' native-workspace-automation' : ''}`} data-workspace-id={selectedWorkspace?.workspace_id ?? ''} data-panel-kind={kind}>
     {snapshot.error ? <p className="panel-feedback" role="alert">{t('workbench.panel.readFailed', snapshot.error)}</p> : snapshot.loading ? null
-      : scopeError ? <p className="panel-feedback" role="alert">{scopeError}{selectedWorkspace ? <button type="button"
+      : scopeError ? <p className="panel-feedback" role="alert">{failureSummary(scopeError)}{selectedWorkspace ? <button type="button"
         onClick={() => void commands.executeCommand('boxteam.workspace.details', {
           gatewayId: selectedWorkspace.gateway_id, workspaceId: selectedWorkspace.workspace_id,
         }).catch((cause: unknown) => notifications.error(String(cause)))}>{t('workbench.workspaceAction.details')}</button> : null}</p>

@@ -65,7 +65,7 @@ app/agents/
 - `CustomToolFactoryContext.session_orchestrator` 是扩展 factory 的既有公开字段名，其值实现 `SessionMessageOrchestratorProtocol`；消息准入与派发由 `orchestration/session_messages.py` 实现，不代表 Session 创建、删除或 runtime 装配。
 - `tool_identity.py` 单点定义注册工具的 `ToolDefinitionLike` 和名称提取；策略身份由 `policy/tool_capability.py` 推导，中间件和 ToolSet 注册不再声明同形类型或各自重算分组。
 - `default_tools.py::build_default_tools` 只装配固定默认工具，协作子集归 `tools/collaboration.py`；仅传递实际消费的依赖，不转导出领域工厂。策略过滤、扩展工具和执行图仍由 `agent_factory.py` 装配。
-- `middleware_assembly.py` 统一维护工具、Skill、压缩、路由和校验中间件的构造顺序；Skill 上下文登记、冻结目录安装与来源变化消费归 `skill_context.py`，压缩实例构造归 `summarization/factory.py`。工厂不再额外尝试装入空 Skill 中间件。
+- `middleware_assembly.py` 统一维护工具、Skill、压缩、路由和校验中间件的构造顺序；Skill 上下文登记、冻结目录安装与来源变化消费归 `skill_context.py`，压缩工具由 `summarization/tool_middleware.py` 绑定，运行端口由容器注入。工厂不再额外尝试装入空 Skill 中间件。
 - `runtime/agent_runtime.py::assemble_agent` 在配置入口将 `tools.custom` 解析为 `ParsedCustomToolSpec`，图装配和 `custom_tools.py::build_custom_tools` 直接消费该类型，不重复解析原始配置。工具构造器只负责逐工具 options 注入、factory 结果及公开 schema 校验，不再包装单字段 Bundle。
 - `tool_node_adapter.py` 的 `AgentToolNode` 统一适配 LangGraph 工具节点：在执行边界应用审批覆盖，结果仍配对原模型调用，并保留完整媒体内容；`model_call_graph.py` 调用 `adapt_agent_tool_node` 装入该节点。工具确认决策归 `tool_confirmation_middleware.py`，事件消费只通过适配器读取已注册工具。
 - `tool_result_text.py` 统一提取工具输出文本和判定显式状态；Agent step 最终回答的匹配引号还原归 `execution_step/retry.py`。
@@ -73,8 +73,8 @@ app/agents/
 - 普通文件目标按用户裁定接受相对路径、目标机器原生绝对路径与资源 URI；三者经同一目标解析后执行，工作区外目标按实际 owner 能力访问或明确拒绝，禁止去除根或盘符后改投工作区。`.` 表示显式目标工作区根；DeepAgents 的 `/` 虚拟路径只存在于内部适配层，补丁内文件名仍只允许相对固定根。源码调试继续遵守其工作区能力边界。
 - 失败时抛出明确错误，不要返回虚假的默认值。
 
-- `execution_checkpoint.py` 只适配活动执行的 LangGraph 输入通道、失效 Pregel task 清理和最终回复替代消息；执行准入与 canonical 持久化仍归注入的 Saver owner，不在这里创建准入或另存消息。
-- `manual_compaction_checkpoint.py` 是手动压缩的 LangGraph 检查点适配边界：读取快照并登记 `_force_cache_compaction` 请求。实际摘要生成归 `summarization/` 中间件，检查点持久化归注入的 checkpointer；不在此增加消息副本或另一套存储。
+- `execution_checkpoint.py` 只适配活动执行的 LangGraph 输入通道、失效 Pregel task 清理和按原消息身份读取最终回复；当前输入 reader 同次返回原消息与 admission，不在消费前单独查询准入；两者随消费回执返回，恢复原 checkpoint 时只读不写。执行准入与 canonical 持久化仍归注入的 Saver owner，不在这里创建准入或另存消息。
+- `manual_compaction_checkpoint.py` 是手动压缩的 LangGraph 检查点适配边界：只读取已提交快照。手动请求经运行端口登记原后台任务，检查点采用归注入的 checkpointer；不在此增加消息副本或另一套存储。
 
 - `agents_md_publication.py` 登记工作区 AGENTS.md 文件并发布已接受版本的有序指令链，不管理 Agent 实例；`skill_catalog.py` 在目录构建与来源通知中调用它，冻结链的 CSM 安装归 `rollout_context/runtime/context_sources/agents_md_context.py`。
 - `agent_factory.py::assemble_deep_agent` 只构建真实 Thread 的单代图：先构造并校验本地工具，再调用 `runtime/agent_runtime.py::prepare_agent_model` 准备模型候选、路由和指令来源。工具目录由原 `AgentToolCatalog` 直接复用工具工厂与参数声明，不进入执行装配或合成 SessionThread。配置读取、依赖收集和冻结工厂选择归 `assemble_agent`，图复用与释放归 Thread tracker；动态工具一次构造后直接用于执行。

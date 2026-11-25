@@ -425,7 +425,10 @@ def _mark_entity_lifecycle(
     started_seq = entity.get("started_seq")
     if isinstance(started_seq, bool) or not isinstance(started_seq, int) or started_seq <= 0:
         entity["started_seq"] = event_seq
-        if event_timestamp is not None:
+        if "tool_execution_id" in entity:
+            if event.get("type") == "tool.started":
+                entity["started_at"] = event["payload"].get("started_at")
+        elif event_timestamp is not None:
             entity["started_at"] = event_timestamp
     last_event_seq = entity.get("last_event_seq")
     if (
@@ -513,6 +516,8 @@ def _mark_event_lifecycle(
     else:
         entity = entity_index.get((collection, entity_id))
     if entity is not None:
+        if collection == "tool_calls" and event.get("model_call_id") is not None:
+            entity["model_call_id"] = event["model_call_id"]
         _mark_entity_lifecycle(entity, event, completed=completed)
 
 

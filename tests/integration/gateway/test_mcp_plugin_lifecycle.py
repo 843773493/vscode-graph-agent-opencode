@@ -88,21 +88,28 @@ async def mcp_plugin_case(
     gateway_url = f"http://127.0.0.1:{gateway_port}"
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    config["llm"]["providers"] = {"mcp-plugin-replay": {"defaults": {
-        "endpoint": "https://opencode.ai/zen/v1", "api_key": "${MCP_PLUGIN_REPLAY_KEY}",
-        "custom_llm_provider": "openai",
-        "api_mode": {"protocol": "chat_completions", "supports_reasoning": {"reasoning_content": False}, "model_info": {
-            "supports_function_calling": True, "supports_vision": True,
-            "supports_audio_input": True,
-        }},
-    }, "models": {"default": {"model": "mcp-plugin-model"}}}}
-    for agent in config["agents"].values():
+    workspace_settings = config["settings"]["workspace"]
+    workspace_settings["llm"]["providers"] = {"mcp-plugin-replay": {
+        "models": {"default": {"model": "mcp-plugin-model", "config_ref": "context:provider/mcp-plugin-replay"}},
+        "config_ref": "#/profiles/provider.mcp-plugin-replay",
+    }}
+    config["profiles"]["provider.mcp-plugin-replay"] = {"extends": "context:workspace", "settings": {
+        "model_options": {
+            "endpoint": "https://opencode.ai/zen/v1", "api_key": "${MCP_PLUGIN_REPLAY_KEY}",
+            "custom_llm_provider": "openai",
+            "api_mode": {"protocol": "chat_completions", "supports_reasoning": {"reasoning_content": False}, "model_info": {
+                "supports_function_calling": True, "supports_vision": True,
+                "supports_audio_input": True,
+            }},
+        },
+    }}
+    for agent in workspace_settings["agents"].values():
         agent["model"] = {"primary": {"provider_id": "mcp-plugin-replay", "model_id": "default"}, "fallbacks": []}
         agent.setdefault("tools", {})["custom"] = []
     if mcp_plugin_tool_restrictions:
-        config["agents"]["default"]["tools"].setdefault("policy", {})["restrictions"] = mcp_plugin_tool_restrictions
-    config["mcp"] = {"servers": {}}
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+        workspace_settings["agents"]["default"]["tools"].setdefault("policy", {})["restrictions"] = mcp_plugin_tool_restrictions
+    workspace_settings["mcp"] = {"servers": {}}
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     home = context.boxteam_home_for_node(request.node.nodeid)
     install_user_configuration(config_root=home / "config", profile="default", project_root=Path.cwd())
@@ -180,11 +187,15 @@ async def _publish(case: McpPluginCase, changes: dict[str, object], key: str) ->
     response.raise_for_status()
     document = response.json()["data"]
     source = commentjson.loads(document["jsonc"])
-    if "plugins" in changes:
-        plugins = changes["plugins"]
-        assert isinstance(plugins, dict)
-        changes = {**changes, "plugins": {**source.get("plugins", {}), **plugins}}
-    source.update(changes)
+    workspace_settings = source["settings"]["workspace"]
+    remaining_changes = dict(changes)
+    for domain in ("plugins", "mcp"):
+        if domain not in remaining_changes:
+            continue
+        value = remaining_changes.pop(domain)
+        assert isinstance(value, dict)
+        workspace_settings[domain] = {**workspace_settings.get(domain, {}), **value}
+    workspace_settings.update(remaining_changes)
     response = await case.client.put(path, json={
         "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
         "source_key": "workspace_root_mutable_override", "jsonc": json.dumps(source, ensure_ascii=False),
@@ -202,11 +213,15 @@ async def _publish_expect_failure(case: McpPluginCase, changes: dict[str, object
     response.raise_for_status()
     document = response.json()["data"]
     source = commentjson.loads(document["jsonc"])
-    if "plugins" in changes:
-        plugins = changes["plugins"]
-        assert isinstance(plugins, dict)
-        changes = {**changes, "plugins": {**source.get("plugins", {}), **plugins}}
-    source.update(changes)
+    workspace_settings = source["settings"]["workspace"]
+    remaining_changes = dict(changes)
+    for domain in ("plugins", "mcp"):
+        if domain not in remaining_changes:
+            continue
+        value = remaining_changes.pop(domain)
+        assert isinstance(value, dict)
+        workspace_settings[domain] = {**workspace_settings.get(domain, {}), **value}
+    workspace_settings.update(remaining_changes)
     response = await case.client.put(path, json={
         "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
         "source_key": "workspace_root_mutable_override", "jsonc": json.dumps(source, ensure_ascii=False),

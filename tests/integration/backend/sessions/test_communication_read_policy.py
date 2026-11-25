@@ -148,7 +148,7 @@ async def test_read_cursor_rechecks_target_policy_and_keeps_original_snapshot(
         channels_before = {name: _channels(node) for name, node in case.nodes.items()}
         before = await _policy_status(target)
         config = commentjson.loads(original_config)
-        config.setdefault("permissions", {}).setdefault("federation", {})["rules"] = [
+        config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {}).setdefault("federation", {})["rules"] = [
             {"capability": "read", "effect": "deny"},
         ]
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

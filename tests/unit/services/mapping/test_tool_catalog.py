@@ -3,6 +3,8 @@ from __future__ import annotations
 from langchain.tools import ToolRuntime
 from langchain_core.tools import tool
 
+from app.agents.policy.tool_capability import metadata_for_tool
+from app.services.infrastructure.mcp.tool_definitions import definition_from_tool
 from app.services.mapping.tool_catalog import tools_to_catalog_definitions
 
 
@@ -38,11 +40,14 @@ def test_mcp_catalog_definition_uses_extension_group_metadata():
         """读取文件。"""
         return value
 
-    definitions = tools_to_catalog_definitions([read_file], extension_tools=[mcp_status])
+    published = definition_from_tool(mcp_status, metadata_for_tool(mcp_status, origin="mcp"))
+    definitions = tools_to_catalog_definitions([read_file], extension_definitions=[published])
     mcp_definition = next(
         definition for definition in definitions if definition["name"] == "mcp_status"
     )
 
     assert mcp_definition["kind"] == "extension"
+    assert mcp_definition["origin"] == "mcp"
+    assert mcp_definition["parameters"] == published.input_schema
     assert mcp_definition["group_id"] == "mcp:tui-mcp"
     assert mcp_definition["group_name"] == "扩展工具 · MCP · tui-mcp"

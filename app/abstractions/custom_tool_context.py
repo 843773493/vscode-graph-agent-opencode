@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from app.runtime.network_proxy import ProxyRoutes
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 
 
@@ -12,3 +13,5 @@ class CustomToolConfigProtocol(Protocol):
     def get_llm_model(self, model: ModelReferenceDTO) -> dict[str, object]: ...
 
     async def resolve_llm_model(self, model: ModelReferenceDTO) -> dict[str, object]: ...
+
+    async def resolve_workspace_proxy_routes(self) -> ProxyRoutes: ...

@@ -70,17 +70,18 @@ async def test_local_and_http_skills_discover_open_and_fail_without_runtime_or_r
 
     config_path = workspace / ".boxteam/workspace.jsonc"
     config = commentjson.loads(config_path.read_text())
-    config.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {
+    workspace_settings = config["settings"]["workspace"]
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {
         "url": str(client.base_url).rstrip("/"), "timeout_seconds": 5,
     }
-    config.setdefault("resources", {}).setdefault("skill_sources", {})["sources"] = sources("a")
+    workspace_settings.setdefault("resources", {}).setdefault("skill_sources", {})["sources"] = sources("a")
     await _reload(client, config_path, config)
     assert len(source.requests) == 2
     other = prepare_default_test_workspace(workspace_root=workspace.with_name("skill-B"),
         template_root=context.project_root / "tests/fixtures/workspaces/default_test_workspace", fresh_identity=True)
     other_config = install_test_workspace_config(workspace_root=other, config_path=config_path,
         schema_path=context.project_root / "configs/workspace_schema.jsonc")
-    config["resources"]["skill_sources"]["sources"] = sources("b")
+    workspace_settings["resources"]["skill_sources"]["sources"] = sources("b")
     other_config.write_text(json.dumps(config, ensure_ascii=False))
     (workspace / "AGENTS.md").write_text("# 工作区 A 根来源\n", encoding="utf-8")
     (other / "AGENTS.md").write_text("# 工作区 B 根来源\n", encoding="utf-8")

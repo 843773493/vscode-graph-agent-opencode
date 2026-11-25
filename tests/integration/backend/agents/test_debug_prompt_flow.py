@@ -236,10 +236,16 @@ def scripted_gateway_process(
     endpoint = "https://opencode.ai/zen/v1"
     config_path = Path(integration_workspace_config_path)
     config = _json_object(commentjson.loads(config_path.read_text(encoding="utf-8")))
-    llm = _json_object(config["llm"])
+    workspace_settings = _json_object(_json_object(config["settings"])["workspace"])
+    llm = _json_object(workspace_settings["llm"])
     providers = _json_object(llm["providers"])
     providers["debug-e2e"] = {
-        "defaults": {
+        "config_ref": "#/profiles/provider.debug-e2e",
+        "models": {"default": {"model": "debug-e2e-model", "config_ref": "context:provider/debug-e2e"}},
+    }
+    _json_object(config["profiles"])["provider.debug-e2e"] = {
+        "extends": "context:workspace",
+        "settings": {"model_options": {
             "endpoint": endpoint,
             "api_key": "",
             "custom_llm_provider": "openai",
@@ -248,17 +254,16 @@ def scripted_gateway_process(
                 "model_info": scripted_model_info,
                 "supports_reasoning": {"reasoning_content": True},
             },
-        },
-        "models": {"default": {"model": "debug-e2e-model"}},
+        }},
     }
-    agents = _json_object(config["agents"])
+    agents = _json_object(workspace_settings["agents"])
     default_agent = _json_object(agents["default"])
     default_agent["model"] = {
         "primary": {"provider_id": "debug-e2e", "model_id": "default"},
         "fallbacks": [],
     }
     workspace_root = Path(integration_workspace_root_path)
-    runtime = _json_object(config.setdefault("runtime", {}))
+    runtime = _json_object(workspace_settings.setdefault("runtime", {}))
     debug = _json_object(runtime.setdefault("debug", {}))
     launch_profiles = _json_object(debug.setdefault("launch_profiles", {}))
     launch_profiles["capability-entry"] = {

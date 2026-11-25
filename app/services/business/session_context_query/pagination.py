@@ -15,6 +15,7 @@ from app.abstractions.session_context import (
 )
 from app.schemas.internal_v2.session_context import (
     SessionContextItemDTO,
+    SessionContextPartialErrorDTO,
     SessionContextReadRequest,
     SessionContextReadResultDTO,
 )
@@ -190,7 +191,7 @@ def paginate_read_items(
     char_offset: int,
     compacted: bool = False,
     compaction_cutoff: int | None = None,
-    raw_message_count: int = 0,
+    raw_message_count: int | None = 0,
     effective_record_count: int = 0,
 ) -> SessionContextReadResultDTO:
     require_cursor_offset_in_range(offset, len(items), uri=request.uri)
@@ -290,7 +291,7 @@ def _largest_fitting_chunk(
     char_offset: int,
     compacted: bool,
     compaction_cutoff: int | None,
-    raw_message_count: int,
+    raw_message_count: int | None,
     effective_record_count: int,
 ) -> tuple[SessionContextItemDTO | None, int | None]:
     # 分片必须与完整DTO同形，保留nullable来源URI与空集合，消费者无需补字段。
@@ -364,7 +365,7 @@ def _build_read_result(
     next_item_char_offset: int | None,
     compacted: bool,
     compaction_cutoff: int | None,
-    raw_message_count: int,
+    raw_message_count: int | None,
     effective_record_count: int,
     budget_truncated: bool,
 ) -> SessionContextReadResultDTO:
@@ -403,5 +404,9 @@ def _build_read_result(
         has_more=has_more,
         next_cursor=next_cursor,
         items=items,
+        partial_errors=[SessionContextPartialErrorDTO(
+            resource_identity=request.resource_identity,
+            error="detail-unavailable: 压缩前原消息组未保留，无法取得准确的原消息数量；当前上下文仍可读取。",
+        )] if raw_message_count is None else [],
     )
     return set_exact_returned_chars(result, operation="read_context")

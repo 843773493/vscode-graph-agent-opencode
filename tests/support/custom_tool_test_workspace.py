@@ -39,6 +39,7 @@ def prepare_custom_tool_test_workspace(
     *,
     workspace_root: Path,
     template_root: Path,
+    artifacts_dir: Path,
     shared_skill_root: Path | None = None,
 ) -> Path:
     """复制只读模板，并在测试副本重建完整 canonical rollout 历史。"""
@@ -77,7 +78,7 @@ def prepare_custom_tool_test_workspace(
     )
 
     with stage("workspace.generator", total_turns=427, normal_turns=420, fork_turns=7):
-        generate_custom_tool_rollout_fixture(workspace_root)
+        generate_custom_tool_rollout_fixture(workspace_root, artifacts_dir=artifacts_dir)
     with stage("workspace.manifest_restore"):
         manifest_path.write_bytes(manifest_bytes)
 

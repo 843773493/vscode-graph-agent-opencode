@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langgraph.checkpoint.base import empty_checkpoint
+from langgraph.checkpoint.base import CheckpointTuple, RunnableConfig, empty_checkpoint
 
 from app.container import WorkspaceContainerRegistry
 from app.core.checkpoint_config import build_checkpoint_config
@@ -28,20 +28,31 @@ from app.core.resource_uri import thread_resource_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    checkpoint_messages,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime.summary_compiler import (
+    compaction_history_items,
+)
 from tests.harness.performance.record import stage
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.model_stream.compaction_model import replay_compaction_model
 from tests.support.model_stream.frozen_provider import (
     create_frozen_provider_activation,
     create_frozen_provider_prepare,
     frozen_provider_wire,
+)
+from tests.support.rollout.compaction_application import (
+    generate_and_adopt_compaction_candidate,
 )
 from tests.support.rollout.fixture_output import commit_fixture_output
 
@@ -96,21 +107,14 @@ def _checkpoint(
     checkpoint_id: str,
     messages: list[BaseMessage],
     *,
-    channel_version: int,
-    event: object = None,
+    channel_version: str,
 ) -> dict[str, object]:
     checkpoint = empty_checkpoint()
     checkpoint["id"] = checkpoint_id
     channel_values: dict[str, object] = {"messages": messages}
-    if event is not None:
-        channel_values["_summarization_event"] = event
     checkpoint["channel_values"] = channel_values
-    version = f"{channel_version:032d}.fixture"
-    checkpoint["channel_versions"] = {"messages": version}
+    checkpoint["channel_versions"] = {"messages": channel_version}
     checkpoint["updated_channels"] = ["messages"]
-    if event is not None:
-        checkpoint["channel_versions"]["_summarization_event"] = version
-        checkpoint["updated_channels"].append("_summarization_event")
     return checkpoint
 
 
@@ -434,9 +438,31 @@ def _catalog_resolver(sessions_dir: Path) -> SessionCatalogPathResolver:
     return resolver
 
 
+async def _compact_fixture(
+    saver: RolloutCheckpointSaver, *, admission: ExecutionAdmission,
+    config: RunnableConfig, candidate_id: str, artifacts_dir: Path,
+    predecessor_candidate_id: str | None,
+) -> CheckpointTuple:
+    session_id, thread_id = admission.session_id, admission.thread_id
+    with saver._context_reader.open_snapshot(session_id, thread_id, "") as snapshot:
+        source_items = saver._storage.checkpoints.committed_context_items(
+            snapshot, predecessor=None, include_pending_notices=False,
+        )
+    item_ids = tuple(item.item_id for item in compaction_history_items(source_items))
+    async with replay_compaction_model(artifacts_dir / candidate_id) as model:
+        _frozen, _result, adopted = await generate_and_adopt_compaction_candidate(
+            saver, session_id=session_id, thread_id=thread_id,
+            checkpoint_config=config, admission=admission, model=model,
+            candidate_id=candidate_id, task_id=candidate_id, item_ids=item_ids,
+            predecessor_candidate_id=predecessor_candidate_id,
+        )
+    return adopted
+
+
 def _create_session(
     *,
     sessions_dir: Path,
+    artifacts_dir: Path,
     session_id: str,
     title: str,
     turn_count: int,
@@ -516,9 +542,10 @@ def _create_session(
                     ))
             return
         config = build_checkpoint_config(thread_id)
+        messages_version = None
         messages: list[BaseMessage] = []
         checkpoint_segment_start_turn = 1
-        cutoff_index = 0
+        predecessor_candidate_id = None
         segment_has_internal_message = False
         segment_has_large_tool_payload = False
         checkpoint_ends = set(
@@ -580,37 +607,14 @@ def _create_session(
                         execution_id=str(accepted["initial_execution_id"]),
                     )
                 boundary = turn_index in checkpoint_ends
-                event = None
-                if (
+                compact = (
                     boundary
                     and checkpoint_segment_start_turn > 1
                     and turn_index in compaction_boundaries
-                ):
-                    event = {
-                        "event_id": f"compaction-{checkpoint_segment_start_turn:04d}",
-                        "strategy": "cache_preserving",
-                        "cutoff_index": cutoff_index,
-                        "cache_prefix_messages": [],
-                        "summary_message": HumanMessage(
-                            id=f"summary-{checkpoint_segment_start_turn:04d}",
-                            content=f"第 {checkpoint_segment_start_turn} 轮前完成上下文压缩，保留主题和工具结论。",
-                            additional_kwargs={"lc_source": "summarization"},
-                        ),
-                        "file_path": f".boxteam/context-history/compaction-{checkpoint_segment_start_turn:04d}.json",
-                    }
+                )
                 checkpoint_id = (
                     f"{checkpoint_prefix}-{turn_index:04d}" if boundary
                     else f"{checkpoint_prefix}-ingress-{turn_index:04d}"
-                )
-                checkpoint_messages = (
-                    messages
-                    if boundary
-                    and (
-                        not checkpoint_each_turn
-                        or turn_index == turn_count
-                        or event is not None
-                    )
-                    else latest_turn_messages
                 )
                 with execution_admission_scope(admission, langgraph_thread_id=thread_id):
                     with stage("generator.prepare_execution",
@@ -645,27 +649,35 @@ def _create_session(
                         turn_id=turn_id,
                         turn_index=turn_index,
                     ):
+                        messages_version = saver.get_next_version(messages_version, None)
+                        checkpoint = _checkpoint(checkpoint_id, messages, channel_version=messages_version)
                         config = saver.put(
                             config,
-                            _checkpoint(
-                                checkpoint_id,
-                                checkpoint_messages,
-                                channel_version=turn_index,
-                                event=event,
-                            ),
+                            checkpoint,
                             {
                                 "source": "custom-tool-rollout-fixture",
                                 "checkpoint_end_turn": turn_index,
-                                "semantic_boundary": "compaction" if event else "initial",
+                                "semantic_boundary": "initial",
                                 "contains_internal_messages": segment_has_internal_message,
                                 "contains_large_tool_payload": segment_has_large_tool_payload,
                                 **({"provider_id": provider_id} if real_provider_fixture else {}),
                             },
-                            {"messages": str(turn_index)},
+                            checkpoint["channel_versions"],
                         )
+                    if compact:
+                        candidate_id = f"fixture-{session_id}-{turn_index:04d}"
+                        with stage("generator.compaction", session_id=session_id, turn_index=turn_index):
+                            adopted = asyncio.run(_compact_fixture(
+                                saver, admission=admission, config=config, candidate_id=candidate_id,
+                                artifacts_dir=artifacts_dir, predecessor_candidate_id=predecessor_candidate_id,
+                            ))
+                        config = adopted.config
+                        messages_version = adopted.checkpoint["channel_versions"]["messages"]
+                        # 后续 checkpoint 只接续已采用 selection，不把旧内存历史写回。
+                        messages = checkpoint_messages(saver, adopted)
+                        predecessor_candidate_id = candidate_id
                 if turn_index in checkpoint_ends:
                     checkpoint_segment_start_turn = turn_index + 1
-                    cutoff_index = len(messages)
                     segment_has_internal_message = False
                     segment_has_large_tool_payload = False
 
@@ -674,6 +686,7 @@ def _write_fixture(
     workspace_root: Path,
     *,
     clean: bool,
+    artifacts_dir: Path,
 ) -> None:
     if clean:
         for relative_path in (
@@ -715,6 +728,7 @@ def _write_fixture(
             asyncio.run(resolver.delete_subtree(idempotency_key=f"fixture-clean-{uuid4().hex}", root_node_id=session_id))
     _create_session(
         sessions_dir=sessions_dir,
+        artifacts_dir=artifacts_dir,
         session_id=STATIC_LONG_SESSION_ID,
         title="自定义工具工作区：128 Turn 历史压测",
         turn_count=128,
@@ -725,6 +739,7 @@ def _write_fixture(
     )
     _create_session(
         sessions_dir=sessions_dir,
+        artifacts_dir=artifacts_dir,
         session_id=REAL_MODEL_SESSION_ID,
         title="Provider reasoning carrier 128 Turn 压测",
         turn_count=128,
@@ -739,6 +754,7 @@ def _write_fixture(
     )
     _create_session(
         sessions_dir=sessions_dir,
+        artifacts_dir=artifacts_dir,
         session_id=LARGE_LONG_SESSION_ID,
         title="大型工具调用：128 Turn 历史投影压测",
         turn_count=128,
@@ -748,6 +764,7 @@ def _write_fixture(
     )
     _create_session(
         sessions_dir=sessions_dir,
+        artifacts_dir=artifacts_dir,
         session_id=COMPACTION_SESSION_ID,
         title="上下文压缩与摘要示例",
         turn_count=24,
@@ -756,6 +773,7 @@ def _write_fixture(
     )
     _create_session(
         sessions_dir=sessions_dir,
+        artifacts_dir=artifacts_dir,
         session_id=TOOL_SESSION_ID,
         title="多工具调用和大输出示例",
         turn_count=12,
@@ -764,6 +782,7 @@ def _write_fixture(
     )
     _create_session(
         sessions_dir=sessions_dir,
+        artifacts_dir=artifacts_dir,
         session_id=FORK_SESSION_ID,
         title="独立历史分支示例",
         turn_count=7,
@@ -845,7 +864,7 @@ def _write_fixture(
     )
 
 
-def _write_static_long_session(workspace_root: Path) -> None:
+def _write_static_long_session(workspace_root: Path, *, artifacts_dir: Path) -> None:
     """只重建确定性 mock 长会话，不触碰真实模型会话。"""
     sessions_dir = workspace_root / ".boxteam" / "sessions"
     resolver = _catalog_resolver(sessions_dir)
@@ -857,6 +876,7 @@ def _write_static_long_session(workspace_root: Path) -> None:
         asyncio.run(resolver.delete_subtree(idempotency_key=f"fixture-clean-{uuid4().hex}", root_node_id=STATIC_LONG_SESSION_ID))
     _create_session(
         sessions_dir=sessions_dir,
+        artifacts_dir=artifacts_dir,
         session_id=STATIC_LONG_SESSION_ID,
         title="自定义工具工作区：128 Turn 历史压测（mock）",
         turn_count=128,
@@ -867,9 +887,12 @@ def _write_static_long_session(workspace_root: Path) -> None:
 
 def generate_custom_tool_rollout_fixture(
     workspace_root: Path,
+    *, artifacts_dir: Path,
 ) -> None:
     """在明确传入的工作区中重建 canonical 静态 Session 与 rollout。"""
 
+    # TODO：完整427 Turn装具实测565.90秒；按原stage证据优化长历史prepare与SQLite增长，
+    # 不缩减历史规模、不跳过真实候选采用，也不为测试引入另一套持久化写入链。
     registry = WorkspaceContainerRegistry(
         mounted_workspaces=MountedWorkspaceRegistry([
             MountedWorkspace(load_or_create_workspace_id(workspace_root), workspace_root)
@@ -885,21 +908,16 @@ def generate_custom_tool_rollout_fixture(
             fork_turns=7,
         ),
     ):
-        _write_fixture(workspace_root, clean=True)
+        _write_fixture(workspace_root, clean=True, artifacts_dir=artifacts_dir)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--artifacts-dir", type=Path, required=True, help="模型回放及生成证据的输出目录")
     parser.add_argument(
         "--workspace",
         type=Path,
-        default=(
-            Path.cwd()
-            / "tests"
-            / "fixtures"
-            / "workspaces"
-            / "custom_tool_test_workspace"
-        ),
+        required=True,
     )
     parser.add_argument(
         "--clean",
@@ -928,7 +946,7 @@ def main() -> None:
     )
     with registry, catalog_provider_scope(registry):
         if args.only_static_long_session:
-            _write_static_long_session(workspace_root)
+            _write_static_long_session(workspace_root, artifacts_dir=args.artifacts_dir.resolve())
         elif args.only_large_session:
             sessions_dir = workspace_root / ".boxteam" / "sessions"
             resolver = _catalog_resolver(sessions_dir)
@@ -940,6 +958,7 @@ def main() -> None:
                 asyncio.run(resolver.delete_subtree(idempotency_key=f"fixture-clean-{uuid4().hex}", root_node_id=LARGE_LONG_SESSION_ID))
             _create_session(
                 sessions_dir=sessions_dir,
+                artifacts_dir=args.artifacts_dir.resolve(),
                 session_id=LARGE_LONG_SESSION_ID,
                 title="大型工具调用：128 Turn 历史投影压测",
                 turn_count=128,
@@ -965,7 +984,7 @@ def main() -> None:
                     encoding="utf-8",
                 )
         else:
-            _write_fixture(workspace_root, clean=args.clean)
+            _write_fixture(workspace_root, clean=args.clean, artifacts_dir=args.artifacts_dir.resolve())
 
 
 if __name__ == "__main__":

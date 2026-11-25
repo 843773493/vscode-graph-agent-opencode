@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,11 +10,14 @@ import portalocker
 import pytest
 from fastapi import HTTPException
 
-from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
+from app.abstractions.background_task_registry import (
+    BackgroundTaskDescriptorFactory,
+    BackgroundTaskRegistryProtocol,
+)
 from app.abstractions.browser_resources import BrowserPluginDisabled
 from app.abstractions.terminal.resources import TerminalPluginDisabled
 from app.api.sessions import list_session_resources
-from app.domain.background_work import BackgroundTaskHandle
+from app.domain.background_work import BackgroundTaskDescriptor, BackgroundTaskHandle
 from app.domain.itemized.enums import PayloadKind
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_navigation.service import SessionCatalogService
@@ -153,6 +156,27 @@ class FakeJobService:
 
 
 class _EmptyBackgroundTaskRegistry:
+    async def spawn(self, *, session_id: str, thread_id: str, agent_id: str, task_id: str,
+                    descriptor: BackgroundTaskDescriptor) -> BackgroundTaskHandle:
+        raise AssertionError("空后台任务 registry 不应创建任务")
+
+    async def spawn_derived(self, *, session_id: str, thread_id: str, agent_id: str, task_id: str,
+                           descriptor: BackgroundTaskDescriptor | BackgroundTaskDescriptorFactory,
+                           foreground: bool = False) -> BackgroundTaskHandle | None:
+        raise AssertionError("空后台任务 registry 不应创建派生任务")
+
+    async def recover_derived_thread(self, session_id: str, thread_id: str) -> tuple[BackgroundTaskHandle, ...]:
+        raise AssertionError("空后台任务 registry 不应恢复派生任务")
+
+    async def promote_derived(self, session_id: str, task_id: str) -> BackgroundTaskHandle:
+        raise AssertionError("空后台任务 registry 不应提升派生任务")
+
+    def derived_publication(self, handle: BackgroundTaskHandle) -> AbstractAsyncContextManager[None]:
+        raise AssertionError("空后台任务 registry 不应发布派生结果")
+
+    async def reconcile(self, session_id: str, task_id: str) -> BackgroundTaskHandle:
+        raise AssertionError("空后台任务 registry 不应对账任务")
+
     def list_handles(self, _session_id: str) -> list[BackgroundTaskHandle]:
         return []
 
@@ -180,7 +204,7 @@ class _EmptyBackgroundTaskRegistry:
     ) -> BackgroundTaskHandle:
         raise AssertionError(f"空后台任务 registry 不应删除任务: {task_id}")
 
-    async def delete_session(self, _session_id: str) -> int:
+    async def cleanup_session(self, _session_id: str, *, action: str, thread_id: str | None = None) -> int:
         return 0
 
 

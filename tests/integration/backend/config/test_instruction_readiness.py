@@ -62,7 +62,9 @@ async def test_failed_file_blocks_new_execution_without_persisting_native_diagno
         {"system_prompt_file": uri} if producer == "R01"
         else {"runtime_identity": {"description_file": uri}}
     )
-    config_path.write_text(json.dumps({"agents": {"default": {"instructions": instructions}}}), encoding="utf-8")
+    config_path.write_text(json.dumps({"config_version": 4, "extends": "builtin:workspace", "settings": {
+        "workspace": {"agents": {"default": {"instructions": instructions}}},
+    }}), encoding="utf-8")
     replay, controller = inprocess_model_replay
     async with main.lifespan(main.app) as _main_lifespan_state:
         await _main_lifespan_state["after_http_startup"]()

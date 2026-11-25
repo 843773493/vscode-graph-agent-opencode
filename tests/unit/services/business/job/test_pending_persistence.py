@@ -158,6 +158,51 @@ def _request(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("conflicting_identity", [False, True])
+async def test_loaded_queue_reuses_input_and_still_checks_job_identity(
+    conflicting_identity, tmp_path, monkeypatch, session_bundle_factory,
+    request_factory, pending_input_owner, session_lifecycle_guard,
+) -> None:
+    session_id = "ses_019c018e721e70b38f769ca61010e13a"
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, session_id)
+    requests = [request_factory(
+        session_id, job_id=f"job_{index}", message_id=f"msg_{index}", sequence=index,
+    ) for index in (1, 2)]
+    service = _service(sessions_dir, session_lifecycle_guard, pending_input_owner)
+    _prevent_background_execution(service, monkeypatch)
+    store = service._pending_requests.execution_queue
+    reader = store._input_reader
+    reads = []
+
+    def read(reference):
+        reads.append(reference.message_id)
+        return reader(reference)
+
+    monkeypatch.setattr(store, "_input_reader", read)
+    try:
+        initial = await service.list_pending(session_id)
+        assert reads == [request.message_id for request in requests]
+        jobs = dict(service._jobs)
+        queued = jobs[requests[1].job_id]
+        reads.clear()
+        if conflicting_identity:
+            queued.message_id = "different-message"
+            with pytest.raises(RuntimeError, match="identity 冲突"):
+                await service.list_pending(session_id)
+        else:
+            refreshed = await service.list_pending(session_id)
+            assert refreshed.active_job_id == initial.active_job_id == requests[0].job_id
+            assert [request.message_id for request in refreshed.requests] == [requests[1].message_id]
+            assert all(service._jobs[key] is job for key, job in jobs.items())
+        assert reads == []
+    finally:
+        for job in service._jobs.values():
+            if job.queue_claim is not None:
+                await job.queue_claim.close()
+
+
+@pytest.mark.asyncio
 async def test_job_service_restores_only_messages_still_in_queue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -217,15 +262,15 @@ async def test_cancelled_pending_restore_settles_worker_before_session_delete(
     monkeypatch.setattr(service, "_start_next_pending", do_nothing)
     started = threading.Event()
     release = threading.Event()
-    original = pending_input_owner.accepted_job_outcome
+    original = pending_input_owner.accepted_job_message
 
-    def blocked_outcome(reference):
+    def blocked_snapshot(*args, **kwargs):
         started.set()
         if not release.wait(timeout=10):
             raise TimeoutError("测试未释放 pending restore worker")
-        return original(reference)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(pending_input_owner, "accepted_job_outcome", blocked_outcome)
+    monkeypatch.setattr(pending_input_owner, "accepted_job_message", blocked_snapshot)
     if entrypoint == "list_pending":
         operation = service.list_pending(session_id)
     elif entrypoint == "start_restored_executions":
@@ -255,9 +300,9 @@ async def test_cancelled_pending_restore_settles_worker_before_session_delete(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("persist_stage", [1, 2])
+@pytest.mark.parametrize("persist_stage", ["load_projection", "before_dispatch"])
 async def test_cancelled_restore_finishes_queue_persistence_and_launch(
-    persist_stage: int,
+    persist_stage: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     session_bundle_factory,
@@ -278,18 +323,23 @@ async def test_cancelled_restore_finishes_queue_persistence_and_launch(
     _prevent_background_execution(service, monkeypatch, started_jobs)
     reached = asyncio.Event()
     release = asyncio.Event()
-    original = service._pending_requests.refresh_version
-    calls = 0
+    original_load = service._load_pending_records
+    original_dispatch = service._start_next_pending
 
-    async def blocked_persist(target_session_id: str) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == persist_stage:
+    async def blocked_dispatch(*args, **kwargs):
+        if persist_stage == "before_dispatch":
             reached.set()
             await release.wait()
-        await original(target_session_id)
+        return await original_dispatch(*args, **kwargs)
 
-    monkeypatch.setattr(service._pending_requests, "refresh_version", blocked_persist)
+    async def blocked_load(*args, **kwargs):
+        if persist_stage == "load_projection":
+            reached.set()
+            await release.wait()
+        await original_load(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_start_next_pending", blocked_dispatch)
+    monkeypatch.setattr(service, "_load_pending_records", blocked_load)
     restore = asyncio.create_task(service.list_pending(session_id))
     try:
         await asyncio.wait_for(reached.wait(), timeout=5)
@@ -307,7 +357,7 @@ async def test_cancelled_restore_finishes_queue_persistence_and_launch(
     assert snapshot.active_job_id == "job_restore"
     assert snapshot.requests == []
     assert started_jobs == ["job_restore"]
-    assert await store.load(session_id) == []
+    assert (await store.load(session_id)).records == ()
 
 
 @pytest.mark.asyncio
@@ -330,21 +380,22 @@ async def test_failed_canonical_restore_keeps_pending_available_for_retry(
     service = _service(sessions_dir, session_lifecycle_guard, pending_input_owner)
     started_jobs: list[str] = []
     _prevent_background_execution(service, monkeypatch, started_jobs)
-    original = pending_input_owner.accepted_job_outcome
+    original = pending_input_owner._checkpointer.execution_queue_snapshot
     fail = True
 
-    def fail_once(reference):
+    def fail_once(*args, **kwargs):
         nonlocal fail
         if fail:
             fail = False
-            raise OSError("canonical outcome 读取失败")
-        return original(reference)
+            raise OSError("canonical queue 读取失败")
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(pending_input_owner, "accepted_job_outcome", fail_once)
-    with pytest.raises(OSError, match="canonical outcome 读取失败"):
+    monkeypatch.setattr(pending_input_owner._checkpointer, "execution_queue_snapshot", fail_once)
+    with pytest.raises(OSError, match="artifact=execution_queue") as captured:
         await service.list_pending(session_id)
+    assert str(captured.value.__cause__) == "canonical queue 读取失败"
     assert started_jobs == []
-    assert [item.job_id for item in await store.load(session_id)] == ["job_restore"]
+    assert [item.cursor.admission.job_id for item in (await store.load(session_id)).records] == ["job_restore"]
     restored = await service.list_pending(session_id)
     assert restored.active_job_id == "job_restore"
     assert restored.requests == []
@@ -484,7 +535,7 @@ async def test_dispatch_removes_started_head_from_persistent_queue(
     assert pending.active_job_id == "job_started"
     assert pending.requests == []
     assert started_jobs == ["job_started"]
-    assert await store.load(session_id) == []
+    assert (await store.load(session_id)).records == ()
 
 
 @pytest.mark.asyncio
@@ -581,10 +632,10 @@ async def test_restore_discards_reference_after_canonical_cancel_before_queue_sa
     assert started == [successor.job_id]
     assert service._jobs[successor.job_id].message == successor.content
     assert snapshot.active_job_id == successor.job_id and snapshot.requests == []
-    assert await store.load(session_id) == []
+    assert (await store.load(session_id)).records == ()
     assert restarted_owner._checkpointer.accepted_user_message(
         session_id, thread_id=cancelled.thread_id, job_id=cancelled.job_id, message_id=cancelled.message_id,
-    ).content == cancelled.content
+    )[1].content == cancelled.content
 
 
 @pytest.mark.asyncio
@@ -605,21 +656,28 @@ async def test_restore_retries_hard_error_without_reloading_fifo(
     started: list[str] = []
     _prevent_background_execution(service, monkeypatch, started)
     original_save = service._pending_requests.refresh_version
+    original_load = service._load_pending_records
     original_start = service._start_job_task
     save_calls = 0
 
     async def fail_save_once(target_session_id):
         nonlocal save_calls
         save_calls += 1
-        if (failure, save_calls) in {("load_projection", 1), ("dispatch_projection", 2)}:
+        if failure == "dispatch_projection" and save_calls == 1:
             raise OSError("injected pending save failure")
         await original_save(target_session_id)
+
+    async def fail_load_once(*args, **kwargs):
+        monkeypatch.setattr(service, "_load_pending_records", original_load)
+        raise OSError("injected pending load failure")
 
     def fail_start_once(job):
         monkeypatch.setattr(service, "_start_job_task", original_start)
         raise OSError("injected pending task failure")
 
     monkeypatch.setattr(service._pending_requests, "refresh_version", fail_save_once)
+    if failure == "load_projection":
+        monkeypatch.setattr(service, "_load_pending_records", fail_load_once)
     if failure == "task_start":
         monkeypatch.setattr(service, "_start_job_task", fail_start_once)
     with pytest.raises(OSError, match="injected pending"):
@@ -632,7 +690,7 @@ async def test_restore_retries_hard_error_without_reloading_fifo(
     assert started == [records[0].job_id]
     assert all(service._jobs[key] is job for key, job in original_jobs.items())
     assert service._jobs[records[0].job_id].execution_binding == records[0].execution_binding
-    assert [item.message_id for item in await store.load(session_id)] == [records[1].message_id]
+    assert [item.input.message_id for item in (await store.load(session_id)).records] == [records[1].message_id]
     save_count = save_calls
     assert (await service.list_pending(session_id)).active_job_id == records[0].job_id
     assert started == [records[0].job_id]
@@ -691,4 +749,4 @@ async def test_loaded_dispatch_retries_original_active_slot_once(
     assert all([item.job_id for item in result.requests] == [records[2].job_id] for result in results)
     assert started == [records[0].job_id, records[1].job_id]
     assert all(service._jobs[key] is job for key, job in original_jobs.items())
-    assert [item.message_id for item in await store.load(session_id)] == [records[2].message_id]
+    assert [item.input.message_id for item in (await store.load(session_id)).records] == [records[2].message_id]

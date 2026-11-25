@@ -47,7 +47,7 @@ def test_capacity_is_frozen():
 
 
 @pytest.mark.parametrize("tokens,automatic,expected", [
-    (69, True, "continue"), (70, True, "prepare"), (85, True, "compact"),
+    (79, True, "continue"), (80, True, "prepare"), (89, True, "prepare"), (90, True, "compact"),
     (90, False, "continue"), (101, False, "cannot_fit"), (101, True, "compact"),
 ])
 def test_budget_policy_does_not_turn_automatic_threshold_into_hard_capacity(tokens, automatic, expected):

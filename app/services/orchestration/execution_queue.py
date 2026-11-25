@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from app.abstractions.execution_queue import ExecutionQueueOwner
+from app.abstractions.execution_queue import ExecutionQueueLoad, ExecutionQueueOwner
 from app.core.path_utils import get_session_path_resolver
 from app.core.phase_observer import observe_phase
 from app.core.session_lifecycle_gate import (
@@ -91,8 +91,9 @@ class ExecutionQueueService:
         snapshots = []
         for owner in owners:
             with self._access(owner.session_id, owner.thread_id, "read_control"):
-                self._owner.validate_execution_queue(owner.session_id, owner.thread_id)
-                snapshots.append((owner, self._owner.execution_queue_snapshot(owner.session_id, owner.thread_id)))
+                snapshots.append((owner, self._owner.execution_queue_snapshot(
+                    owner.session_id, owner.thread_id, validate_inputs=True,
+                )))
         return tuple(snapshots)
 
     @staticmethod
@@ -185,12 +186,14 @@ class ExecutionQueueService:
             message_metadata={**message.metadata, "boxteam_session_model": record.input.model},
         )
 
-    async def load(self, session_id: str) -> list[PendingRequestDTO]:
+    async def load(self, session_id: str) -> ExecutionQueueLoad:
         snapshots = await asyncio.to_thread(self._snapshots, session_id)
         version = sum(snapshot.revision for _owner, snapshot in snapshots)
         queued = [record for _owner, snapshot in snapshots for record in snapshot.records if record.phase == "queued"]
-        return [await self.project(record, position=position, snapshot_version=version)
-                for position, record in enumerate(queued)]
+        return ExecutionQueueLoad(
+            tuple(queued),
+            version,
+        )
 
     async def load_summaries(self, session_id: str, *, limit: int, thread_id: str | None = None) -> PendingRequestSummaryListDTO:
         if not 1 <= limit <= 8:

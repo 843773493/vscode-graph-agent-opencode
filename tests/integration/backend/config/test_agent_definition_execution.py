@@ -51,7 +51,7 @@ async def test_removed_agent_keeps_running_snapshot_and_requires_explicit_sessio
                 assert response.status_code == 200, response.text
                 document = response.json()["data"]
                 payload = parse_source_text(document["jsonc"])
-                agents = payload.setdefault("agents", {})
+                agents = payload["settings"]["workspace"].setdefault("agents", {})
                 if remove:
                     agents.pop("source_agent")
                 else:

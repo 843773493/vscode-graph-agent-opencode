@@ -27,7 +27,6 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
-    strict_optional_non_negative_int,
     strict_optional_text,
     strict_text,
 )
@@ -69,10 +68,17 @@ class RolloutMessageProjectionMixin:
         group = item.projection_group
         if group is not None and group.ordinal != group.size - 1:
             return None
+        if (item.semantic_kind == SemanticKind.REASONING and group is None
+                and (item.wire_role is None or item.projection_identity is None
+                     or item.projection_identity.projection_message_id is None)):
+            for row in self._storage._codec().reasoning_rows((item,)):
+                self._insert_reasoning_projection(connection, row)
+            return None
         if item.semantic_kind not in {
             SemanticKind.USER_INPUT.value,
             SemanticKind.RUNTIME_NOTICE.value,
             SemanticKind.ASSISTANT_OUTPUT.value,
+            SemanticKind.REASONING.value,
             SemanticKind.TOOL_CALL.value,
             SemanticKind.TOOL_RESULT.value,
         }:
@@ -123,7 +129,7 @@ class RolloutMessageProjectionMixin:
             # 不能仅因写入前已校验 item，就直接拿调用方的容器替代 canonical 正文。
             items = read_message_group(
                 connection, stream, offset=catalog_offset, length=catalog_length,
-                read_item=self._storage._read_v2_item_at,
+                read_item=self._storage._read_item_at,
             )
         message = self._storage._codec().project_message(items)
         raw_data = message.get("data")
@@ -137,6 +143,7 @@ class RolloutMessageProjectionMixin:
             SemanticKind.USER_INPUT.value: "user",
             SemanticKind.RUNTIME_NOTICE.value: "user",
             SemanticKind.ASSISTANT_OUTPUT.value: "assistant",
+            SemanticKind.REASONING.value: "assistant",
             SemanticKind.TOOL_CALL.value: "assistant",
             SemanticKind.TOOL_RESULT.value: "tool",
         }[item.semantic_kind]
@@ -231,6 +238,23 @@ class RolloutMessageProjectionMixin:
         )
         return message_sequence, message_id, expected_role
 
+    @staticmethod
+    def _insert_reasoning_projection(connection: sqlite3.Connection, row: Mapping[str, object]) -> None:
+        """每个 canonical 思考来源只保存一行安全视图，不依赖消息是否存在。"""
+        connection.execute(
+            "INSERT INTO reasoning_blocks(item_id, kind, carrier_type, reasoning_text, "
+            "summary_text, reasoning_truncated, summary_truncated, signature_present, encrypted_length, encrypted_hash, "
+            "projection_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 3)",
+            (
+                row["item_id"], row["kind"], row["carrier_type"],
+                row["reasoning_text"][:_VISIBLE_TEXT_LIMIT] if row["reasoning_text"] is not None else None,
+                row["summary_text"][:_VISIBLE_TEXT_LIMIT] if row["summary_text"] is not None else None,
+                int(row["reasoning_text"] is not None and len(row["reasoning_text"]) > _VISIBLE_TEXT_LIMIT),
+                int(row["summary_text"] is not None and len(row["summary_text"]) > _VISIBLE_TEXT_LIMIT),
+                int(row["signature_present"]), row["encrypted_length"], row["encrypted_hash"],
+            ),
+        )
+
     def _insert_message_projection(
         self,
         connection: sqlite3.Connection,
@@ -255,23 +279,15 @@ class RolloutMessageProjectionMixin:
             call for item in canonical_items if item.semantic_kind == SemanticKind.TOOL_CALL
             for call in item.payload.get("tool_calls", [item.payload])
         ]
-        reasoning = codec.reasoning_rows(value)
-        response_metadata = (
-            data.get("response_metadata") if isinstance(data, Mapping) else None
-        )
-        provider_id = (
-            response_metadata.get("provider_id")
-            if isinstance(response_metadata, Mapping)
-            else None
-        )
-        if not isinstance(provider_id, str):
-            provider_id = None
+        reasoning = codec.reasoning_rows(canonical_items)
+        for row in reasoning:
+            self._insert_reasoning_projection(connection, row)
         message_type = value.get("type")
         connection.execute(
             "INSERT INTO message_projections(message_sequence, text_preview, visible_text, "
             "visible_text_length, visible_text_truncated, has_reasoning, "
-            "has_encrypted_reasoning, has_tool_calls, phase, projection_version, updated_at, response_outline_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?, ?)",
+            "has_encrypted_reasoning, has_tool_calls, phase, projection_version, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 3, ?)",
             (
                 sequence,
                 visible[:512],
@@ -279,7 +295,7 @@ class RolloutMessageProjectionMixin:
                 len(visible),
                 len(visible) >= _VISIBLE_TEXT_LIMIT,
                 bool(reasoning),
-                any(row.get("kind") == "encrypted" for row in reasoning),
+                any(row["encrypted_length"] is not None or row["kind"] == "reasoning_encrypted" for row in reasoning),
                 bool(calls),
                 "tool_request"
                 if calls
@@ -287,60 +303,8 @@ class RolloutMessageProjectionMixin:
                 if message_type == "ai"
                 else None,
                 timestamp,
-                _json(codec.activity_outline(canonical_items)),
             ),
         )
-        for row in reasoning:
-            block_index = row.get("content_block_index")
-            item_index = row.get("item_index", 0)
-            kind = row.get("kind")
-            carrier_type = row.get("carrier_type")
-            if (
-                not isinstance(block_index, int)
-                or isinstance(block_index, bool)
-                or not isinstance(item_index, int)
-                or isinstance(item_index, bool)
-                or not isinstance(kind, str)
-                or not isinstance(carrier_type, str)
-            ):
-                continue
-            text = row.get("text")
-            reasoning_text = row.get("reasoning_text")
-            summary_text = row.get("summary_text")
-            encrypted_length = row.get("encrypted_length")
-            encrypted_hash = row.get("encrypted_hash")
-            item_id = row.get("item_id")
-            encrypted_length_value = strict_optional_non_negative_int(
-                encrypted_length,
-                field=f"reasoning_blocks.encrypted_length: {sequence}/{block_index}",
-            )
-            connection.execute(
-                "INSERT INTO reasoning_blocks(message_sequence, content_block_index, "
-                "item_index, carrier_type, item_id, reasoning_text, summary_text, "
-                "signature_present, encrypted_length, encrypted_hash, provider_id, "
-                "projection_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2)",
-                (
-                    sequence,
-                    block_index,
-                    item_index,
-                    carrier_type,
-                    item_id if isinstance(item_id, str) else None,
-                    reasoning_text[:_VISIBLE_TEXT_LIMIT]
-                    if isinstance(reasoning_text, str)
-                    else text[:_VISIBLE_TEXT_LIMIT]
-                    if isinstance(text, str) and kind == "reasoning"
-                    else None,
-                    summary_text[:_VISIBLE_TEXT_LIMIT]
-                    if isinstance(summary_text, str)
-                    else text[:_VISIBLE_TEXT_LIMIT]
-                    if isinstance(text, str) and kind == "summary"
-                    else None,
-                    int(row.get("signature_present") is True),
-                    encrypted_length_value,
-                    encrypted_hash if isinstance(encrypted_hash, str) else None,
-                    provider_id,
-                ),
-            )
         for call_index, call in enumerate(calls):
             call_id = call.get("id") or call.get("tool_call_id")
             name = call.get("name")

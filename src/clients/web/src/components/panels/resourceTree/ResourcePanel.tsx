@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import { useEffect, useRef, useState } from "react";
 import type {
@@ -424,7 +425,7 @@ function ResourcePanelForOwner({
               </details>
             ) : null}
           </div> : null}
-          {error && !waitingForFirstMessage ? <div className="resource-notice is-error" role="alert">{t("resources.panel.loadFailed", error)}</div> : null}
+          {error && !waitingForFirstMessage ? <div className="resource-notice is-error failure-summary" role="alert">{failureSummary(t("resources.panel.loadFailed", error))}</div> : null}
         </div>
       ) : null}
       {waitingForFirstMessage && !loading ? (

@@ -40,9 +40,9 @@ def activity_backend(
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    primary_provider = config["llm"]["providers"]["primary"]
+    primary_provider = config["settings"]["workspace"]["llm"]["providers"]["primary"]
     primary_provider["models"]["default"]["model"] = "e2e-stub-model"
-    primary_provider["defaults"].update(
+    config["profiles"]["provider.primary"]["settings"]["model_options"].update(
         {
             "endpoint": "https://opencode.ai/zen/v1",
             "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",

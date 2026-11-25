@@ -95,6 +95,7 @@ def debug_runtime_proxy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             release_upstream.set()
 
     def fake_connect(url: str, **kwargs):
+        assert kwargs["proxy"] is None, "Debug 插件控制通道必须直连"
         return UpstreamContext()
 
     monkeypatch.setattr(service_plugin_proxy, "connect", fake_connect)
@@ -104,6 +105,18 @@ def debug_runtime_proxy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     app.state.service_plugins = owner
 
     return app, workspace_id, debugger, package, forwarded, forwarded_event, route
+
+
+def test_plugin_service_websocket_keeps_direct_control_and_original_frames(debug_runtime_proxy) -> None:
+    app, workspace_id, _debugger, _package, forwarded, forwarded_event, route = debug_runtime_proxy
+    path = (
+        "/api/gateway/service-plugins/boxteam.developer-tools/debugging/instances/"
+        f"{route.instance_id}/services/dap/control?package_version=0.1.0&workspace_id={workspace_id}"
+    )
+    with TestClient(app) as client, client.websocket_connect(path, headers={"X-Local-Token": "local-auth"}) as socket:
+        socket.send_text("original-control-frame")
+        assert forwarded_event.wait(2)
+    assert forwarded == ["original-control-frame"]
 
 
 def test_debug_runtime_route_sends_exact_ready_identity_and_relays_control_frames(

@@ -164,18 +164,20 @@ class ForkMaterializationMixin:
                 (view_id,),
             ).fetchall()
             replace_members(connection, message_view, selected_members)
+            # 摘要／尾部回复仍携带原 Turn 身份，不代表恢复选集包含该 Turn 的用户根。
+            # 原根仅作历史请求 backing 时，不能复制完整 Turn 索引或重新选入原消息。
             connection.execute(
                 "INSERT INTO context_view_turns(view_id,turn_id,logical_turn_ordinal,user_message_sequence,"
                 "final_message_sequence,root_input_item_id,fork_lineage_json) "
                 "SELECT ?,turn_id,logical_turn_ordinal,user_message_sequence,final_message_sequence,root_input_item_id,fork_lineage_json "
                 "FROM context_view_turns AS turn WHERE view_id=? AND EXISTS ("
-                "SELECT 1 FROM context_view_items AS member JOIN item_catalog AS item ON item.item_id=member.item_id "
-                "WHERE member.view_id=? AND item.turn_id=turn.turn_id)", (message_view, view_id, message_view),
+                "SELECT 1 FROM context_view_items AS member "
+                "WHERE member.view_id=? AND member.item_id=turn.root_input_item_id)", (message_view, view_id, message_view),
             )
             connection.execute(
                 "UPDATE context_views SET logical_turn_count=(SELECT COUNT(*) FROM context_view_turns WHERE view_id=?), "
-                "head_turn_id=(SELECT item.turn_id FROM context_view_items member JOIN item_catalog item ON item.item_id=member.item_id "
-                "WHERE member.view_id=? ORDER BY member.logical_item_ordinal DESC LIMIT 1), "
+                "head_turn_id=(SELECT turn_id FROM context_view_turns "
+                "WHERE view_id=? ORDER BY logical_turn_ordinal DESC LIMIT 1), "
                 "head_message_sequence=COALESCE((SELECT MAX(message.message_sequence) FROM context_view_items member "
                 "JOIN item_catalog item ON item.item_id=member.item_id JOIN messages message ON message.jsonl_offset=item.jsonl_offset "
                 "AND message.jsonl_length=item.jsonl_length WHERE member.view_id=?), 0) "
@@ -213,8 +215,7 @@ class ForkMaterializationMixin:
                     "updated_index,created_at) SELECT ?,channel_name,storage_kind,CASE WHEN channel_name='messages' AND value_state='delta' THEN 'snapshot' ELSE value_state END,channel_version,"
                     "value_id,value_session_id,value_thread_id,"
                     "CASE WHEN channel_name='messages' THEN ? ELSE context_view_id END,updated_index,? "
-                    "FROM checkpoint_channels WHERE checkpoint_id=? "
-                    "AND channel_name NOT IN ('_summarization_event','_force_cache_compaction','_compaction_continuation')",
+                    "FROM checkpoint_channels WHERE checkpoint_id=?",
                     (checkpoint_id, message_view, copy_recorded_at, seed_checkpoint_id),
                 )
             self._context.checkpoints._capture_checkpoint_context_sources(

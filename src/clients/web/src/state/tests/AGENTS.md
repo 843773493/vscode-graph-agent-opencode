@@ -2,7 +2,7 @@
 
 `src/clients/web/src/state/tests/` 是状态派生层测试中尚未归位的暂存目录。
 
-按既有惯例，测试应与被测生产模块就近同目录存放（例如 `state/session/sessionScope.test.ts`、`state/timeline/responseParts.test.ts`、`state/display/toolDisplay.test.ts`）。本目录只保留职责跨域、无法归入单一生产子域的用例；新增测试应直接放进被测模块所在目录，不要再平铺到这里。
+按既有惯例，测试应与被测生产模块就近同目录存放（例如 `state/session/sessionScope.test.ts`、`state/timeline/responseItems.test.ts`、`state/display/toolDisplay.test.ts`）。本目录只保留职责跨域、无法归入单一生产子域的用例；新增测试应直接放进被测模块所在目录，不要再平铺到这里。
 
 # 可修改内容
 

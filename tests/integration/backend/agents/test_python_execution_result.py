@@ -69,7 +69,7 @@ async def test_python_tool_result_preserves_streams_without_interpreter_locator(
         assert response.status_code == 200, response.text
         payload = response.json()["data"]
         detail, = payload["items"]
-        result, = [part for part in detail["response_parts"] if part["kind"] == "tool_result"]
+        result, = [part for part in detail["response_items"] if part["kind"] == "tool_result"]
         assert result["source"]["item_id"] and result["tool_call_id"] == canonical_tool_call_id
         assert json.loads(result["result"]) == json.loads(tool_results[0]["content"])
         assert "python_executable" not in json.dumps(payload)

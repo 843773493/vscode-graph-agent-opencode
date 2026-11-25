@@ -580,8 +580,8 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
         payload["client"] = client
         if not asynchronous:
             self._prepare_oauth_request(payload)
-        if self.invocation_purpose == "model_test":
-            payload["max_retries"] = payload["num_retries"] = 0
+        # Responses 没有 LangChain completion 重试层，直接消费构造时的实际值。
+        payload["max_retries"] = payload["num_retries"] = self.max_retries
 
     def _prepare_oauth_request(self, payload: dict[str, Any]) -> None:
         if self.chatgpt_auth_directory is None:
@@ -954,7 +954,7 @@ def build_openai_responses_model(
         api_base=provider.get("endpoint"),
         extra_headers=request_options.get("default_headers") or None,
         custom_llm_provider=provider["custom_llm_provider"],
-        max_retries=0 if invocation_purpose == "model_test" else 3,
+        max_retries=0 if invocation_purpose in {"model_test", "derived", "compaction"} else 3,
         streaming=api_mode.streaming,
         disable_streaming=not api_mode.streaming,
         model_kwargs=request_parameters,

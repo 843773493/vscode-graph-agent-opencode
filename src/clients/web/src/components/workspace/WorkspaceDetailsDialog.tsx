@@ -1,11 +1,11 @@
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../../../../shared/core/i18n/index.js";
 import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
-import { HttpRequestError } from "../../api/http";
 import { getWorkspace } from "../../api/workspace";
 import type { GatewayWorkspace } from "../../types/backend";
-import { errorMessage } from "../../utils/errorMessage";
+import { errorSummary } from "../../utils/errorMessage";
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { OverlayRootContext } from "../overlays/OverlayRootContext";
 
 export interface WorkspaceDetailsTarget { workspaceKey: string; entryGatewayId: string }
@@ -26,10 +26,13 @@ export default function WorkspaceDetailsDialog({ target, workspaces, onClose, on
 }: WorkspaceDetailsDialogProps) {
   const overlayRoot = useContext(OverlayRootContext);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<unknown>();
+  const currentTarget = useRef({ key: target.workspaceKey });
+  if (currentTarget.current.key !== target.workspaceKey) currentTarget.current = { key: target.workspaceKey };
   const owner = workspaceOwnerFromKey(target.workspaceKey);
   const workspace = workspaces.find(item => gatewayWorkspaceKey(item) === target.workspaceKey);
-  const [storage, setStorage] = useState<{ workspaceKey: string; directory?: string; error?: string }>();
+  const [storage, setStorage] = useState<{ workspaceKey: string; directory?: string; error?: unknown }>();
+  useEffect(() => { setError(undefined); setBusy(false); }, [target.workspaceKey]);
   useEffect(() => {
     if (workspace?.status !== "ready") return;
     const controller = new AbortController(), workspaceKey = target.workspaceKey;
@@ -37,19 +40,17 @@ export default function WorkspaceDetailsDialog({ target, workspaces, onClose, on
       if (info.workspace_id !== workspaceOwnerFromKey(workspaceKey).workspaceId) throw new Error(t("gateway.workspaceDetails.ownerChanged"));
       if (!controller.signal.aborted) setStorage({ workspaceKey, directory: info.data_directory ?? undefined });
     }).catch(cause => {
-      if (!controller.signal.aborted) setStorage({ workspaceKey, error: cause instanceof HttpRequestError && cause.requestId
-        ? `${errorMessage(cause)} · request_id=${cause.requestId}` : errorMessage(cause) });
+      if (!controller.signal.aborted) setStorage({ workspaceKey, error: cause });
     });
     return () => controller.abort();
   }, [target.workspaceKey, workspace?.status]);
   const run = async (operation: () => Promise<void>) => {
+    const snapshot = currentTarget.current;
     setBusy(true); setError(undefined);
-    try { await operation(); onClose(); }
+    try { await operation(); if (currentTarget.current === snapshot) onClose(); }
     catch (cause) {
-      const message = cause instanceof HttpRequestError && cause.requestId
-        ? `${errorMessage(cause)} · request_id=${cause.requestId}` : errorMessage(cause);
-      setError(t("gateway.workspaceDetails.actionFailed", owner.gatewayId, owner.workspaceId, message));
-    } finally { setBusy(false); }
+      if (currentTarget.current === snapshot) setError(cause);
+    } finally { if (currentTarget.current === snapshot) setBusy(false); }
   };
   return createPortal(<div className="workspace-dialog-backdrop" role="presentation">
     <section className="workspace-dialog workspace-details-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-details-title"
@@ -68,7 +69,7 @@ export default function WorkspaceDetailsDialog({ target, workspaces, onClose, on
           <div className="workspace-dialog-wide"><dt>{t("gateway.workspaceDetails.generation")}</dt><dd><code>{workspace.backend_generation ?? t("gateway.workspaceDetails.unassigned")}</code></dd></div>
           <div className="workspace-dialog-wide"><dt>{t("gateway.workspaceDetails.endpoint")}</dt><dd><code>{workspace.backend_url}</code></dd></div>
           <div className="workspace-dialog-wide"><dt>{t("gateway.workspaceDetails.dataDirectory")}</dt><dd>
-            {storage?.workspaceKey === target.workspaceKey ? storage.error ? <span role="alert">{storage.error}</span>
+            {storage?.workspaceKey === target.workspaceKey ? storage.error ? <span className="failure-summary" role="alert">{errorSummary(storage.error)}</span>
               : <code>{storage.directory ?? t("gateway.storage.unreported")}</code> : t(workspace.status === "ready" ? "gateway.diagnostics.loading" : "gateway.storage.unreported")}
           </dd></div>
           <div className="workspace-dialog-wide"><dt>{t("gateway.workspaceDetails.members")}</dt><dd><ul>{workspace.affected_workspace_ids.map(id => {
@@ -85,8 +86,8 @@ export default function WorkspaceDetailsDialog({ target, workspaces, onClose, on
         </> : null}
       </dl>
       {!workspace ? <p className="workspace-dialog-error" role="alert">{t("gateway.workspaceDetails.unavailable")}</p> : null}
-      {workspace?.connection_error ? <p className="workspace-dialog-error" role="alert">{workspace.connection_error}</p> : null}
-      {error ? <p className="workspace-dialog-error" role="alert">{error}</p> : null}
+      {workspace?.connection_error ? <p className="workspace-dialog-error failure-summary" role="alert">{failureSummary(workspace.connection_error)}</p> : null}
+      {error ? <p className="workspace-dialog-error failure-summary" role="alert">{errorSummary(error)}</p> : null}
       <p className="workspace-action-dialog-description">{t("gateway.workspaceDetails.rootBinding")}</p>
       <p className="workspace-action-dialog-description">{t("gateway.workspaceDetails.removeBoundary")}</p>
       <p className="workspace-action-dialog-description">{t("gateway.storage.pathBoundary")}</p>

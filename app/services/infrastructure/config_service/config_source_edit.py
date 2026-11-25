@@ -48,7 +48,7 @@ from app.services.infrastructure.config.state import (
 from app.services.infrastructure.config.workspace_plugins import (
     workspace_plugin_bindings_for_root,
 )
-from configs.inheritance.values import thaw
+from configs.inheritance.values import json_pointer, thaw
 from configs.plugin_parameters import plugin_parameters
 
 if TYPE_CHECKING:
@@ -214,10 +214,24 @@ class ConfigSourceEditMixin:
         inherited = thaw(selected.parent.settings) if selected is not None and selected.parent is not None else {}
         inherited_payload = {**inherited.get("workspace", {}),
             **({"network": inherited["network"]} if "network" in inherited else {})}
+        inherited_origins = []
+        if selected is not None and selected.parent is not None:
+            workspace = cast(dict[str, object], inherited.get("workspace", {}))
+            llm = cast(dict[str, object], workspace.get("llm", {}))
+            for prefix, definitions in (
+                (("agents",), cast(dict[str, object], workspace.get("agents", {}))),
+                (("llm", "providers"), cast(dict[str, object], llm.get("providers", {}))),
+            ):
+                for identity in definitions:
+                    path = (*prefix, identity)
+                    origin = selected.parent.origins.locate(("workspace", *path))
+                    inherited_origins.append(ConfigSourceOriginDTO(
+                        path=json_pointer(path), source_key=graph.source_keys[origin.source_uri], shadowed_sources=[],
+                    ))
         return ConfigSourceDocumentDTO(
             gateway_id=gateway_id, workspace_id=workspace_id, source_key=source_key,
             layer=layer, writable=self._source_writable(source_key),
-            jsonc=redact_source_text(text),
+            jsonc=redact_source_text(text, payload=source_payloads[source_key] if file is not None else None),
             file_presence=file.presence if file is not None else "absent",
             file_digest=file.digest if file is not None else None,
             layer_revision=record.layer_revision if record is not None else None,
@@ -229,6 +243,7 @@ class ConfigSourceEditMixin:
             effective=cast(dict[str, object], redact_source_payload(service._require_snapshot().to_dict())),
             source_effective=cast(dict[str, object], redact_source_payload(source_effective)),
             source_inherited=cast(dict[str, object], redact_source_payload(inherited_payload)),
+            source_inherited_origins=inherited_origins,
             nodes=inspect_config_nodes(graph, graph.nodes),
             layers=[ConfigSourceLayerViewDTO(
                 source_key=key, layer=details[key][0], precedence=details[key][1],

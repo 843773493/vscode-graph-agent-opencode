@@ -66,6 +66,8 @@ const composerActions: Omit<ComposerContextType, "state"> = {
   refreshTurnHistory: () => undefined,
   compactSession: async () => ({
     session_id: "session",
+    thread_id: "thread",
+    task_id: "compaction-test",
     status: "scheduled",
     message: "测试压缩",
     before_message_count: 0,

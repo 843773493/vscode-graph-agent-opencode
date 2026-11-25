@@ -11,7 +11,7 @@ mapping/
 │   ├── message_content.py                  checkpoint消息 → 可见DTO、附件与轻量内容
 │   ├── agent_state_messages.py             原生消息或字典 → Agent State原始记录
 │   ├── user_message_content_projection.py   canonical用户正文 → 展示正文与附件元数据
-│   └── turn_response_parts.py               canonical Rollout → 历史/live共用响应部件
+│   └── turn_response_items.py               canonical Rollout → 历史/live共用响应 Item
 ├── 会话资源
 │   ├── session_resource_mapper.py           后台任务句柄、Terminal／Browser快照 → 会话资源DTO
 │   └── session_catalog_search.py             公开 catalog 节点 → 后端与 Gateway 共用搜索键

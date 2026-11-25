@@ -7,6 +7,7 @@ from app.core.exceptions import NotFoundError
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.phase_observer import observe_phase
 from app.core.shielded_cleanup import run_sync_shielded
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.turn import (
     SessionTurnBootstrapDTO,
@@ -16,9 +17,11 @@ from app.schemas.internal_v2.turn import (
 )
 from app.schemas.internal_v2.turn_search import (
     CanonicalContextContentReference,
+    ExecutionOutputContentReference,
     SealedContextContentReference,
     ThreadItemInspectionDTO,
     ThreadItemInspectionRequest,
+    ThreadItemLocationDTO,
     ThreadToolResultListDTO,
     TurnMessageSearchRequest,
     TurnMessageSearchResultsDTO,
@@ -34,6 +37,7 @@ from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.session_trace.trace_cursor import bind_trace_cursor
 from app.services.mapping.itemized.history_turns.item_content import (
     context_source_contents,
+    item_contents,
 )
 
 _BOOTSTRAP_ACTIVE_JOB_LIMIT = 8
@@ -153,6 +157,10 @@ class SessionTurnHistoryService:
         async with self._session_service.session_read_admission(session_id):
             thread_id = await self._session_service.resolve_thread(session_id, thread_id)
             reference = request.content_ref
+            if isinstance(reference, ExecutionOutputContentReference):
+                if (reference.session_id, reference.thread_id) != (session_id, thread_id):
+                    raise ValueError("执行输出引用不属于当前 SessionThread")
+                return await run_sync_shielded(self._inspect_execution_output, reference, request.operation)
             if isinstance(reference, SealedContextContentReference):
                 body = await run_sync_shielded(
                     self._checkpointer.read_context_contribution, session_id, thread_id,
@@ -175,6 +183,33 @@ class SessionTurnHistoryService:
                 result.request_log = await run_sync_shielded(request_logs.find_item_request, session_id,
                     model_call_id=location.model_call_id, message_id=location.message_id, job_id=location.job_id)
             return result
+
+    def _inspect_execution_output(self, reference: ExecutionOutputContentReference, operation: str) -> ThreadItemInspectionDTO:
+        result = self._checkpointer.completed_derived_result(
+            reference.session_id, reference.thread_id, reference.execution_id,
+        )
+        if result is None or not any(
+            (ref["session_id"], ref["thread_id"], ref["ref_id"], ref["content_hash"]) ==
+            (reference.session_id, reference.thread_id, reference.item_id, reference.content_hash)
+            for ref in result["output_refs"]
+        ):
+            raise NotFoundError("引用不属于该完整执行的最终结果")
+        item = self._checkpointer.get_canonical_item(
+            reference.session_id, thread_id=reference.thread_id, item_id=reference.item_id,
+        )
+        if item is None or item.content_hash != reference.content_hash:
+            raise RuntimeError("已发布执行输出的 canonical 正文缺失或 hash 不一致")
+        byte_length = len(canonical_json_bytes(item.to_dict()))
+        if byte_length > 8 * 1024 * 1024:
+            raise ValueError("单个 Item 超过 8 MiB 内容读取上限，请打开其原始资源")
+        contents = item_contents(item)
+        if operation == "content_metadata":
+            contents = [content.model_copy(update={"content": None}) for content in contents]
+        return ThreadItemInspectionDTO(content_ref=reference, contents=contents, location=ThreadItemLocationDTO(
+            item_id=item.item_id, execution_id=reference.execution_id, semantic_kind=item.semantic_kind,
+            content_hash=item.content_hash, byte_length=byte_length,
+            model_call_id=result["dispatch_ref"]["sealed_model_call_id"],
+        ))
 
     async def list_tool_results(self, session_id: str, thread_id: str, *, after: int = 0,
                                 limit: int = 100, view_id: str | None = None,

@@ -2,6 +2,7 @@ import type { ReadingAnchor, DisclosureOverrides } from "../../state/timeline/tr
 import { useCallback, useRef } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
 import type { SessionViewState } from "../../state/sessionViewState";
+import { SESSION_VIEW_PROJECTION_VERSION } from "../../state/sessionViewState";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { errorMessage } from "../../utils/errorMessage";
 import type { SetAppState } from "../contentViewLoaderTypes";
@@ -75,7 +76,7 @@ export function useSessionViewState({ host, setState, onError }: {
     versions.current.set(key, version);
     const existing = target.sessionViewStates.get(target.scopeKey ?? sessionScopeKey(workspaceId, sessionId));
     void writeSessionView(target.apiPort ?? DEFAULT_BACKEND_PORT, workspaceId, sessionId, {
-      ...payload, projection_version: 2, thread_id: target.threadId,
+      ...payload, projection_version: SESSION_VIEW_PROJECTION_VERSION, thread_id: target.threadId,
       disclosures: payload.disclosures ?? existing?.disclosures ?? {},
       tool_details_expanded: payload.tool_details_expanded ?? existing?.tool_details_expanded ?? target.expandDetails,
     }, target.threadId).then(view => {

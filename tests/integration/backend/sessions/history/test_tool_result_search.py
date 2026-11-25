@@ -98,7 +98,7 @@ async def test_tool_result_search_uses_full_output_and_exact_original_details(
     located = around.json()["data"]
     assert located["located_message"]["content"] == LARGE_TEST_OUTPUT
     assert located["located_message"]["tool_call_id"] == hit["tool_call_id"]
-    parts = located["items"][0]["response_parts"]
+    parts = located["items"][0]["response_items"]
     assert any(part["kind"] == "tool_result" and part["source"]["item_id"] == reference["item_id"] for part in parts)
     workspace = await workspace_query(json=payload)
     assert workspace.status_code == 200, workspace.text
@@ -217,7 +217,7 @@ async def test_tool_result_metadata_lists_without_body_and_opens_original_tool_r
     assert around.status_code == 200, around.text
     data = around.json()["data"]
     assert data["located_tool_result"] == selected and data["located_message"] is None
-    results = [part for part in data["items"][0]["response_parts"] if part["kind"] == "tool_result"]
+    results = [part for part in data["items"][0]["response_items"] if part["kind"] == "tool_result"]
     assert len(results) == 1 and results[0]["source"]["item_id"] == selected["item_id"]
     wrong_thread = await history_client.post(f"{base}/{main}/history", json={
         "direction": "around", "anchor_turn_id": selected["turn_id"], "anchor_tool_result": selected["item_id"],

@@ -7,7 +7,7 @@ LangChain message，也不读取 v1 数据。
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from functools import partial
 
 from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMetadata
@@ -17,6 +17,7 @@ from app.core.hashing import sha256_hex as _hash_bytes
 from app.core.identifier import create_uuid_hex
 from app.core.session_thread_context import require_current_session_thread_owner
 from app.core.sqlite_state import utc_now_text as _now
+from app.domain.itemized.compaction import ApplyCompactionCandidateIntent
 from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
     RebuildContextEpochIntent,
@@ -35,15 +36,14 @@ from app.services.infrastructure.rollout_context.checkpoint.durable.writes impor
     _pending_write_row,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.compaction import (
-    new_compaction_event,
-    prepare_compaction,
+    prepare_candidate_compaction,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepare import (
     inherit_message_selection,
     prepare_messages,
 )
-from app.services.infrastructure.rollout_context.storage.catalog.unreferenced_content import (
-    collect_unreferenced_content,
+from app.services.infrastructure.rollout_context.storage.catalog.view_ancestry import (
+    is_view_ancestor,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
@@ -72,11 +72,20 @@ class RolloutCheckpointPersistenceMixin:
         new_versions: ChannelVersions,
         branch_id: str | None = None,
         consume_epoch_intent: Callable[[RebuildContextEpochIntent, sqlite3.Connection], None] | None = None,
+        compaction_intent: ApplyCompactionCandidateIntent | None = None,
     ) -> None:
         owner = require_current_session_thread_owner(
             langgraph_thread_id=thread_id
         )
         with self._storage.write_connection(owner.session_id, owner.thread_id, checkpoint_ns) as connection:
+            # 候选适用性、预算 CAS 与后续全部写入必须属于同一 SQLite 快照。
+            connection.execute("BEGIN IMMEDIATE")
+            candidate_result = None
+            if compaction_intent is not None:
+                frozen = compaction_intent.frozen
+                if (frozen.session_id, frozen.thread_id, frozen.checkpoint_ns) != (owner.session_id, owner.thread_id, checkpoint_ns):
+                    raise ValueError("source-mismatch: 候选采用与 checkpoint owner 不一致")
+                candidate_result = self._context.compactions.prepare_application(connection, compaction_intent)
             jsonl = self._storage.jsonl_path(
                 owner.session_id,
                 checkpoint_ns,
@@ -209,7 +218,7 @@ class RolloutCheckpointPersistenceMixin:
                 # 同批复用已成功校验的提交与历史授权；每个 item 的边界、正文和投影仍逐条核对。
                 batch = prepare_messages(
                     connection=connection, jsonl=jsonl, codec=self._storage._codec(),
-                    read_item=partial(self._storage._read_v2_item_at, validated_commits=set(), validated_scopes=set()),
+                    read_item=partial(self._storage._read_item_at, validated_commits=set(), validated_scopes=set()),
                     thread_id=thread_id,
                     messages=current_messages, last_message_sequence=last_message_sequence,
                     next_item_sequence=next_item_sequence,
@@ -219,19 +228,20 @@ class RolloutCheckpointPersistenceMixin:
                     allow_revisions=new_message_version and not repeated_checkpoint,
                 )
                 message_count = len(current_messages)
-            compaction_event = new_compaction_event(
-                connection, checkpoint, parent_checkpoint_id=parent_checkpoint_id,
-            )
             compaction_selection = None
             compaction_summary_sequence = None
-            if compaction_event is not None:
+            if compaction_intent is not None:
                 if current_messages is None:
-                    raise RuntimeError("新压缩事件必须提供已恢复的 messages")
-                compaction_selection, compaction_summary_sequence = prepare_compaction(
+                    raise ValueError("候选采用缺少当前消息基准")
+                compaction_selection, compaction_summary_sequence = prepare_candidate_compaction(
                     connection=connection, codec=self._storage._codec(), batch=batch,
-                    event=compaction_event, messages=current_messages, thread_id=thread_id,
-                    checkpoint_id=checkpoint_id, timestamp=checkpoint_timestamp_value,
+                    frozen=compaction_intent.frozen, result=candidate_result,
+                    selected_item_ids=self._context.compactions.selected_item_ids(
+                        connection, compaction_intent.frozen, view_id=compaction_intent.expected_view_id,
+                    ), checkpoint_id=checkpoint_id,
+                    timestamp=checkpoint_timestamp_value,
                 )
+                messages_state = "snapshot"
             prepared = batch.prepared
             first_sequence = batch.first_message_sequence
             last_sequence = batch.last_message_sequence
@@ -261,7 +271,6 @@ class RolloutCheckpointPersistenceMixin:
             # SQLite 事务必须先建立，再写 JSONL。这样 JSONL append、catalog、
             # checkpoint/view 和 database_meta 才共享同一个 rollback guard；
             # 不能先写文件再 BEGIN，否则失败窗口会留下无法由事务回滚的尾部。
-            connection.execute("BEGIN IMMEDIATE")
             transaction_id = create_uuid_hex()
             timestamp = _now()
             canonical_items = tuple(
@@ -411,7 +420,7 @@ class RolloutCheckpointPersistenceMixin:
                 if parent
                 else None
             )
-            view_kind = "compaction" if compaction_event is not None else "checkpoint"
+            view_kind = "compaction" if compaction_selection is not None else "checkpoint"
             checkpoint_kind = (
                 "compaction" if view_kind == "compaction" else "normal"
             )
@@ -440,7 +449,33 @@ class RolloutCheckpointPersistenceMixin:
                 (row for row in parent_members if row[1] == 1),
                 key=lambda row: strict_non_negative_int(row[2], field="context_view_items.context_ordinal"),
             )]
-            if current_messages is not None and messages_state != "view" and locator_view is not None:
+            stale_parent = (
+                compaction_intent is None and parent is not None
+                and parent[0] != active_head_checkpoint_id and parent[7] == active_branch
+                and active_view_id is not None and is_view_ancestor(connection, parent[6], active_view_id)
+            )
+            excluded_parent_items: set[str] = set()
+            if stale_parent:
+                # 运行中的 Graph 仍可能持采用前的父 checkpoint；只接入其新增消息，
+                # 已提交的当前基准不能被旧内存覆盖，模型失败或取消也不撤销采用。
+                head_messages = connection.execute(
+                    "SELECT context_view_id FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name='messages'",
+                    (active_head_checkpoint_id,),
+                ).fetchone()
+                if head_messages is None or parent_messages is None:
+                    raise RuntimeError("stale checkpoint 缺少已提交 messages 恢复基准")
+                previous_sequences = set(self._storage._view_message_sequences_from_connection(connection, parent_messages[0]))
+                visible_sequences = list(dict.fromkeys([
+                    *self._storage._view_message_sequences_from_connection(connection, head_messages[0]),
+                    *(sequence for sequence in visible_sequences if sequence not in previous_sequences),
+                ]))
+                excluded_parent_items = {row[0] for row in connection.execute(
+                    "SELECT item_id FROM context_view_items WHERE view_id=? AND context_selected=1",
+                    (parent[6],),
+                )} - set(inherited)
+                message_count = len(visible_sequences)
+                messages_state = "snapshot"
+            if current_messages is not None and messages_state != "view" and locator_view is not None and not stale_parent:
                 # messages view 用末尾 anchor 定位完整消息。移除消息时必须
                 # 同时移除其 typed group，不能留下多工具声明的前半组。
                 # 先排除本次仍选中的 anchor，只展开被移除的组；追加消息不应
@@ -457,7 +492,8 @@ class RolloutCheckpointPersistenceMixin:
                 )} - set(batch.item_ids)
                 inherited = [item_id for item_id in inherited if item_id not in removed_items]
             context_selection = compaction_selection if compaction_selection is not None else (
-                *inherited, *(item_id for item_id in batch.item_ids if item_id not in parent_item_ids)
+                *inherited, *(item_id for item_id in batch.item_ids
+                              if item_id not in parent_item_ids and item_id not in excluded_parent_items)
             )
             view_id = self._storage._create_view(
                 connection,
@@ -472,8 +508,11 @@ class RolloutCheckpointPersistenceMixin:
             # channel 只冻结本次提供的消息和声明的父 channel，不能夹带尚未
             # 进入 checkpoint 的 stream result。两种 selection 均由同一
             # context view owner 提交，不从 Turn 的物理全量记录重建执行状态。
-            parent_messages_view = None
+            parent_messages_view = head_messages[0] if stale_parent else None
             messages_sequences = visible_sequences
+            if compaction_intent is not None:
+                messages_sequences = selected_sequences
+                message_count = len(selected_sequences)
             if parent is not None and view_kind == "checkpoint" and messages_state == "view":
                 if parent_messages is None:
                     raise RuntimeError("父 checkpoint 缺少 messages channel selection")
@@ -497,6 +536,7 @@ class RolloutCheckpointPersistenceMixin:
             messages_view_id = self._storage._create_view(
                 connection, active_branch, parent_messages_view, messages_sequences,
                 timestamp, view_kind="checkpoint_messages",
+                ordered_context_item_ids=compaction_selection,
             )
             (
                 versions_seen_type,
@@ -572,8 +612,7 @@ class RolloutCheckpointPersistenceMixin:
                     thread_id=owner.thread_id,
                     view_id=view_id,
                     message_count=message_count,
-                    message_sequences=batch.visible_sequences,
-                    compaction_event=compaction_event,
+                    compaction_intent=compaction_intent,
                 ),
                 transaction_id,
                 timestamp,
@@ -618,7 +657,11 @@ class RolloutCheckpointPersistenceMixin:
                 )
                 consumer = self.consume_context_epoch_rebuild_intent if consume_epoch_intent is None else consume_epoch_intent
                 consumer(intent, connection)
-                collect_unreferenced_content(connection)
+                if compaction_intent is not None:
+                    self._context.compactions.consume_application(
+                        connection, compaction_intent, view_id=view_id,
+                        summary_item_id=f"item-summary-{compaction_intent.frozen.candidate_id}",
+                    )
             self._storage._commit_connection(connection)
 
     @staticmethod
@@ -629,29 +672,18 @@ class RolloutCheckpointPersistenceMixin:
         thread_id: str,
         view_id: str,
         message_count: int,
-        message_sequences: list[int],
-        compaction_event: Mapping[str, object] | None = None,
+        compaction_intent: ApplyCompactionCandidateIntent | None = None,
     ) -> dict[str, object]:
-        """同一提交保存 compaction cutoff 与两条历史 lane 的冻结资源引用。"""
+        """真实采用事件只保存候选身份及冻结资源引用，不保存数组 offset。"""
         payload: dict[str, object] = {"message_count": message_count}
-        event = compaction_event
-        if not isinstance(event, Mapping):
+        if compaction_intent is None:
             return payload
+        payload["candidate_id"] = compaction_intent.frozen.candidate_id
         activation_refs = read_activation_refs_for_view(
             connection, session_id=session_id, thread_id=thread_id, view_id=view_id,
         )
         if activation_refs:
             payload["resource_activation_refs"] = list(activation_refs)
-        cutoff_index = event.get("cutoff_index")
-        if isinstance(cutoff_index, int) and cutoff_index >= 0:
-            payload["cutoff_index"] = cutoff_index
-        cutoff_message_id = event.get("cutoff_message_id")
-        if not isinstance(cutoff_message_id, str) or not cutoff_message_id:
-            return payload
-        if type(cutoff_index) is not int or not 0 < cutoff_index <= len(message_sequences):
-            raise ValueError("compaction cutoff identity 缺少已校验的消息位置")
-        payload["cutoff_message_id"] = cutoff_message_id
-        payload["cutoff_message_sequence"] = message_sequences[cutoff_index - 1]
         return payload
 
     @staticmethod

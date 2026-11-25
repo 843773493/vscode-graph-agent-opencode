@@ -58,7 +58,6 @@ from app.agents.skill_catalog import (
     PublishedSkillCatalog,
     build_workspace_skill_catalog,
 )
-from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
 from app.agents.summarization.tool_middleware import (
     COMPACT_CONVERSATION_TOOL,
     READ_COMPACTION_HISTORY_TOOL,
@@ -89,10 +88,12 @@ from app.core.phase_observer import observe_phase_sync
 from app.core.resource_uri import parse_session_artifact_uri
 from app.core.turn_execution_scope import get_current_turn_execution_scope
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.runtime.agent_runtime import (
     AGENT_GRAPH_RECURSION_LIMIT,
     prepare_agent_model,
 )
+from app.runtime.context_compaction import AgentSummarizationCompactor
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
@@ -135,9 +136,6 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
-)
-from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
-    CompactionPreflightPort,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -196,6 +194,7 @@ def assemble_deep_agent(
     debug: bool = False,
     name: str | None = None,
     background_task_registry: BackgroundTaskRegistry | None = None,
+    compaction_runtime: AgentSummarizationCompactor | None = None,
     background_mailbox: BackgroundMailbox | None = None,
     job_event_bus: JobEventBusProtocol | None = None,
     job_service: JobServiceProtocol | None = None,
@@ -272,6 +271,34 @@ def assemble_deep_agent(
 
     workspace_root = workspace_root.resolve()
 
+    if tools is None:
+        if browser_resource_owner is None:
+            raise RuntimeError(
+                "assemble_deep_agent 构建默认工具集时需要显式传入 BrowserResourceOwner"
+            )
+        declared_custom_tools = build_custom_tools(
+            custom_tool_specs,
+            context=CustomToolFactoryContext(
+                agent_id=agent_id,
+                sender_agent_id=resolved_sender_agent_id,
+                workspace_root=workspace_root,
+                background_task_registry=background_task_registry,
+                background_message_bus=background_mailbox,
+                job_event_bus=job_event_bus,
+                job_service=job_service,
+                session_context_query_service=session_context_query_service,
+                workspace_session_context_client=workspace_session_context_client,
+                session_communication_service=session_communication_service,
+                session_orchestrator=session_orchestrator,
+                config_service=config_service,
+                terminal_resource_owner=terminal_resource_owner,
+                browser_resource_owner=browser_resource_owner,
+                invocation_context=tool_invocation_context,
+                node_debug_service=node_debug_service,
+                mcp_connection_service=mcp_connection_service,
+            ),
+        )
+
     resolved_skills = (
         build_workspace_skill_catalog(
             workspace_root, registry=resource_registry,
@@ -318,13 +345,6 @@ def assemble_deep_agent(
         if checkpointer.context_source_control_owner_available(candidate_owner):
             context_source_owner = candidate_owner
             context_source_control_port = checkpointer
-    # compaction preflight 端口：生产 checkpointer 即唯一 Saver owner；
-    # 测试替身按合成装配合同拿到显式失败端口，禁止静默跳过。
-    compaction_preflight: CompactionPreflightPort = (
-        checkpointer
-        if isinstance(checkpointer, RolloutCheckpointSaver)
-        else NoDurableOwnerCompactionPreflight()
-    )
     # OpenSpec 3.8-C：CSM 的 commit/untrack 成功边界发布 context.source/* 轻量
     # 内存事件。CSM 边界拿不到 workspace_id，channel 参数使用最近稳定 identity
     # session_id（与 CSM owner 一致）；事件服务复用文件来源 registry 的进程级
@@ -338,6 +358,16 @@ def assemble_deep_agent(
             ),
             scope_id=session_id,
         )
+    if compaction_runtime is not None:
+        source_publisher = context_source_event_sink
+
+        def observe_source_commit(event: ContextSourceEvent) -> None:
+            if source_publisher is not None:
+                source_publisher(event)
+            if event.kind in {"committed", "untracked", "reconcile"}:
+                compaction_runtime.invalidate_observation(MutationIntentOwner(session_id, thread_id))
+
+        context_source_event_sink = observe_source_commit
     context_source_manager = ContextSourceManager(
         owner=context_source_owner,
         control_state_port=context_source_control_port,
@@ -399,10 +429,6 @@ def assemble_deep_agent(
                 continue
             _absorb_builtin_tool(tool)
     else:
-        if browser_resource_owner is None:
-            raise RuntimeError(
-                "assemble_deep_agent 构建默认工具集时需要显式传入 BrowserResourceOwner"
-            )
         visible_tools = build_default_tools(
             session_id=session_id,
             agent_id=agent_id,
@@ -420,28 +446,6 @@ def assemble_deep_agent(
             include_team_tools=include_team_tools,
             filesystem_permissions=permissions,
             text_mutations=text_mutations,
-        )
-        declared_custom_tools = build_custom_tools(
-            custom_tool_specs,
-            context=CustomToolFactoryContext(
-                agent_id=agent_id,
-                sender_agent_id=resolved_sender_agent_id,
-                workspace_root=workspace_root,
-                background_task_registry=background_task_registry,
-                background_message_bus=background_mailbox,
-                job_event_bus=job_event_bus,
-                job_service=job_service,
-                session_context_query_service=session_context_query_service,
-                workspace_session_context_client=workspace_session_context_client,
-                session_communication_service=session_communication_service,
-                session_orchestrator=session_orchestrator,
-                config_service=config_service,
-                terminal_resource_owner=terminal_resource_owner,
-                browser_resource_owner=browser_resource_owner,
-                invocation_context=tool_invocation_context,
-                node_debug_service=node_debug_service,
-                mcp_connection_service=mcp_connection_service,
-            ),
         )
         declared_tools = [*visible_tools, *declared_custom_tools, *(mcp_tools or ())]
         custom_tools = []
@@ -710,6 +714,7 @@ def assemble_deep_agent(
     for tool in local_tools:
         if isinstance(tool, BaseTool):
             export_model_tool_json_schema(tool)
+    compaction_model_recipe = None
     if model is None:
         model_setup = prepare_agent_model(
             agent_id=agent_id, config_service=config_service,
@@ -718,6 +723,7 @@ def assemble_deep_agent(
             lifetime_scope=reactor_lifetime_scope,
         )
         model = model_setup.model
+        compaction_model_recipe = model_setup.recipe_for
         instruction_producers = model_setup.instruction_producers
         model_routing_middleware = model_setup.routing_middleware if model_routing_enabled else None
     elif not instruction_producers:
@@ -756,9 +762,10 @@ def assemble_deep_agent(
         tool_middleware=tool_middleware,
         resolved_skills=resolved_skills,
         execution_owned_skill_catalog=resource_activation is not None,
-        compaction_preflight=compaction_preflight,
-        compaction_policy=config_service.get_compaction_policy(),
-        automatic_compaction_enabled=config_service.is_automatic_compaction_enabled(),
+        compaction_runtime=compaction_runtime,
+        compaction_owner=MutationIntentOwner(session_id, thread_id),
+        agent_id=agent_id,
+        preferred_model=preferred_model,
         context_source_manager=context_source_manager,
         source_registry=workspace_file_resource_registry,
         context_source_reactor=context_source_reactor,
@@ -791,6 +798,9 @@ def assemble_deep_agent(
         context_source_manager=context_source_manager,
         source_message_grouping_supplier=config_service.get_source_message_grouping,
         tool_set_producer=tool_set_producer,
+        compaction_runtime=compaction_runtime,
+        agent_id=agent_id,
+        compaction_model_recipe=compaction_model_recipe,
         extension_policy_resolver=resolve_extension_capabilities,
         extension_call_scope=extension_call_scope,
         resource_activation=resource_activation,

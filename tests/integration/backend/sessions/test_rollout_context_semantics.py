@@ -19,10 +19,15 @@ from app.domain.itemized.execution_admission import (
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting.factory import internal_message_factory
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    checkpoint_messages,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from tests.support.messages import compaction_summary_message
+from tests.support.rollout.compaction_application import (
+    generate_and_adopt_compaction_candidate,
+)
 from tests.support.rollout.fixture_output import commit_fixture_output
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
@@ -128,9 +133,30 @@ def _assert_message_projection(actual: list[object], expected: list[object]) -> 
             assert expected_message.tool_call_id in seen_expected_tool_calls
 
 
-def test_context_view_filters_control_records_and_keeps_business_messages(
+def _active_context_items(
+    saver: RolloutCheckpointSaver, session_id: str, thread_id: str,
+):
+    with saver._context_reader.open_snapshot(session_id, thread_id, "") as snapshot:
+        return saver._storage.checkpoints.committed_context_items(
+            snapshot, predecessor=None, include_pending_notices=False,
+        )
+
+
+def _items_through_message(items, message_id: str):
+    positions = [
+        index for index, item in enumerate(items)
+        if item.projection_identity is not None
+        and item.projection_identity.projection_message_id == message_id
+    ]
+    assert positions, f"活动上下文中缺少消息 {message_id} 的 canonical item"
+    return tuple(items[:positions[-1] + 1])
+
+
+@pytest.mark.asyncio
+async def test_context_view_filters_control_records_and_keeps_business_messages(
     context_saver: RolloutCheckpointSaver,
     accept_context_turn: Callable[[HumanMessage, str], ExecutionAdmission],
+    compaction_summary_model,
 ) -> None:
     saver = context_saver
     thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
@@ -253,43 +279,51 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
 
     compact_config = current.config
     raw_messages = current.checkpoint["channel_values"]["messages"]
-    with execution_admission_scope(admission, langgraph_thread_id=thread_id):
-        saver.put(
-            compact_config,
-            _checkpoint(
-                "checkpoint-compacted",
-                raw_messages,
-                version="4",
-                _summarization_event={
-                    "cutoff_index": len(raw_messages),
-                    "summary_message": compaction_summary_message(
-                        content="已压缩上下文", id="summary-checkpoint-compacted"
-                    ),
-                },
-            ),
-            {"source": "compaction", "step": 4},
-            {"messages": "4", "_summarization_event": "4"},
-        )
-    compacted = saver.get_tuple(build_checkpoint_config(thread_id))
-    assert compacted is not None
-    assert compacted.checkpoint["channel_values"]["messages"] == raw_messages
+    source_items = _active_context_items(saver, SESSION_ID, thread_id)
+    frozen, summary, compacted = await generate_and_adopt_compaction_candidate(
+        saver,
+        session_id=SESSION_ID,
+        thread_id=thread_id,
+        checkpoint_config=compact_config,
+        admission=admission,
+        model=compaction_summary_model,
+        candidate_id="context-view-control-filter",
+        task_id="context-view-control-filter-task",
+    )
+    source_message_ids = tuple(
+        item.projection_identity.projection_message_id
+        for item in source_items
+        if item.projection_identity is not None
+    )
+    assert source_message_ids == (
+        "user-1", "assistant-tool-1", "tool-result-1", "assistant-final-2",
+    )
+    assert tuple(ref.ref_id for ref in frozen.refs) == tuple(item.item_id for item in source_items)
+    compacted_messages = compacted.checkpoint["channel_values"]["messages"]
+    summary_message, = compacted_messages
+    assert summary_message.id == "summary-context-view-control-filter"
+    assert summary_message.response_metadata["compaction_summary"] is True
+    assert summary.text in summary_message.content
+    assert summary_message.id not in {message.id for message in raw_messages}
     with sqlite3.connect(root / "index.sqlite") as connection:
-        assert (
-            connection.execute(
-                "SELECT 1 FROM context_views WHERE view_kind = 'rewind' LIMIT 1"
-            ).fetchone()
-            is not None
-        )
-        compacted_view_kind = connection.execute(
-            "SELECT v.view_kind FROM context_views v JOIN checkpoints c ON c.view_id = v.view_id WHERE c.checkpoint_id = 'checkpoint-compacted'"
-        ).fetchone()[0]
+        assert connection.execute(
+            "SELECT 1 FROM context_views WHERE view_kind = 'rewind' LIMIT 1"
+        ).fetchone() is not None
+        (applied_view_id,) = connection.execute(
+            "SELECT applied_view_id FROM context_compaction_candidates WHERE candidate_id = ?",
+            ("context-view-control-filter",),
+        ).fetchone()
+        assert applied_view_id is not None
+        (compacted_view_kind,) = connection.execute(
+            "SELECT view_kind FROM context_views WHERE view_id = ?",
+            (applied_view_id,),
+        ).fetchone()
         assert compacted_view_kind == "compaction"
-        assert (
-            connection.execute(
-                "SELECT checkpoint_kind FROM checkpoints WHERE checkpoint_id = 'checkpoint-compacted'"
-            ).fetchone()[0]
-            == "compaction"
-        )
+        (checkpoint_kind,) = connection.execute(
+            "SELECT checkpoint_kind FROM checkpoints WHERE view_id = ?",
+            (applied_view_id,),
+        ).fetchone()
+        assert checkpoint_kind == "compaction"
 
 
 def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
@@ -544,9 +578,11 @@ def test_context_view_validation_accepts_single_message_range(
     saver._storage.checkpoints.validate_context_view_chain(thread_id, "", str(view_id))
 
 
-def test_compaction_control_event_keeps_message_cutoff_identity(
+@pytest.mark.asyncio
+async def test_candidate_compaction_keeps_canonical_tool_range_identity(
     context_saver: RolloutCheckpointSaver,
     accept_context_turn: Callable[[HumanMessage, str], ExecutionAdmission],
+    compaction_summary_model,
 ) -> None:
     saver = context_saver
     thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
@@ -576,28 +612,48 @@ def test_compaction_control_event_keeps_message_cutoff_identity(
             {"source": "cutoff-test"},
             {"messages": "1"},
         )
-        saver.put(
-            config,
-            _checkpoint("cp-2", messages, version="2", _summarization_event={
-                "cutoff_message_id": "tool-1",
-                "cutoff_index": len(messages),
-                "summary_message": compaction_summary_message(
-                    content="历史摘要", id="summary-cutoff-test"
-                ),
-            }),
-            {"source": "compaction"},
-            {"messages": "2", "_summarization_event": "2"},
-        )
-    compacted = saver.get_tuple(build_checkpoint_config(thread_id))
-    assert compacted is not None
-    _assert_message_projection(compacted.checkpoint["channel_values"]["messages"], messages)
+    source_items = _active_context_items(saver, SESSION_ID, thread_id)
+    result_frozen, result, compacted = await generate_and_adopt_compaction_candidate(
+        saver,
+        session_id=SESSION_ID,
+        thread_id=thread_id,
+        checkpoint_config=config,
+        admission=admission,
+        model=compaction_summary_model,
+        candidate_id="tool-range-identity",
+        task_id="tool-range-identity-task",
+    )
+    assert result.coverage == result_frozen.refs
+    assert tuple(ref.ref_id for ref in result_frozen.refs) == tuple(item.item_id for item in source_items)
+    tool_call = next(item for item in source_items if item.projection_identity is not None
+                     and item.projection_identity.projection_message_id == "a1")
+    tool_result = next(item for item in source_items if item.projection_identity is not None
+                       and item.projection_identity.projection_message_id == "tool-1")
+    assert tool_call.item_id in {ref.ref_id for ref in result_frozen.refs}
+    assert tool_result.item_id in {ref.ref_id for ref in result_frozen.refs}
+    frozen_ids = tuple(ref.ref_id for ref in result_frozen.refs)
+    assert frozen_ids.index(tool_call.item_id) < frozen_ids.index(tool_result.item_id)
+    compacted_messages = compacted.checkpoint["channel_values"]["messages"]
+    summary_message, = compacted_messages
+    assert summary_message.id == "summary-tool-range-identity"
+    assert summary_message.response_metadata["compaction_summary"] is True
+    assert result.text in summary_message.content
     root = saver._storage.storage.root(SESSION_ID, thread_id=thread_id)
     with sqlite3.connect(root / "index.sqlite") as connection:
-        payload = connection.execute(
-            "SELECT payload_json FROM control_events WHERE checkpoint_id = 'cp-2'"
-        ).fetchone()[0]
-    assert json.loads(payload)["cutoff_message_id"] == "tool-1"
-    assert json.loads(payload)["cutoff_message_sequence"] == 3
+        (summary_item_id,) = connection.execute(
+            "SELECT applied_summary_item_id FROM context_compaction_candidates WHERE candidate_id=?",
+            (result_frozen.candidate_id,),
+        ).fetchone()
+        provenance = connection.execute(
+            "SELECT json_extract(target_ref,'$.target_id') FROM item_relations "
+            "WHERE canonical_item_id=? AND relation='derived_from' ORDER BY canonical_relation_ordinal",
+            (summary_item_id,),
+        ).fetchall()
+    assert tuple(row[0] for row in provenance) == (
+        *frozen_ids,
+        *(ref.ref_id for ref in result.output_refs),
+    )
+    assert "结果" in saver._storage.compactions.read_history(SESSION_ID, thread_id)
 
 
 def test_turn_anchor_reports_unreachable_when_no_complete_view_remains(
@@ -635,10 +691,12 @@ def test_turn_anchor_reports_unreachable_when_no_complete_view_remains(
         )
 
 
-def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
+@pytest.mark.asyncio
+async def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
     context_saver: RolloutCheckpointSaver,
     accept_context_turn: Callable[[HumanMessage, str], ExecutionAdmission],
     frozen_provider_prepare,
+    compaction_summary_model,
 ) -> None:
     saver = context_saver
     thread_id = saver.forks.source.resolve_main_thread_owner(SESSION_ID).thread_id
@@ -702,63 +760,69 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
     assert cp2_anchor.checkpoint_id == "cp-2"
     assert cp2_anchor.cutoff_message_sequence == cp2_anchor.last_message_sequence
 
-    # Provider 截止点不删除原始可见历史，因此各 checkpoint view 仍有完整 Turn-1 锚点。
-    # 两次压缩事件各自使用新版本，保证 channel 和 new_versions 一致。
-    with execution_admission_scope(second_admission, langgraph_thread_id=thread_id):
-        cp3 = _checkpoint(
-            "cp-3",
-            compacted_messages,
-            version="3",
-            _summarization_event={
-                "cutoff_message_id": "turn-1-tool-result",
-                "cutoff_index": 3,
-                "summary_message": compaction_summary_message(
-                    content="Turn-1 已压缩", id="summary-turn1-cp3"
-                ),
-            },
-        )
-        config = saver.put(
-            config,
-            cp3,
-            {"source": "compaction", "step": 3},
-            {"messages": "3", "_summarization_event": "3"},
-        )
-        cp3_anchor = saver.resolve_turn_anchor(
-            config,
-            turn_id="turn-1",
-            anchor_mode="inclusive",
-        )
-        assert cp3_anchor.checkpoint_id == "cp-3"
-        cp4 = _checkpoint(
-            "cp-4",
-            compacted_messages,
-            version="4",
-            _summarization_event={
-                "cutoff_message_id": "turn-1-final",
-                "cutoff_index": 4,
-                "summary_message": compaction_summary_message(
-                    content="Turn-1 压缩状态继续", id="summary-turn1-cp4"
-                ),
-            },
-        )
-        config = saver.put(
-            config,
-            cp4,
-            {"source": "compaction", "step": 4},
-            {"messages": "4", "_summarization_event": "4"},
-        )
-
-    compacted = saver.get_tuple(config)
-    assert compacted is not None
-    _assert_message_projection(
-        compacted.checkpoint["channel_values"]["messages"], compacted_messages
+    first_range = _items_through_message(
+        _active_context_items(saver, SESSION_ID, thread_id), "turn-1-tool-result",
     )
+    cp3_frozen, cp3_result, cp3_applied = await generate_and_adopt_compaction_candidate(
+        saver,
+        session_id=SESSION_ID,
+        thread_id=thread_id,
+        checkpoint_config=config,
+        admission=second_admission,
+        model=compaction_summary_model,
+        candidate_id="turn-anchor-prefix",
+        task_id="turn-anchor-prefix-task",
+        item_ids=tuple(item.item_id for item in first_range),
+    )
+    assert cp3_result.coverage == cp3_frozen.refs
+    config = cp3_applied.config
+    cp3_anchor = saver.resolve_turn_anchor(
+        config,
+        turn_id="turn-1",
+        anchor_mode="inclusive",
+    )
+    assert cp3_anchor.checkpoint_id == cp3_applied.checkpoint["id"]
+
+    second_range = _items_through_message(
+        _active_context_items(saver, SESSION_ID, thread_id), "turn-1-final",
+    )
+    cp4_frozen, cp4_result, cp4_applied = await generate_and_adopt_compaction_candidate(
+        saver,
+        session_id=SESSION_ID,
+        thread_id=thread_id,
+        checkpoint_config=config,
+        admission=second_admission,
+        model=compaction_summary_model,
+        candidate_id="turn-anchor-final",
+        task_id="turn-anchor-final-task",
+        item_ids=tuple(item.item_id for item in second_range),
+        predecessor_candidate_id=cp3_frozen.candidate_id,
+    )
+    assert cp4_frozen.predecessor is not None
+    assert cp4_frozen.predecessor.candidate_id == cp3_frozen.candidate_id
+    assert cp4_frozen.refs[:len(cp3_frozen.refs)] == cp3_frozen.refs
+    assert cp4_result.coverage == cp4_frozen.refs
+    config = cp4_applied.config
+
+    with session_thread_owner_scope(
+        MutationIntentOwner(SESSION_ID, thread_id), langgraph_thread_id=thread_id,
+    ), execution_admission_scope(second_admission, langgraph_thread_id=thread_id):
+        compacted = saver.get_tuple(config)
+    assert compacted is not None
+    current_messages = checkpoint_messages(saver, compacted)
+    assert [message.id for message in current_messages] == [
+        "summary-turn-anchor-final", "turn-2-user", "turn-2-final",
+    ]
+    assert all(message.id != "summary-turn-anchor-prefix" for message in current_messages)
+    summary_message = current_messages[0]
+    assert summary_message.response_metadata["compaction_summary"] is True
+    assert cp4_result.text in summary_message.content
     resolved = saver.resolve_turn_anchor(
         config,
         turn_id="turn-1",
         anchor_mode="inclusive",
     )
-    assert resolved.checkpoint_id == "cp-4"
+    assert resolved.checkpoint_id == cp4_applied.checkpoint["id"]
     assert resolved.view_id != cp1_anchor.view_id
     assert resolved.view_id != cp2_anchor.view_id
     assert resolved.view_id != cp3_anchor.view_id
@@ -782,15 +846,18 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
     with sqlite3.connect(
         saver._storage.storage.index_path(SESSION_ID, thread_id=thread_id)
     ) as connection:
-        assert connection.execute(
-            "SELECT checkpoint_id, checkpoint_kind FROM checkpoints "
-            "WHERE checkpoint_id IN ('cp-3', 'cp-4') ORDER BY checkpoint_id"
-        ).fetchall() == [("cp-3", "compaction"), ("cp-4", "compaction")]
-        assert connection.execute(
-            "SELECT checkpoint_id, channel_version FROM checkpoint_channels "
-            "WHERE channel_name = '_summarization_event' "
-            "AND checkpoint_id IN ('cp-3', 'cp-4') ORDER BY checkpoint_id"
-        ).fetchall() == [("cp-3", "3"), ("cp-4", "4")]
+        applied_checkpoints = connection.execute(
+            "SELECT candidate.candidate_id, checkpoint.checkpoint_id, checkpoint.checkpoint_kind "
+            "FROM context_compaction_candidates candidate JOIN checkpoints checkpoint "
+            "ON checkpoint.view_id=candidate.applied_view_id WHERE candidate.candidate_id IN (?, ?) "
+            "ORDER BY candidate.candidate_id",
+            (cp3_frozen.candidate_id, cp4_frozen.candidate_id),
+        ).fetchall()
+    assert {candidate_id: (checkpoint_id, kind)
+            for candidate_id, checkpoint_id, kind in applied_checkpoints} == {
+        cp3_frozen.candidate_id: (cp3_applied.checkpoint["id"], "compaction"),
+        cp4_frozen.candidate_id: (cp4_applied.checkpoint["id"], "compaction"),
+    }
 
     sibling_config = saver.rewind(
         config,

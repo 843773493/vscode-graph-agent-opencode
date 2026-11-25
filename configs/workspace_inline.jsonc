@@ -86,8 +86,8 @@
       },
       "context": {
         "compaction": {
-          "prepare_fraction": 0.70,
-          "apply_fraction": 0.85,
+          "prepare_fraction": 0.80,
+          "apply_fraction": 0.90,
           "target_fraction": 0.55,
           "apply_policy": "on_demand"
         },

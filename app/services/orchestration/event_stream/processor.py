@@ -23,7 +23,10 @@ from app.agents.tool_result_text import extract_tool_result_text, tool_output_st
 from app.core.failures import failure_detail
 from app.core.job_context import set_active_tool_name, set_interruptible_phase
 from app.core.job_event_bus import EventType
-from app.core.model_delta_context import AgentRunLifecycleCallbackHandler
+from app.core.model_delta_context import (
+    AgentRunLifecycleCallbackHandler,
+    AgentToolExecutionCallbackHandler,
+)
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import (
     CancellationSignal,
@@ -40,6 +43,9 @@ from app.services.infrastructure.tool_output_store import (
 from app.services.mapping.agent_content_mapper import (
     AgentStreamContentPart,
     extract_agent_stream_content_parts,
+    materialize_model_content_part,
+    merge_model_content_part,
+    stream_chunk_token_usage,
 )
 from app.services.orchestration.event_stream.contracts import (
     AgentEventSource,
@@ -55,9 +61,6 @@ from app.services.orchestration.event_stream.identity import (
 )
 from app.services.orchestration.event_stream.model_events import (
     is_chat_model_run_name,
-    materialize_model_content_parts,
-    merge_model_content_part,
-    stream_chunk_token_usage,
 )
 from app.services.orchestration.event_stream.reader import (
     iter_agent_events,
@@ -84,16 +87,15 @@ def _field_value(value: object, field_name: str) -> object | None:
     return getattr(value, field_name, None)
 
 
-def _model_output_content(output: object) -> object | None:
-    """从 LangChain 的 model.end 输出中提取消息正文。
+def _model_output_message(output: object) -> object | None:
+    """从 LangChain 的 model.end 输出中提取原消息及其稳定身份。
 
     流式 ChatModel 的 end 事件在不同 LangChain 版本和 provider 实现中可能
     携带 AIMessage、AIMessageChunk，或 ChatResult/字典形式的 generations。
     这些都是同一次模型调用的同一个事实来源，不能因为外层类型不同而丢弃。
     """
-    content = _field_value(output, "content")
-    if content is not None:
-        return content
+    if _field_value(output, "content") is not None:
+        return output
     generations = _field_value(output, "generations")
     if not isinstance(generations, (list, tuple)):
         return None
@@ -101,7 +103,7 @@ def _model_output_content(output: object) -> object | None:
         message = _field_value(generation, "message")
         content = _field_value(message, "content")
         if content is not None:
-            return content
+            return message
     return None
 
 
@@ -140,8 +142,9 @@ async def process_agent_event_stream(
     collected_text_parts: list[str] = []
     latest_model_part_ids_in_order: list[str] = []
     latest_model_parts_by_id: dict[str, dict[str, object]] = {}
-    latest_model_visible_text_seen = False
+    latest_model_output_seen = False
     latest_model_reasoning_seen = False
+    final_message_id: str | None = None
     tool_contexts_by_run_id: dict[str, ToolEventDisplayContext] = {}
     activity_bindings_by_run_id: dict[str, tuple[tuple[str, str, str | None], ...]] = {}
     tool_scopes_by_run_id: dict[str, TurnExecutionScope] = {}
@@ -169,11 +172,13 @@ async def process_agent_event_stream(
     stream_callbacks = stream_config.get("callbacks")
     if stream_callbacks is None:
         stream_config["callbacks"] = [
+            AgentToolExecutionCallbackHandler(message_stream_runtime),
             AgentRunLifecycleCallbackHandler(message_stream_runtime)
         ]
     elif isinstance(stream_callbacks, list):
         stream_config["callbacks"] = [
             *stream_callbacks,
+            AgentToolExecutionCallbackHandler(message_stream_runtime),
             AgentRunLifecycleCallbackHandler(message_stream_runtime),
         ]
     else:
@@ -235,21 +240,25 @@ async def process_agent_event_stream(
         tracked_model_run_order.append(run_id)
 
     def record_latest_model_part(part: AgentStreamContentPart) -> None:
-        merge_model_content_part(
-            part,
-            part_ids_in_order=latest_model_part_ids_in_order,
-            parts_by_id=latest_model_parts_by_id,
+        if part.part_id not in latest_model_parts_by_id:
+            latest_model_part_ids_in_order.append(part.part_id)
+        latest_model_parts_by_id[part.part_id] = merge_model_content_part(
+            part, latest_model_parts_by_id.get(part.part_id),
         )
 
     def record_model_content_parts(parts: list[AgentStreamContentPart]) -> None:
-        nonlocal latest_model_reasoning_seen, latest_model_visible_text_seen
+        nonlocal latest_model_reasoning_seen, latest_model_output_seen
         for part in parts:
+            if part.kind == "content":
+                latest_model_output_seen = True
+                record_latest_model_part(part)
+                continue
             if part.kind == "reasoning":
                 latest_model_reasoning_seen = True
                 record_latest_model_part(part)
                 continue
             if part.text and (part.text.strip() or collected_text_parts):
-                latest_model_visible_text_seen = True
+                latest_model_output_seen = True
                 record_latest_model_part(part)
                 collected_text_parts.append(part.text)
                 SessionInterruptState.append_text(
@@ -292,17 +301,10 @@ async def process_agent_event_stream(
             if not isinstance(raw_block, Mapping):
                 continue
             block_type = raw_block.get("type")
-            if block_type not in {
-                "reasoning",
-                "reasoning_content",
-                "reasoning_items",
-                "thinking",
-                "redacted_thinking",
-                "text",
-                "output_text",
-                "refusal",
-            }:
+            if block_type in {"tool_call", "tool_call_chunk"}:
                 continue
+            if not isinstance(block_type, str) or not block_type:
+                raise ValueError("model.end content block 缺少有效 type")
             block = dict(raw_block)
             block.setdefault("id", f"{fallback_prefix}:end-output:{index}")
             block.setdefault("index", index)
@@ -386,11 +388,12 @@ async def process_agent_event_stream(
                 continue
 
             if event_type == "on_chat_model_start" and is_chat_model_run_name(name):
+                model_run_id = event_run_id(event)
                 latest_model_part_ids_in_order.clear()
                 latest_model_parts_by_id.clear()
-                latest_model_visible_text_seen = False
+                latest_model_output_seen = False
                 latest_model_reasoning_seen = False
-                model_run_id = event_run_id(event)
+                final_message_id = None
                 if model_run_id:
                     track_model_run(model_run_id)
                 model_name = metadata.get("ls_model_name") or "unknown_model"
@@ -435,8 +438,6 @@ async def process_agent_event_stream(
                         raise RuntimeError("带 usage_metadata 的模型流事件缺少 run_id")
                     track_model_run(model_run_id)
                     model_usage_by_run_id[model_run_id] = chunk_token_usage
-                if message_stream_runtime is not None and message_stream_runtime.is_summary_candidate(event_run_id(event)):
-                    continue
                 chunk_message = _field_value(chunk, "message")
                 if chunk_message is not None:
                     content = _field_value(chunk_message, "content") or ""
@@ -449,8 +450,14 @@ async def process_agent_event_stream(
 
             if event_type == "on_chat_model_end" and is_chat_model_run_name(name):
                 model_run_id = event_run_id(event)
-                is_summary_candidate = message_stream_runtime is not None and message_stream_runtime.is_summary_candidate(model_run_id)
-                if not is_summary_candidate and not latest_model_visible_text_seen:
+                output_message = _model_output_message(data.get("output"))
+                original_id = _field_value(output_message, "id")
+                final_message_id = original_id if isinstance(original_id, str) and original_id else None
+                end_blocks = normalize_end_output_content(
+                    _field_value(output_message, "content"),
+                    model_call_id=model_run_id,
+                )
+                if not latest_model_output_seen:
                     canonical_visible_text = (
                         message_stream_runtime.visible_text_for_model_call(model_run_id)
                         if message_stream_runtime is not None
@@ -472,12 +479,7 @@ async def process_agent_event_stream(
                             )
                         )
                     else:
-                        model_output = data.get("output")
-                        output_content = _model_output_content(model_output)
-                        end_output_blocks = normalize_end_output_content(
-                            output_content,
-                            model_call_id=model_run_id,
-                        )
+                        end_output_blocks = end_blocks
                         canonical_has_reasoning = (
                             message_stream_runtime.model_call_has_carrier(
                                 model_run_id,
@@ -497,7 +499,7 @@ async def process_agent_event_stream(
                                 block
                                 for block in end_output_blocks
                                 if block.get("type")
-                                in {"text", "output_text", "refusal"}
+                                not in {"reasoning", "reasoning_content", "reasoning_items", "thinking", "redacted_thinking"}
                             ]
                         if end_output_blocks:
                             if message_stream_runtime is not None:
@@ -508,13 +510,20 @@ async def process_agent_event_stream(
                             record_model_content_parts(
                                 extract_agent_stream_content_parts(end_output_blocks)
                             )
+                # 部分 Provider 先流式发文本，只在 model.end 给出媒体。
+                # 只补未出现的结构化来源，不重放已累计的文本／思考 delta。
+                for block, part in zip(
+                    end_blocks, extract_agent_stream_content_parts(end_blocks), strict=True,
+                ):
+                    if part.kind != "content" or part.part_id in latest_model_parts_by_id:
+                        continue
+                    if message_stream_runtime is not None:
+                        await message_stream_runtime.accept_message_chunk(
+                            AIMessageChunk(content=[block]), model_call_id=model_run_id,
+                        )
+                    record_model_content_parts([part])
                 if message_stream_runtime is not None:
                     await message_stream_runtime.finish_model()
-                    if is_summary_candidate:
-                        await message_stream_runtime.complete_model(
-                            outcome="accepted",
-                            reason="摘要候选传输完成；正文是否可用由压缩中间件校验",
-                        )
                 model_scope = model_scopes_by_run_id.pop(event_run_id(event), None)
                 if execution_scope is not None and model_scope is not None:
                     execution_scope.clear_active_operation(model_scope)
@@ -572,7 +581,8 @@ async def process_agent_event_stream(
                 tool_attempt_id = run_id
                 message_stream_tool_call_id: str | None = None
                 if message_stream_runtime is not None:
-                    message_stream_tool_call_id = await message_stream_runtime.tool_call_for_callback(run_id)
+                    callback_binding = await message_stream_runtime.tool_binding_for_callback(run_id)
+                    message_stream_tool_call_id = callback_binding.tool_call_id
                     message_stream_tool_call_ids_by_run_id[run_id] = message_stream_tool_call_id
                     tool_attempt_id = message_stream_runtime.resumed_tool_execution_id(
                         message_stream_tool_call_id, callback_run_id=run_id,
@@ -613,6 +623,7 @@ async def process_agent_event_stream(
                         tool_execution_id=tool_attempt_id,
                         tool_call_id=message_stream_tool_call_ids_by_run_id[run_id],
                         tool_name=display_context.tool_name,
+                        started_at=callback_binding.started_at,
                     )
                     activity_bindings: list[tuple[str, str, str | None]] = []
                     if (
@@ -851,10 +862,11 @@ async def process_agent_event_stream(
         token_usage = ModelTokenUsagePayload()
 
     return AgentEventStreamResult(
+        final_message_id=final_message_id,
         final_text="".join(collected_text_parts).strip(),
-        latest_model_content_blocks=materialize_model_content_parts(
-            latest_model_part_ids_in_order,
-            latest_model_parts_by_id,
+        latest_model_content_blocks=tuple(
+            materialize_model_content_part(latest_model_parts_by_id[part_id])
+            for part_id in latest_model_part_ids_in_order
         ),
         last_tool_result_text=last_tool_result_text,
         successful_tool_calls=tuple(successful_tool_calls),

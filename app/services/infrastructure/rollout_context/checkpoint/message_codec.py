@@ -50,8 +50,7 @@ from app.prompting.registry import (
 from app.prompting.validation import internal_prompt_metadata, validate_internal_message
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.services.infrastructure.rollout_context.checkpoint.codec.groups import (
-    expand_tool_message,
-    group_content,
+    expand_message,
     message_projection_id,
     restore_group_manifests,
     validate_group,
@@ -64,13 +63,15 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.metadata impor
     project_annotations,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import MessageCodec
+from app.services.mapping.agent_content_mapper import stream_chunk_token_usage
 from app.services.mapping.itemized.canonical_langchain import (
     project_compaction_summary,
     project_runtime_notice,
+    project_summary_source,
     project_tool_result,
 )
 from app.services.mapping.itemized.provider_history import (
-    reasoning_projection_rows,
+    canonical_reasoning_projection,
 )
 from app.services.mapping.itemized.provider_history import (
     visible_text as provider_visible_text,
@@ -434,10 +435,11 @@ class LangChainMessageCodec:
         # 完整 AIMessage 已合并最终 usage 帧；空回复及工具调用沿同一 canonical 写入。
         # 不从流式正文 delta 推测用量，也不把末次调用的统计当作整轮累计。
         if isinstance(message, AIMessage) and message.usage_metadata is not None and model_call_id is not None:
-            total = message.usage_metadata["total_tokens"]
-            if type(total) is not int or total < 0:
-                raise ValueError("模型 total_tokens 必须是非负整数")
-            response_metadata = {**response_metadata, "model_token_usage": total}
+            usage = stream_chunk_token_usage(message)
+            response_metadata = {**response_metadata,
+                "model_token_usage": usage.total_tokens,
+                "token_usage": usage.model_dump(mode="json"),
+            }
         extensions = message_annotations(response_metadata)
         if role == "user" and not internal:
             content = user_input_payload(content, response_metadata.get("attachments"))
@@ -502,33 +504,14 @@ class LangChainMessageCodec:
             semantic_kind = SemanticKind.TOOL_CALL
             payload_kind = PayloadKind.TOOL_CALL
             payload = {
-                "tool_calls": [dict(call) for call in tool_calls]
+                "tool_calls": [dict(tool_calls[-1])]
             }
             item_turn_id = turn_id
             turn_scope = TurnScope.TURN_MEMBER if turn_id is not None else None
         else:
             semantic_kind = SemanticKind.ASSISTANT_OUTPUT
-            invalid_tool_calls = data_mapping.get("invalid_tool_calls")
-            if isinstance(invalid_tool_calls, list) and invalid_tool_calls:
-                # LangChain 将无法解析的工具参数放在 invalid_tool_calls 中。
-                # 这不是 provider wire 的可选诊断字段，而是用户可见消息的
-                # 可恢复语义；必须随 canonical item 一起保存，不能只保留文本。
-                payload_kind = PayloadKind.STRUCTURED_CONTENT
-                payload = {
-                    "content": content,
-                    "invalid_tool_calls": [
-                        dict(call)
-                        for call in invalid_tool_calls
-                        if isinstance(call, Mapping)
-                    ],
-                }
-            else:
-                payload_kind = (
-                    PayloadKind.TEXT
-                    if isinstance(content, str)
-                    else PayloadKind.STRUCTURED_CONTENT
-                )
-                payload = content
+            payload_kind = PayloadKind.TEXT if isinstance(content, str) else PayloadKind.STRUCTURED_CONTENT
+            payload = content
             item_turn_id = turn_id
             turn_scope = TurnScope.TURN_MEMBER if turn_id is not None else None
         invocation_id = execution_id if execution_id is not None else turn_id
@@ -569,7 +552,8 @@ class LangChainMessageCodec:
             message_group_id=canonical_items[-1].message_group_id if canonical_items else f"message-{message_id}",
             wire_role=role,
         )
-        group = expand_tool_message(primary, data_mapping.get("content", ""))
+        group = expand_message(primary, data_mapping.get("content", ""), tool_calls=tool_calls,
+                               invalid_tool_calls=data_mapping.get("invalid_tool_calls") or [])
         if canonical_items and len(group) == len(canonical_items):
             # 坐标相同就复用已构造的候选；无变化的 replace 仍会重新校验、摘要整份正文。
             group = tuple(
@@ -601,58 +585,8 @@ class LangChainMessageCodec:
             message = project_runtime_notice(item).model_copy(update={"id": message_id})
         elif item.semantic_kind == SemanticKind.TOOL_RESULT:
             message = project_tool_result(item).model_copy(update={"id": message_id})
-        elif item.semantic_kind == SemanticKind.TOOL_CALL:
-            tool_calls: list[dict[str, object]] = []
-            for group_item in items:
-                if group_item.semantic_kind != SemanticKind.TOOL_CALL:
-                    continue
-                payload = (
-                    group_item.payload
-                    if isinstance(group_item.payload, Mapping)
-                    else {}
-                )
-                raw_calls = payload.get("tool_calls")
-                calls = raw_calls if isinstance(raw_calls, list) else [payload]
-                tool_calls.extend(
-                    {
-                        "id": provider_tool_call_id(
-                            group_item.projection_identity,
-                            str(call.get("id") or call.get("tool_call_id") or group_item.item_id),
-                        ),
-                        "name": str(call.get("name") or "tool"),
-                        "args": dict(call.get("args") or {})
-                        if isinstance(call.get("args"), Mapping)
-                        else {"raw": call.get("args", "")},
-                        "type": "tool_call",
-                    }
-                    for call in calls
-                    if isinstance(call, Mapping)
-                )
-            message = AIMessage(
-                content=group_content(items) if len(items) > 1 else "",
-                id=message_id,
-                tool_calls=tool_calls,
-            )
         else:
-            if (
-                isinstance(item.payload, Mapping)
-                and "content" in item.payload
-                and isinstance(item.payload.get("invalid_tool_calls"), list)
-            ):
-                invalid_tool_calls = [
-                    dict(call)
-                    for call in item.payload["invalid_tool_calls"]
-                    if isinstance(call, Mapping)
-                ]
-                message = AIMessage(
-                    content=_message_content_value(item.payload["content"]),
-                    id=message_id,
-                    invalid_tool_calls=invalid_tool_calls,
-                )
-            else:
-                message = AIMessage(
-                    content=_message_content_value(item.payload), id=message_id
-                )
+            message = project_summary_source(items).model_copy(update={"id": message_id})
         projected = self.to_dict(message)
         data = projected.get("data")
         if not isinstance(data, Mapping):
@@ -714,18 +648,10 @@ class LangChainMessageCodec:
             : 64 * 1024
         ]
 
-    def activity_outline(self, items: Sequence[CanonicalItemRecord]) -> dict[str, list[dict[str, object]]]:
-        from app.services.mapping.turn_response_parts import internal_item_outline
-        return {item.item_id: internal_item_outline(item) for item in items
-            if item.semantic_kind in {"assistant_output", "reasoning", "tool_call", "tool_result", "compaction_summary"}}
-
-    def reasoning_rows(self, message: Mapping[str, object]) -> list[dict[str, object]]:
-        data = message.get("data")
-        content = data.get("content") if isinstance(data, Mapping) else None
+    def reasoning_rows(self, items: Sequence[CanonicalItemRecord]) -> list[dict[str, object]]:
         return [
-            row
-            for row in reasoning_projection_rows(content)
-            if isinstance(row.get("kind"), str)
+            canonical_reasoning_projection(item)
+            for item in items if item.semantic_kind == SemanticKind.REASONING
         ]
 
     def from_dict(self, value: object) -> object:

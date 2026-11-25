@@ -108,8 +108,9 @@ async def test_attachment_uri_reopen_decodes_original_media_and_preserves_owner(
     client, context, workspace, replay = attachment_media_case
     registry = _data(await client.get("/api/gateway/workspaces?check_health=false"))
     second = next(item for item in registry["items"] if item["name"] == "Attachment B")
-    primary = next(item for item in json.loads((workspace / ".boxteam/workspace.jsonc").read_text())["llm"]["providers"]
-                   if item["id"] == "primary")
+    configuration = json.loads((workspace / ".boxteam/workspace.jsonc").read_text())
+    primary = configuration["settings"]["workspace"]["llm"]["providers"]["primary"]["models"]["default"]
+    endpoint = configuration["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
     owners = []
     for label, item, frames in [("A", registry["active_workspace"], 4000), ("B", second, 8000)]:
         owner = {"gatewayId": item["gateway_id"], "workspaceId": item["workspace_id"]}
@@ -119,7 +120,7 @@ async def test_attachment_uri_reopen_decodes_original_media_and_preserves_owner(
         session_id = session["session_id"]
         thread_id = _data(await client.get(f"/api/v1/sessions/{session_id}/main-thread", headers=headers))["thread_id"]
         cassette = build_cassette(asset_id=f"attachment-media-{label.lower()}", model=primary["model"],
-            url=primary["endpoint"].rstrip("/") + "/chat/completions", frames=chat_completion_frames(
+            url=endpoint.rstrip("/") + "/chat/completions", frames=chat_completion_frames(
                 response_id=f"chatcmpl-attachment-media-{label}", model="e2e-stub-model",
                 deltas=({"role": "assistant", "content": "已收到媒体附件。"},), finish_reason="stop"))
         planned = replay.control.plan_model_calls(session_id, thread_id, cast(list[dict[str, object]], cassette.raw["interactions"]))

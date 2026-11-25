@@ -419,7 +419,7 @@ async def test_cold_canonical_locator_uses_exact_index_without_body_read_and_wro
             raise AssertionError("冷 ToolResult 确认不得读取 canonical 正文")
         with monkeypatch.context() as patch:
             patch.setattr(storage.storage, "_connect", observed_connect)
-            patch.setattr(storage.storage, "_read_v2_item_at", forbidden_body)
+            patch.setattr(storage.storage, "_read_item_at", forbidden_body)
             assert cold.committed_tool_result_id(case.session_id, case.thread_id, "model-target", "collect-call")
             assert not cold.committed_tool_result_id(case.session_id, case.thread_id, "wrong-model", "collect-call")
             assert not cold.committed_tool_result_id(case.session_id, case.thread_id, "model-target", "wrong-call")

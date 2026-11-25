@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { t } from '../../../../shared/core/i18n/index.js';
 import type { ConfigActiveOptionsInspectionDTO, ConfigSourcePreflightDTO } from '../../types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { ConfigurationSelector } from './ConfigurationEntities.js';
+import { errorSummary } from '../../utils/errorMessage.js';
 
 export type ConfigurationOptionsReceipt = ConfigSourcePreflightDTO | ConfigActiveOptionsInspectionDTO;
 
@@ -13,7 +14,7 @@ export function ModelOptionsInspection({ modelRef, version, inspect, onOpenSourc
 }) {
   const [receipt, setReceipt] = useState<{ version: number; data: ConfigurationOptionsReceipt }>();
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<unknown>();
   const request = useRef<AbortController>();
   useEffect(() => {
     setLoading(false); setError(undefined);
@@ -27,7 +28,7 @@ export function ModelOptionsInspection({ modelRef, version, inspect, onOpenSourc
       const data = await inspect(modelRef, controller.signal);
       if (!controller.signal.aborted) setReceipt({ version, data });
     } catch (cause) {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
+      if (!controller.signal.aborted) setError(cause);
     } finally {
       if (request.current === controller) { request.current = undefined; setLoading(false); }
     }
@@ -41,7 +42,7 @@ export function ModelOptionsInspection({ modelRef, version, inspect, onOpenSourc
     <button type="button" disabled={loading} onClick={() => void run()}>
       {t(loading ? 'configuration.inspect.loading' : 'configuration.inspect.run')}
     </button>
-    {error ? <p role="alert">{error}</p> : null}
+    {error ? <p className="failure-summary" role="alert">{errorSummary(error)}</p> : null}
     {current ? <>
       <p role="status">{t(current.version !== version ? 'configuration.inspect.stale'
         : 'active_digest' in current.data ? 'configuration.inspect.published' : 'configuration.inspect.current')}</p>

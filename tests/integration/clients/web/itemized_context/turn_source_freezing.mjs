@@ -252,7 +252,7 @@ try {
       direction: 'tail', turns: 20, include: ['metadata'],
     });
     assert.equal(history.has_before, false);
-    const markers = history.items.flatMap(turn => turn.response_parts.filter(part => part.kind === 'context_notice'));
+    const markers = history.items.flatMap(turn => turn.response_items.filter(part => part.kind === 'context_notice'));
     assert(markers.every(marker => !marker.context_cursor));
     return markers;
   };

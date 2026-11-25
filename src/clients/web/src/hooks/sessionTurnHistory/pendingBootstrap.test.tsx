@@ -104,7 +104,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       const pendingResponse = new Promise<Response>((resolve) => { resolvePending = resolve; });
       const fullResponse = new Promise<Response>((resolve) => { resolveFull = resolve; });
       const requests: Array<{ direction: string; turn_ids?: string[]; include?: string[]; source_view_id?: string; source_view_revision?: number }> = [];
-      const fullParts = [{ part_id: "part_active_body", kind: "text" as const, projection: "detail" as const,
+      const fullParts = [{ id: "part_active_body", kind: "text" as const, projection: "detail" as const,
         status: "completed" as const, source: { message_sequence: 1 }, text: "历史完整正文" }];
       const initialState = appState();
       const live: ConversationView = {
@@ -190,7 +190,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
           user_messages: userMessages,
           status: order === "completed_metadata_expand" ? "completed" : "running",
           root_logical_item_ordinal: 15, activity_stats: { duration_ms: 1000, item_count: 1 },
-          final_response: "", response_preview: "", response_parts: [] }],
+          final_response: "", response_preview: "", response_items: [] }],
       } });
       const full = Response.json({ code: 0, message: "ok", request_id: "req_active_full", data: {
         thread_id: THREAD_ID,
@@ -200,7 +200,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
           user_messages: userMessages,
           status: order === "completed_metadata_expand" ? "completed" : "running",
           root_logical_item_ordinal: 15, activity_stats: { duration_ms: 1000, item_count: 1 },
-          final_response: "历史完整正文", response_preview: "历史完整正文", response_parts: fullParts }],
+          final_response: "历史完整正文", response_preview: "历史完整正文", response_items: fullParts }],
       } });
       const pending = Response.json({ code: 0, message: "ok", request_id: "req_active_pending", data: snapshot });
       let renderer!: ReactTestRenderer;
@@ -239,7 +239,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       }
       if (order === "full_then_metadata") {
         await act(async () => { resolveFull(full); await fullRequest; await wait(30); });
-        expect(currentState.turnTimelinesBySession.get(SCOPE_KEY)?.turnsById[turnId]?.response_parts)
+        expect(currentState.turnTimelinesBySession.get(SCOPE_KEY)?.turnsById[turnId]?.response_items)
           .toEqual(fullParts);
       }
       if (order !== "metadata_first") {
@@ -283,14 +283,14 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       if (order === "completed_metadata_expand") {
         // 轮廓片段只补所选部件，不把响应未覆盖的 final 字段当作整轮替换。
         expect(projected.assistantMessages).toHaveLength(0);
-        expect(projected.responseParts).toEqual(fullParts);
+        expect(projected.responseItems).toEqual(fullParts);
       } else {
         expect(projected.assistantMessages).toBe(live.assistantMessages);
         expect(projected.events).toBe(live.events);
-        expect(projected.responseParts).toBeUndefined();
+        expect(projected.responseItems).toBeUndefined();
       }
       if (order === "metadata_then_full" || order === "full_then_metadata") {
-        expect(currentState.turnTimelinesBySession.get(SCOPE_KEY)?.turnsById[turnId]?.response_parts)
+        expect(currentState.turnTimelinesBySession.get(SCOPE_KEY)?.turnsById[turnId]?.response_items)
           .toEqual(fullParts);
         const fullTurn = currentState.turnTimelinesBySession.get(SCOPE_KEY)?.turnsById[turnId];
         expect(fullTurn && "final_response" in fullTurn ? fullTurn.final_response : null).toBe("历史完整正文");
@@ -372,7 +372,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       thread_id: THREAD_ID,
       ...HISTORY_SOURCE_BINDING,
       projection_epoch: 1, items: [{ ...turnDetail(1), turn_id: turnId, job_id: jobId,
-        status: "running", root_logical_item_ordinal: 15, final_response: "", response_parts: [] }],
+        status: "running", root_logical_item_ordinal: 15, final_response: "", response_items: [] }],
     } })); await wait(40); });
     holdWriteBack = false;
     expect(delayedUpdates).toHaveLength(1);

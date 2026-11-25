@@ -118,7 +118,7 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
             # 独立 Backend 的配置校验和运行时交接均须指向本装具的 Gateway。
             config_path = root / ".boxteam/workspace.jsonc"
             config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-            config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+            config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
             config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             backend = start_backend_process(workspace_root=str(root), port=service_ports[f"backend-{index}"], log_name=f"backend-{index}",
                                             boxteam_home=fixture.gateway_home, artifacts_dir=fixture.artifacts,

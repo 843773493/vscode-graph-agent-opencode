@@ -40,7 +40,7 @@ class SessionContextReadSnapshot(BaseModel):
     items: list[SessionContextItemDTO]
     compacted: bool = False
     compaction_cutoff: int | None = None
-    raw_message_count: int = 0
+    raw_message_count: int | None = 0
     effective_record_count: int = 0
 
     def page(self, request: SessionContextReadRequest) -> SessionContextReadResultDTO:

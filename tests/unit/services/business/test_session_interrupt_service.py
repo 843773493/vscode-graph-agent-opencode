@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from contextlib import closing, nullcontext
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -12,10 +14,11 @@ from langchain_core.messages import HumanMessage
 from app.agents.tool_invocation_context import ThreadRuntimeBinding
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
-from app.core.path_utils import get_session_path_resolver
+from app.core.path_utils import get_session_path_resolver, workspace_context
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.turn_execution_scope import AgentControlInbox, TurnExecutionScopeRegistry
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
@@ -31,8 +34,22 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.support.message_service import build_message_service
+from tests.support.workspaces import prepare_test_workspace
 
 pytestmark = pytest.mark.usefixtures("empty_workspace_scope")
+
+
+@pytest.fixture
+def empty_workspace_scope(tmp_path: Path) -> Iterator[tuple[str, Path]]:
+    """本文件显式绑定隔离工作区，不依赖兄弟目录的 Job fixture。"""
+    root = prepare_test_workspace(
+        workspace_root=tmp_path / "workspace",
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(),
+    )
+    workspace_id = load_or_create_workspace_id(root)
+    with workspace_context(workspace_id, root):
+        yield workspace_id, root
 
 
 @pytest.fixture
@@ -760,7 +777,7 @@ async def test_internal_failure_after_accepted_interrupt_keeps_real_outcome(
         message_stream_runtime=runtime, message_stream_writer=writer,
         checkpointer=case.saver, session_id=case.session_id,
         thread_id=case.binding.thread_id, job_id=case.admission.job_id,
-        turn_id=None, execution_id=case.admission.execution_id, checkpoint_ns="",
+        admission=case.admission, checkpoint_ns="",
         publish=publish, logger=Mock(),
     )
     expected_outcome = "failed" if failure_kind == "execution_error" else "execution_lost"

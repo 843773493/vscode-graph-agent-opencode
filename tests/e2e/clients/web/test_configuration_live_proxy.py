@@ -21,6 +21,9 @@ from dotenv import dotenv_values
 
 from configs.installer import install_user_configuration
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.web_workbench import (
+    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
+)
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import e2e_ports_for_file
 from tests.support.processes.gateway import (
@@ -39,14 +42,21 @@ PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "http
 LIVE_SOURCE_HOME = Path(os.getenv("BOXTEAM_HOME", str(Path.home() / ".boxteams"))).expanduser()
 
 
+@pytest.fixture
+def live_web_assets(request: pytest.FixtureRequest) -> Path:
+    prepared = os.getenv("BOXTEAM_CONFIGURATION_LIVE_WEB_ASSETS")
+    return Path(prepared).resolve(strict=True) if prepared else request.getfixturevalue("web_workbench_assets")
+
+
 @pytest.mark.skipif(os.getenv("BOXTEAM_CONFIGURATION_LIVE") != "1",
     reason="真实模型请求须显式设置 BOXTEAM_CONFIGURATION_LIVE=1")
 async def test_configuration_live_proxy_pty_and_formal_model_entry(
     request: pytest.FixtureRequest,
     prepared_developer_tools_package: Path,
     monkeypatch: pytest.MonkeyPatch,
+    live_web_assets: Path,
 ) -> None:
-    await _run_configuration_live_proxy(request, prepared_developer_tools_package, monkeypatch, scenario="live")
+    await _run_configuration_live_proxy(request, prepared_developer_tools_package, monkeypatch, assets=live_web_assets, scenario="live")
 
 
 @pytest.mark.skipif(os.getenv("BOXTEAM_CONFIGURATION_SHELL") != "1",
@@ -55,16 +65,16 @@ async def test_configuration_jsonc_preserves_pty_environment(
     request: pytest.FixtureRequest,
     prepared_developer_tools_package: Path,
     monkeypatch: pytest.MonkeyPatch,
+    live_web_assets: Path,
 ) -> None:
-    await _run_configuration_live_proxy(request, prepared_developer_tools_package, monkeypatch, scenario="shell-environment")
+    await _run_configuration_live_proxy(request, prepared_developer_tools_package, monkeypatch, assets=live_web_assets, scenario="shell-environment")
 
 
 async def _run_configuration_live_proxy(request: pytest.FixtureRequest, prepared_developer_tools_package: Path,
-    monkeypatch: pytest.MonkeyPatch, *, scenario: str) -> None:
+    monkeypatch: pytest.MonkeyPatch, *, assets: Path, scenario: str) -> None:
     shell_only = scenario == "shell-environment"
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     project = context.project_root
-    assets = Path(os.environ["BOXTEAM_CONFIGURATION_LIVE_WEB_ASSETS"]).resolve(strict=True)
     assert (assets / "version.json").is_file(), "须提供本次验收的正式 Workbench 构建"
     executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert executable, "真实产品验收需要 Chromium"

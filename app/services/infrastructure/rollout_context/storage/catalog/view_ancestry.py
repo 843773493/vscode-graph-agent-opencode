@@ -45,6 +45,34 @@ def read_view_ancestry(connection: sqlite3.Connection, view_id: str) -> list[str
     return chain
 
 
+def is_view_ancestor(connection: sqlite3.Connection, ancestor_id: str, view_id: str) -> bool:
+    """按已有 jump 与不可变创建顺序定位祖先，不展开深历史父链。"""
+    target = connection.execute(
+        "SELECT creation_sequence FROM context_views WHERE view_id=?", (ancestor_id,),
+    ).fetchone()
+    if target is None:
+        raise ValueError(f"source-mismatch: 冻结来源 view 已缺失: {ancestor_id}")
+    cursor = view_id
+    while cursor != ancestor_id:
+        current = connection.execute(
+            "SELECT creation_sequence FROM context_views WHERE view_id=?", (cursor,),
+        ).fetchone()
+        if current is None:
+            raise ValueError(f"source-mismatch: 当前来源 view 已缺失: {cursor}")
+        if current[0] <= target[0]:
+            return False
+        jump = connection.execute(
+            "SELECT ancestor.view_id FROM context_view_jumps jump "
+            "JOIN context_views ancestor ON ancestor.view_id=jump.ancestor_view_id "
+            "WHERE jump.view_id=? AND ancestor.creation_sequence>=? AND ancestor.creation_sequence<? "
+            "ORDER BY jump.jump_level DESC LIMIT 1", (cursor, target[0], current[0]),
+        ).fetchone()
+        if jump is None:
+            return False
+        cursor = jump[0]
+    return True
+
+
 def insert_view_jumps(connection: sqlite3.Connection, view_id: str, parent_view_id: str | None) -> None:
     """复用已发布的二倍祖先索引，生成新 view 的 O(log 深度) 跳转。"""
     ancestor = parent_view_id

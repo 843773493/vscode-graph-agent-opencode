@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
@@ -24,17 +25,29 @@ from app.core.session_thread_context import (
     require_current_session_thread_owner,
     session_thread_owner_scope,
 )
+from app.domain.itemized.compaction import ApplyCompactionCandidateIntent
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
+    checkpoint_messages,
+    message_snapshot,
+    message_snapshot_metadata,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
 from app.services.infrastructure.rollout_context.checkpoint.runtime.message_values import (
     prepare_message_values,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
+    count_uncompacted_messages,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
     RolloutPruningPlan,
     RolloutTurnAnchor,
+)
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text,
 )
 
 
@@ -56,6 +69,11 @@ def _checkpoint_identity(
 
 
 class RolloutLangGraphCheckpointMixin:
+    def raw_message_count(self, session_id: str, thread_id: str, *, item_ids: Sequence[str], checkpoint_ns: str = "") -> int | None:
+        """按调用方已读取的精确 canonical anchors 计数，不重新选择当前分支。"""
+        with self._storage.storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+            return count_uncompacted_messages(connection, item_ids, checkpoint_ns=checkpoint_ns)
+
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         thread_id, checkpoint_ns = _checkpoint_identity(config)
         owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
@@ -223,6 +241,74 @@ class RolloutLangGraphCheckpointMixin:
         metadata: CheckpointMetadata,
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
+        return self._put_checkpoint(config, checkpoint, metadata, new_versions)
+
+    def apply_compaction_candidate(
+        self, config: RunnableConfig, checkpoint: Checkpoint, metadata: CheckpointMetadata,
+        new_versions: ChannelVersions, *, intent: ApplyCompactionCandidateIntent,
+    ) -> RunnableConfig:
+        """最终完整预算确认后，候选与 checkpoint 沿原 writer 原子发布。"""
+        thread_id, checkpoint_ns = _checkpoint_identity(config, for_write=True)
+        owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
+        frozen = intent.frozen
+        if (frozen.session_id, frozen.thread_id, frozen.checkpoint_ns) != (owner.session_id, thread_id, checkpoint_ns):
+            raise ValueError("source-mismatch: 候选采用必须属于本 checkpoint owner")
+        with self._storage.storage.read_connection(owner.session_id, thread_id, checkpoint_ns) as connection:
+            stored, _result, _discarded = self._storage.compactions._read(
+                connection, owner.session_id, thread_id, frozen.candidate_id, checkpoint_ns,
+            )
+            if stored != frozen:
+                raise ValueError("compaction-candidate-conflict: 采用输入与冻结候选不一致")
+            applied = connection.execute(
+                "SELECT candidate.applied_view_id,checkpoint.checkpoint_id,view.parent_view_id FROM context_compaction_candidates candidate "
+                "LEFT JOIN checkpoints checkpoint ON checkpoint.view_id=candidate.applied_view_id "
+                "LEFT JOIN context_views view ON view.view_id=candidate.applied_view_id "
+                "WHERE candidate.candidate_id=?", (frozen.candidate_id,),
+            ).fetchone()
+            if applied is not None and applied[0] is not None:
+                if applied[1] is None:
+                    raise RuntimeError("compaction-checkpoint-unavailable: 已采用候选缺少恢复 checkpoint")
+                if applied[2] != intent.expected_view_id:
+                    raise ValueError("compaction-view-conflict: 幂等采用不是同一个预算基准")
+                return {"configurable": {"thread_id": thread_id, "checkpoint_ns": checkpoint_ns, "checkpoint_id": applied[1]}}
+        return self._put_checkpoint(config, checkpoint, metadata, new_versions, compaction_intent=intent)
+
+    def adopt_candidate(self, config: RunnableConfig, intent: ApplyCompactionCandidateIntent) -> CheckpointTuple:
+        """沿当前运行的冻结 checkpoint 采用候选，并读回唯一恢复基准。"""
+        if not get_checkpoint_id(config):
+            raise ValueError("compaction-checkpoint-required: 采用必须显式绑定运行中的 checkpoint")
+        source = self.get_tuple(config)
+        if source is None:
+            raise RuntimeError("compaction-checkpoint-unavailable: 运行中的 checkpoint 不可读取")
+        checkpoint = dict(source.checkpoint)
+        # LangGraph 以 UUID 字节派生后续 task 身份；同一采用 intent 仍生成同一 checkpoint。
+        checkpoint["id"] = str(uuid5(NAMESPACE_URL, canonical_json_text({
+            "kind": "compaction", "candidate_id": intent.frozen.candidate_id, "view_id": intent.expected_view_id,
+        })))
+        checkpoint["channel_values"] = {
+            **source.checkpoint["channel_values"],
+            "messages": message_snapshot(checkpoint_messages(self, source)),
+        }
+        version = self.get_next_version(source.checkpoint["channel_versions"].get("messages"), None)
+        checkpoint["channel_versions"] = {**source.checkpoint["channel_versions"], "messages": version}
+        checkpoint["updated_channels"] = ["messages"]
+        applied_config = self.apply_compaction_candidate(
+            config, checkpoint,
+            {**message_snapshot_metadata(source.metadata), "source": "compaction", "step": source.metadata.get("step", -1)},
+            {"messages": version}, intent=intent,
+        )
+        applied = self.get_tuple(applied_config)
+        if applied is None:
+            raise RuntimeError("compaction-checkpoint-unavailable: 已采用候选缺少恢复 checkpoint")
+        return applied._replace(checkpoint={
+            **applied.checkpoint,
+            "channel_values": {**applied.checkpoint["channel_values"], "messages": checkpoint_messages(self, applied)},
+        })
+
+    def _put_checkpoint(
+        self, config: RunnableConfig, checkpoint: Checkpoint, metadata: CheckpointMetadata,
+        new_versions: ChannelVersions, *, compaction_intent: ApplyCompactionCandidateIntent | None = None,
+    ) -> RunnableConfig:
         thread_id, checkpoint_ns = _checkpoint_identity(config, for_write=True)
         channel_values = checkpoint.get("channel_values", {})
         if not isinstance(channel_values, dict):
@@ -254,9 +340,9 @@ class RolloutLangGraphCheckpointMixin:
                     version = parent_channel_versions.get(channel_name)
                 if version is None and channel_name == "messages":
                     # 某些 LangGraph 节点只提交其它 channel 的新版本，但仍会
-                    # 携带完整 messages 快照；此时用 checkpoint ID 标记未变更的
-                    # messages，避免因索引缺版本而丢失整个 checkpoint。
-                    version = f"checkpoint:{checkpoint['id']}"
+                    # 携带完整 messages 快照；首次版本由唯一生成器分配，
+                    # 后续采用和 Graph 递增沿用相同版本语法。
+                    version = self.get_next_version(None, None)
                 if version is not None:
                     merged_channel_versions[channel_name] = version
         checkpoint["channel_versions"] = merged_channel_versions
@@ -275,6 +361,7 @@ class RolloutLangGraphCheckpointMixin:
             messages_state=messages_state,
             consume_epoch_intent=self.consume_mutation_intent,
             new_versions=new_versions,
+            compaction_intent=compaction_intent,
         )
         return {
             "configurable": {

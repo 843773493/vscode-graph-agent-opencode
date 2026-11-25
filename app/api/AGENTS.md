@@ -31,6 +31,7 @@ app/api/
 │   ├── session_turns.py        Thread 执行历史
 │   ├── persistent_tasks.py     工作区持久任务管理、运行摘要分页与精确更新事件流
 │   ├── jobs.py                 后台执行任务
+│   ├── derived_executions.py   精确 Thread 的派生提交、有限观察与取消
 │   ├── agents.py               Agent 目录与选择
 │   ├── context.py              上下文资源
 │   └── artifacts.py            执行产物

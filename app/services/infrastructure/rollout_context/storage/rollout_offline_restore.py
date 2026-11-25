@@ -48,7 +48,7 @@ class RolloutOfflineRestoreMixin:
                 f"thread_id={thread_id}: {foreign_keys}"
             )
         self._validate_schema_state(connection)
-        self._host._require_v2_runtime(connection)
+        self._host._require_current_rollout_format(connection)
         owner = connection.execute(
             "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
         ).fetchone()
@@ -57,7 +57,7 @@ class RolloutOfflineRestoreMixin:
                 "SQLite offline restore source session identity 不匹配: "
                 f"expected={(session_id, thread_id)}, actual={owner}"
             )
-        self._host._validate_v2_commit_offsets(
+        self._host._validate_commit_offsets(
             connection,
             self._host.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id),
             validate_jsonl_items=True,

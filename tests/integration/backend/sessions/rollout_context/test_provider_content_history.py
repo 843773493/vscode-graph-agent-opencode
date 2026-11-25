@@ -53,7 +53,7 @@ def _plan_content(
     text_parts: tuple[str, str],
 ) -> str:
     config = commentjson.loads((case.workspace / ".boxteam/workspace.jsonc").read_text())
-    endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
+    endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
     deltas = [
         {"role": "assistant", "reasoning_content": "独立的相同推理"},
         {"content": text_parts[0]},
@@ -141,7 +141,7 @@ async def test_native_thinking_identity_survives_product_execution_and_cold_hist
          "provider_extension": {"trace_group": "native-source"}},
     ]
     config = commentjson.loads((case.workspace / ".boxteam/workspace.jsonc").read_text())
-    endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
+    endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
     cassette = build_cassette(
         asset_id="native-thinking-identity", model="e2e-stub-model", url=endpoint + "/chat/completions",
         frames=chat_completion_frames(
@@ -218,11 +218,11 @@ async def test_equal_blocks_survive_fork_source_deletion_and_backend_hard_restar
         return response.json()["data"]["items"]
 
     original, = await history(source_session)
-    reasoning = [part for part in original["response_parts"] if part["kind"] == "reasoning"]
+    reasoning = [part for part in original["response_items"] if part["kind"] == "reasoning"]
     assert [part["text"] for part in reasoning] == ["独立的相同推理", "独立的相同推理"]
-    assert len({part["part_id"] for part in reasoning}) == 2
+    assert len({part["id"] for part in reasoning}) == 2
     assert original["final_response"] == "".join(text_parts)
-    final, = [part for part in original["response_parts"] if part["kind"] == "final_text"]
+    final, = [part for part in original["response_items"] if part["kind"] == "final_text"]
     await case.plan(source_session, [{"content": "后缀回答不得进入目标"}])
     suffix = await _send(case, source_session, "后缀问题不得进入目标")
     assert isinstance(suffix["job_id"], str)
@@ -252,7 +252,7 @@ async def test_equal_blocks_survive_fork_source_deletion_and_backend_hard_restar
         forked.append((session, thread))
         copied, = await history(session)
         assert copied["turn_id"] == original["turn_id"]
-        assert copied["response_parts"] == original["response_parts"]
+        assert copied["response_items"] == original["response_items"]
         assert copied["final_response"] == original["final_response"]
         assert _sql(case, session, thread, assembly_query) == original_assemblies
         assert case.call_count(session, thread) == 0
@@ -274,7 +274,7 @@ async def test_equal_blocks_survive_fork_source_deletion_and_backend_hard_restar
     assert case.backends[0].process.returncode < 0
     assert (leaf_rollout / "rollout.jsonl").read_bytes() == before_restart
     restored, = await history(session)
-    assert restored["response_parts"] == original["response_parts"]
+    assert restored["response_items"] == original["response_items"]
     cold = _cold_assistant(case, session, thread)
     assert (cold.id, cold.content) == (assistant.id, assistant.content)
     assert _sql(case, session, thread, assembly_query) == original_assemblies

@@ -1,15 +1,15 @@
 import type { ConversationView } from "../../types/frontend";
 import type {
-  InternalExecutionDisplayPart,
+  InternalExecutionDisplayItem,
 } from "../../types/backend";
 import { conversationTurnKey } from "../../state/session/turnIdentity";
-import { responsePartsToTimelineItems } from "../../state/timeline/responseParts";
-import type { TurnResponsePart } from "../../types/backend";
+import { responseItemsToTimelineItems } from "../../state/timeline/responseItems";
+import type { TurnResponseItem } from "../../types/backend";
 import type { InternalExecutionRecord } from "../../state/session/internalExecutionHistory";
 
 export type ChatTranscriptItem =
   | { kind: "execution_header"; key: string; executionId: string; status: InternalExecutionRecord["status"]; empty: boolean }
-  | { kind: "context_event"; key: string; notices: TurnResponsePart[] }
+  | { kind: "context_event"; key: string; notices: TurnResponseItem[] }
   | {
       kind: "turn";
       key: string;
@@ -19,14 +19,14 @@ export type ChatTranscriptItem =
       kind: "internal_execution";
       key: string;
       executionId: string;
-      displayPart: InternalExecutionDisplayPart & { bodyEvicted?: true };
+      displayPart: InternalExecutionDisplayItem & { bodyEvicted?: true };
     }
   | {
       kind: "execution_response";
       key: string;
       executionId: string;
       itemId: string;
-      parts: InternalExecutionRecord["response_parts"];
+      parts: InternalExecutionRecord["response_items"];
       bodyEvicted: boolean;
     };
 
@@ -102,22 +102,22 @@ export function chatTranscriptItems(
   const displayItemIds = new Set<string>();
   const displayItemSequences = new Set<number>();
   for (const execution of executions) {
-    if (includeExecutionResponses && execution.response_parts.every(part => part.kind === "context_notice")) {
+    if (includeExecutionResponses && execution.response_items.every(part => part.kind === "context_notice")) {
       let firstOrdinal = Infinity;
-      for (const part of execution.display_parts) firstOrdinal = Math.min(firstOrdinal, part.logical_item_ordinal);
-      for (const part of execution.response_parts) firstOrdinal = Math.min(firstOrdinal,
+      for (const part of execution.display_items) firstOrdinal = Math.min(firstOrdinal, part.logical_item_ordinal);
+      for (const part of execution.response_items) firstOrdinal = Math.min(firstOrdinal,
         (part.kind === "context_notice" ? part.context_anchor_ordinal : part.source.logical_item_ordinal) ?? Infinity);
       orderedHistory.push({ item: { kind: "execution_header", key: `execution:${execution.execution_id}`,
         executionId: execution.execution_id, status: execution.status,
-        empty: execution.display_parts.length === 0 && execution.response_parts.length === 0 }, ordinal: firstOrdinal });
+        empty: execution.display_items.length === 0 && execution.response_items.length === 0 }, ordinal: firstOrdinal });
     }
-    for (const event of responsePartsToTimelineItems(execution.response_parts)) {
+    for (const event of responseItemsToTimelineItems(execution.response_items)) {
       if (event.kind !== "context_event") continue;
       const position = event.notices.find(notice => notice.context_before_item_id) ?? event.notices[0];
       orderedHistory.push({ item: { kind: "context_event", key: event.id, notices: event.notices },
         ordinal: logicalItemOrdinal(position.context_anchor_ordinal, "context_notice.anchor_ordinal") });
     }
-    for (const displayPart of execution.display_parts) {
+    for (const displayPart of execution.display_items) {
       if (!displayPart.item_id || !Number.isSafeInteger(displayPart.item_sequence)
         || displayPart.item_sequence < 1) {
         throw new Error("history projection integrity: internal display 缺少有效的 canonical item 坐标");
@@ -156,8 +156,8 @@ export function chatTranscriptItems(
       });
     }
     if (includeExecutionResponses) {
-      const partsByItem = new Map<string, InternalExecutionRecord["response_parts"]>();
-      for (const part of execution.response_parts) {
+      const partsByItem = new Map<string, InternalExecutionRecord["response_items"]>();
+      for (const part of execution.response_items) {
         if (part.kind === "context_notice") continue;
         const itemId = part.source.item_id;
         if (!itemId) throw new Error("internal execution response part 缺少 canonical item_id");

@@ -16,7 +16,10 @@ from cachetools import LRUCache
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
 from app.domain.itemized.hashing import payload_content_length
 from app.domain.itemized.identity.item_projection import ItemProjectionManifest
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import (
+    CANONICAL_ITEM_FORMAT_VERSION,
+    CanonicalItemRecord,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.message_revisions import (
     validate_message_revision_source,
 )
@@ -172,29 +175,29 @@ def _validated_catalog_body(key: _BodyValidationKey) -> CanonicalItemRecord:
     try:
         envelope = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"v2 item JSONL 无法解码: item_id={item_id}") from error
+        raise RuntimeError(f"canonical item JSONL 无法解码: item_id={item_id}") from error
     if not isinstance(envelope, Mapping):
-        raise TypeError(f"v2 item envelope 非 object: item_id={item_id}")
+        raise TypeError(f"canonical item envelope 非 object: item_id={item_id}")
     # 整行 JCS 检查拒绝重复键和非规范字节；后续 content_hash 只绑定正文，不能替代它。
     # 这里只检查本次消费的 line，不扫描未读取的历史。
     if raw != canonical_json_line(envelope):
-        raise RuntimeError(f"v2 item JSONL 不是 canonical JCS line: item_id={item_id}")
+        raise RuntimeError(f"canonical item JSONL 不是 canonical JCS line: item_id={item_id}")
     if (
-        envelope.get("format_version") != 2
+        envelope.get("format_version") != CANONICAL_ITEM_FORMAT_VERSION
         or envelope.get("record_type") != "item"
         or envelope.get("item_sequence") != sequence
         or envelope.get("item_id") != item_id
     ):
-        raise RuntimeError(f"v2 item catalog 与 JSONL identity 不一致: item_id={item_id}")
+        raise RuntimeError(f"canonical item catalog 与 JSONL identity 不一致: item_id={item_id}")
     if envelope.get("content_hash") != catalog_hash:
         raise RuntimeError(
-            f"v2 item catalog 与 JSONL identity 不一致: item_id={item_id}; "
+            f"canonical item catalog 与 JSONL identity 不一致: item_id={item_id}; "
             "item catalog 与 JSONL content_hash 不一致"
         )
     try:
         item = CanonicalItemRecord.from_dict(envelope)
     except (KeyError, ItemSchemaError, TypeError, ValueError) as error:
-        raise RuntimeError(f"v2 item JSONL schema/content 非法: item_id={item_id}") from error
+        raise RuntimeError(f"canonical item JSONL schema/content 非法: item_id={item_id}") from error
     if payload_length != payload_content_length(item.payload_kind, item.payload):
         raise RuntimeError(f"item catalog 与 JSONL payload_length 不一致: {item_id}")
     expected_revision = (item.source_manifest.source_revision if item.source_manifest is not None else None)

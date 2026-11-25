@@ -41,8 +41,8 @@ export function conversation(
       created_at: "2026-07-16T00:00:01Z",
       updated_at: "2026-07-16T00:00:01Z",
     }],
-    responseParts: [{
-      part_id: "part_final",
+    responseItems: [{
+      id: "part_final",
       kind: "final_text",
       projection: "detail",
       status: "completed",

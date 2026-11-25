@@ -2638,7 +2638,7 @@ async def test_tool_runtime_reentry_retains_cancelled_queue_and_releases_holder(
             accepted = container.checkpointer.accepted_user_message(
                 session_id, thread_id=thread_id, job_id=admission.job_id,
                 message_id=record.input.message_id,
-            )
+            )[1]
             assert accepted.id == record.input.message_id
             assert accepted.content == "运行真实 工作区资源工具"
             async with ThreadExecutionHolderGate(workspace / ".boxteam/sessions").lock_for(session_id, thread_id) as competing:

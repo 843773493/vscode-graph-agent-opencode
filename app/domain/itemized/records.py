@@ -30,6 +30,7 @@ from app.domain.itemized.identity.item_projection import (
     ItemProvenanceRelation,
     ItemSourceManifest,
     ProjectionGroup,
+    ToolExecutionEvidence,
     ToolResultEvidence,
 )
 from app.domain.itemized.schema import (
@@ -368,17 +369,17 @@ def _validate_payload(
     if semantic_kind == SemanticKind.TOOL_CALL:
         if not isinstance(payload, Mapping):
             raise ItemSchemaError("tool_call payload 必须是 object")
-        calls = payload.get("tool_calls")
-        if isinstance(calls, list):
-            if not calls:
-                raise ItemSchemaError("tool_call payload 的 tool_calls 不能为空")
-            for call in calls:
-                if not isinstance(call, Mapping):
-                    raise ItemSchemaError("tool_call payload 的 tool_calls 元素非法")
-                _non_empty_string(call.get("id"), "payload.tool_calls[].id")
-                _non_empty_string(call.get("name"), "payload.tool_calls[].name")
-                if "args" not in call:
-                    raise ItemSchemaError("tool_call payload 缺少 args")
+        if "tool_calls" in payload:
+            calls = payload["tool_calls"]
+            if not isinstance(calls, list) or len(calls) != 1:
+                raise ItemSchemaError("tool_call Item 的 tool_calls 必须恰含一次调用")
+            call = calls[0]
+            if not isinstance(call, Mapping):
+                raise ItemSchemaError("tool_call payload 的 tool_calls 元素非法")
+            _non_empty_string(call.get("id"), "payload.tool_calls[].id")
+            _non_empty_string(call.get("name"), "payload.tool_calls[].name")
+            if "args" not in call:
+                raise ItemSchemaError("tool_call payload 缺少 args")
         else:
             _non_empty_string(payload.get("tool_call_id"), "payload.tool_call_id")
             _non_empty_string(payload.get("name"), "payload.name")
@@ -401,6 +402,13 @@ def _validate_payload(
             if type(confirmed) is not bool:
                 raise ItemSchemaError("payload.execution_confirmed 必须是 boolean")
             outcome = payload.get("tool_outcome")
+            if payload.get("tool_execution") is not None:
+                execution = ToolExecutionEvidence.from_dict(payload["tool_execution"])
+                if (execution.tool_invocation_id != payload.get("tool_invocation_id")
+                        or execution.tool_attempt_id != payload.get("tool_attempt_id")):
+                    raise ItemSchemaError("工具执行证据与结果的 invocation/attempt 不一致")
+                if outcome == "unknown" and execution.execution_completed_at is not None:
+                    raise ItemSchemaError("未知工具结果不得补造实际停止时刻")
         else:
             raise ItemSchemaError("tool_result payload 必须是 object 或带 evidence 的 text")
         if outcome is not None and (not isinstance(outcome, str) or outcome not in _TOOL_OUTCOMES):
@@ -453,9 +461,12 @@ class ProducerRef:
         return result
 
 
+CANONICAL_ITEM_FORMAT_VERSION = 3
+
+
 @dataclass(frozen=True, slots=True)
 class CanonicalItemRecord:
-    # 行协议版本与类别固定为 v2 item，不能和 v1 message 混写。
+    # 行协议版本与类别固定为 v3 item，不能和 v1 message 混写。
     format_version: int
     record_type: str
     # 物理追加序号只描述日志顺序，不决定模型 selection 顺序。
@@ -534,7 +545,7 @@ class CanonicalItemRecord:
             else None
         )
         return cls(
-            format_version=2,
+            format_version=CANONICAL_ITEM_FORMAT_VERSION,
             record_type="item",
             item_sequence=item_sequence,
             item_id=item_id,
@@ -631,13 +642,42 @@ class CanonicalItemRecord:
         return ItemProjectionManifest(
             self.projection_group, self.projection_identity, self.tool_result_evidence,
             self.source_manifest, self.provenance_relations, self.extensions,
+            self.tool_execution,
+            self.payload.get("tool_outcome")
+            if self.semantic_kind == SemanticKind.TOOL_RESULT and isinstance(self.payload, Mapping) else None,
+            self.output_block_type,
         ).to_dict()
 
+    @property
+    def output_block_type(self) -> str | None:
+        """摘要只镜像非文本输出的类型，媒体及扩展正文仍归原 payload。"""
+        if self.semantic_kind != SemanticKind.ASSISTANT_OUTPUT:
+            return None
+        content = self.payload
+        if isinstance(content, Mapping) and "content" in content:
+            content = content["content"]
+        if isinstance(content, (list, tuple)) and len(content) == 1:
+            content = content[0]
+        if isinstance(content, Mapping):
+            block_type = content.get("type")
+            if isinstance(block_type, str) and block_type not in {"text", "output_text", "refusal"}:
+                return block_type
+        return None
+
+    @property
+    def tool_execution(self) -> ToolExecutionEvidence | None:
+        """结果正文是执行证据的唯一事实源；catalog 仅镜像有界安全字段。"""
+        if self.semantic_kind == SemanticKind.TOOL_RESULT and isinstance(self.payload, Mapping):
+            value = self.payload.get("tool_execution")
+            if value is not None:
+                return ToolExecutionEvidence.from_dict(value)
+        return None
+
     def validate(self) -> None:
-        if type(self.format_version) is not int or self.format_version != 2:
-            raise FormatDispatchError("CanonicalItemRecord 必须是 v2 item envelope")
+        if type(self.format_version) is not int or self.format_version != CANONICAL_ITEM_FORMAT_VERSION:
+            raise FormatDispatchError("CanonicalItemRecord 必须是 v3 item envelope")
         if type(self.record_type) is not str or self.record_type != "item":
-            raise FormatDispatchError("CanonicalItemRecord 必须是 v2 item envelope")
+            raise FormatDispatchError("CanonicalItemRecord 必须是 v3 item envelope")
         if not isinstance(self.item_sequence, int) or isinstance(
             self.item_sequence, bool
         ):

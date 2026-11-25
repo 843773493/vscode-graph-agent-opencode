@@ -80,8 +80,9 @@ def browser_backend(
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = config["llm"]["providers"]["primary"]
-    provider["defaults"] = {
+    workspace_settings = config["settings"]["workspace"]
+    provider = workspace_settings["llm"]["providers"]["primary"]
+    config["profiles"]["provider.primary"]["settings"]["model_options"] = {
         "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
          "api_key": "",
         "custom_llm_provider": "openai",
@@ -90,7 +91,7 @@ def browser_backend(
         }, "supports_reasoning": {"reasoning_content": True}},
     }
     provider["models"]["default"]["model"] = "e2e-stub-model"
-    for agent in config["agents"].values():
+    for agent in workspace_settings["agents"].values():
         agent["model"]["fallbacks"] = []
     config_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",

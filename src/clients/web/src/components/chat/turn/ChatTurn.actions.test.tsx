@@ -127,8 +127,8 @@ describe("ChatTurn 用户动作", () => {
         metadata: { phase: "final_answer" },
       },
     ];
-    value.responseParts = [{
-      ...value.responseParts![0],
+    value.responseItems = [{
+      ...value.responseItems![0],
       text: "完整团队汇报：团队、成员、任务状态、子会话和审查结论均已确认。",
     }];
 

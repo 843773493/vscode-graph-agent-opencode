@@ -149,7 +149,7 @@ class SessionContextReadResultDTO(BaseModel):
     revision: str
     compacted: bool = False
     compaction_cutoff: int | None = None
-    raw_message_count: int = 0
+    raw_message_count: int | None = 0
     effective_record_count: int = 0
     returned_chars: int = 0
     truncated: bool = False

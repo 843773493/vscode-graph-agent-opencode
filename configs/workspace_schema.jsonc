@@ -1394,11 +1394,11 @@
                 "properties": {
                   "name": {
                     "type": "string",
-                    "pattern": "^[a-zA-Z][a-zA-Z0-9._-]{1,63}$"
+                    "pattern": "^\\s*[a-zA-Z][a-zA-Z0-9._-]{1,63}\\s*$"
                   },
                   "factory": {
                     "type": "string",
-                    "pattern": "^[a-zA-Z_][a-zA-Z0-9_.]*:[a-zA-Z_][a-zA-Z0-9_.]*$"
+                    "pattern": "^\\s*[a-zA-Z_][a-zA-Z0-9_]*(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)*:[a-zA-Z_][a-zA-Z0-9_]*(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)*\\s*$"
                   },
                   "options": {
                     "type": "object",
@@ -2038,8 +2038,8 @@
               "description": "上下文压缩策略，沿实际父链继承；下一次使用新配置快照的准备生效，在途摘要保留冻结策略。比例必须满足 target < prepare < apply。",
               "additionalProperties": false,
               "properties": {
-                "prepare_fraction": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.70 },
-                "apply_fraction": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.85 },
+                "prepare_fraction": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.80 },
+                "apply_fraction": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.90 },
                 "target_fraction": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.55 },
                 "apply_policy": { "type": "string", "enum": ["on_demand", "next_request"], "default": "on_demand" }
               }

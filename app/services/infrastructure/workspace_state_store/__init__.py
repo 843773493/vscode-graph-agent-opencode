@@ -20,7 +20,7 @@ from app.core.sqlite_state import (
     utc_now_text,
 )
 from app.services.infrastructure.config.state import (
-    build_secret_binding_summary,
+    build_snapshot_secret_binding_summary,
     dump_json,
     load_json_object,
     migrate_legacy_secret_payload,
@@ -258,30 +258,33 @@ class WorkspaceStateStore(
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT payload_json FROM config_active_snapshot WHERE config_domain = ?",
+                "SELECT payload_json, source_baseline_json FROM config_active_snapshot WHERE config_domain = ?",
                 (config_domain,),
             ).fetchone()
             if row is None:
                 connection.execute("COMMIT")
                 return ()
-            migrated, blocked = migrate_legacy_secret_payload(json.loads(str(row[0])))
-            connection.execute(
-                """
-                UPDATE config_active_snapshot
-                SET payload_json = ?, secret_bindings_json = ?,
-                    state = CASE WHEN ? = 1 THEN 'recovery_required' ELSE state END,
-                    last_error = CASE WHEN ? = 1 THEN ? ELSE last_error END
-                WHERE config_domain = ?
-                """,
-                (
-                    dump_json(migrated),
-                    dump_json(build_secret_binding_summary(migrated)),
-                    int(bool(blocked)),
-                    int(bool(blocked)),
-                    "旧 active snapshot 含无法恢复的秘密摘要，需重新导入引用",
-                    config_domain,
-                ),
-            )
+            original = load_json_object(str(row[0]), field="active config payload")
+            migrated, blocked = migrate_legacy_secret_payload(original)
+            if migrated != original or blocked:
+                source_baseline = load_json_object(str(row[1]), field="active config source baseline")
+                connection.execute(
+                    """
+                    UPDATE config_active_snapshot
+                    SET payload_json = ?, secret_bindings_json = ?,
+                        state = CASE WHEN ? = 1 THEN 'recovery_required' ELSE state END,
+                        last_error = CASE WHEN ? = 1 THEN ? ELSE last_error END
+                    WHERE config_domain = ?
+                    """,
+                    (
+                        dump_json(migrated),
+                        dump_json(build_snapshot_secret_binding_summary(migrated, source_baseline)),
+                        int(bool(blocked)),
+                        int(bool(blocked)),
+                        "旧 active snapshot 含无法恢复的秘密摘要，需重新导入引用",
+                        config_domain,
+                    ),
+                )
             connection.execute("COMMIT")
             return blocked
         except Exception:

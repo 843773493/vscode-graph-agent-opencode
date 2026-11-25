@@ -18,11 +18,13 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
     definition_source_values,
 )
-from tests.support.messages import compaction_summary_message
+from tests.support.rollout.compaction_application import (
+    generate_and_adopt_compaction_candidate,
+)
 
 
 @pytest.fixture
-def discovery_history(prepare_tool_context, registry_db, discovery_tool_factory):
+def discovery_history(prepare_tool_context, registry_db, discovery_tool_factory, compaction_summary_model):
     saver, session, connection, accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     admission = saver.execution_admission(session, thread_id=thread, execution_id=accepted["initial_execution_id"])
@@ -51,18 +53,19 @@ def discovery_history(prepare_tool_context, registry_db, discovery_tool_factory)
         checkpoint = empty_checkpoint()
         checkpoint["id"] = "recovery-checkpoint"
         checkpoint["channel_values"] = {"messages": messages}
-        if compact:
-            checkpoint["channel_values"]["_summarization_event"] = {
-                "cutoff_index": 2, "cutoff_message_id": messages[-1].id,
-                "summary_message": compaction_summary_message(content="已发现所需工具。", id="recovery-summary"),
-            }
         checkpoint["channel_versions"] = {name: "1" for name in checkpoint["channel_values"]}
         checkpoint["updated_channels"] = list(checkpoint["channel_values"])
         with scope():
             saver.register_model_call(session, thread_id=thread, execution_id=admission.execution_id,
                                       model_call_id=snapshot.model_call_id, assembly_id=snapshot.assembly_id,
                                       attempt=1, provider="fixture-model", dispatch_state="dispatched")
-            saver.put(build_checkpoint_config(thread), checkpoint, {"source": "compaction" if compact else "loop", "step": 1}, checkpoint["channel_versions"])
+            config = saver.put(build_checkpoint_config(thread), checkpoint, {"source": "loop", "step": 1}, checkpoint["channel_versions"])
+        if compact:
+            await generate_and_adopt_compaction_candidate(
+                saver, session_id=session, thread_id=thread, checkpoint_config=config,
+                admission=admission, model=compaction_summary_model,
+                candidate_id="recovery-summary", task_id="recovery-summary-task",
+            )
         return json.loads(raw)["results"][0], scope, connection
 
     return create

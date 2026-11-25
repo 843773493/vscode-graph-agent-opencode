@@ -29,6 +29,7 @@
 │   └── rollout/                            canonical历史与视图场景装具
 │       ├── context_registry.py             正式Session、执行准入和registry数据库fixture
 │       ├── fixture_output.py               通过正式owner提交静态fixture输出
+│       ├── compaction_application.py        真实候选冻结、摘要生成和原子采用
 │       ├── view_mutations.py                隔离注入view成员索引损坏
 │       └── web_boundary_seeding.py           Web历史边界场景数据
 ├── 业务owner装配与显式替身
@@ -53,6 +54,7 @@
 ├── model_stream/                          流式模型回放与故障执行
 │   ├── config.py                           provider配置、回放生命周期与运行参数
 │   ├── frozen_provider.py                  冻结请求构造和检查点读取观测
+│   ├── compaction_model.py                 真实候选测试用固定摘要模型流
 │   └── crash_worker.py                     独立模型流故障执行入口
 ├── mcp/                                    MCP测试配置和协议替身
 │   ├── configuration.py                    MCP配置文件准备

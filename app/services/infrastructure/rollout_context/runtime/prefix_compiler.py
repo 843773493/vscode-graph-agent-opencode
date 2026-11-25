@@ -463,8 +463,10 @@ def compile_prefix_context(
         if (contribution := contribution_resolver.resolve(ref)) is not None
     }
     selected_plan = replace(
-        plan, refs=selected_refs,
-        contributions=tuple(
+        plan, refs=selected_refs, selection=(),
+        # sealed 预算 preview 的 ordinal 由同次 composer 绑定；最终 projector
+        # 会统一筛选并重新绑定，编译阶段不切碎这份不可变 assembly manifest。
+        contributions=plan.contributions if plan.plan_state == "sealed" else tuple(
             source for source in plan.contributions
             if source.contribution_id in selected_contribution_ids
         ),

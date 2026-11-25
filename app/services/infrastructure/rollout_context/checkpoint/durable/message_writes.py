@@ -54,7 +54,7 @@ class PendingMessageReferences:
         require_historical_scope(self.connection, row[2], row[3], current_owner=self.owner)
         with self.jsonl_path.open("rb") as stream:
             group = read_message_group(
-                self.connection, stream, offset=row[0], length=row[1], read_item=self.storage._read_v2_item_at,
+                self.connection, stream, offset=row[0], length=row[1], read_item=self.storage._read_item_at,
             )
         reference = {
             "session_id": row[2], "thread_id": row[3], "checkpoint_ns": self.checkpoint_ns,

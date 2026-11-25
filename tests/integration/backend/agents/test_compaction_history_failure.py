@@ -1,16 +1,26 @@
-"""归档不可读时，日志次错不改变真实 Agent 的工具结果和后续执行。"""
+"""真实历史的 canonical 原文失败保持错误归属、工具闭合及同会话恢复。"""
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import json
 import logging
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 
+from app.api.message_stream import _public_event_json
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_control_store import SessionControlStore
 from app.services.infrastructure.message_stream_store import MessageStreamStore
+from app.services.infrastructure.rollout_context.checkpoint.durable import (
+    compaction_candidates,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RuntimeSourceCase,
     _job,
@@ -18,20 +28,14 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     _tool_reply,
 )
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
-    source_case as source_case,  # noqa: PLC0414 - 复用真实 Agent 与唯一模型协议装具
+    source_case as source_case,  # noqa: PLC0414 - 复用真实 Agent 与唯一模型协议装具。
 )
 from tests.support.api_helpers import create_session
 from tests.support.sealed_request_audit import audit_sealed_requests
 
 
-@pytest.mark.parametrize("log_fails", [False, True], ids=["log-ok", "log-failed"])
-async def test_missing_archive_keeps_tool_failure_and_continues_after_log_error(
-    source_case: RuntimeSourceCase,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    tmp_path: Path,
-    log_fails: bool,
-) -> None:
+@pytest.fixture
+async def canonical_history(source_case: RuntimeSourceCase):
     case = source_case
     catalog = await case.client.get("/api/v1/tools", params={"agent_id": "default"})
     assert catalog.status_code == 200, catalog.text
@@ -42,204 +46,251 @@ async def test_missing_archive_keeps_tool_failure_and_continues_after_log_error(
         ],
     })
     assert selected.status_code == 200, selected.text
-    session = await create_session(case.client, "归档读取失败及诊断日志次错")
-    main = await case.client.get(f"/api/v1/sessions/{session}/main-thread")
-    assert main.status_code == 200, main.text
-    thread = main.json()["data"]["thread_id"]
-    resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
-    session_root = resolver.resolve_session_node(session)
-    archive = session_root / "context" / thread / "history.md"
-    assert not archive.exists()
-    blocker = tmp_path / "archive-log-secret"
-    blocker.write_text("普通文件不能承载日志子文件", encoding="utf-8")
-    destination = blocker / "service.log"
-    capture = caplog.handler.emit
-    failures: list[OSError] = []
-    diagnostic_causes: list[BaseException] = []
-
-    def emit(record: logging.LogRecord) -> None:
-        capture(record)
-        if not (record.name == "app.agents.summarization.tool_middleware" or
-                record.name == "app.core.failures" and "compaction-history-read" in record.getMessage()):
-            return
-        if record.exc_info and isinstance(record.exc_info[1], BaseException):
-            diagnostic_causes.append(record.exc_info[1])
-        if log_fails:
-            try:
-                destination.write_text(record.getMessage(), encoding="utf-8")
-            except OSError as error:
-                failures.append(error)
-                raise
-
-    results = []
-    for index in range(2):
-        wire_id = f"read-missing-{index}"
-        call, followup = await case.plan(session, [
-            _tool_reply("read_compaction_history", {"line_offset": 1, "limit": 200}, wire_id),
-            {"content": f"archive-unavailable-ack-{index}"},
-        ])
-        with monkeypatch.context() as patch:
-            if index == 0:
-                patch.setattr(caplog.handler, "emit", emit)
-            accepted = await _send(case, session, f"读取当前线程归档，第{index}次")
-            assert accepted["thread_id"] == thread
-            job = await _job(case, str(accepted["job_id"]))
-        operation = call + ":tool-call:" + wire_id
-        event, = [item for item in case.control.events
-                  if item["phase"] == "test.tool_result.committed" and item["operation_id"] == operation]
-        details = event["details"]
-        assert isinstance(details, dict)
-        item = details["item"]
-        assert isinstance(item, dict)
-        persisted, = case.container.checkpointer._storage.storage.read_items(
-            session, thread, item_ids=(item["item_id"],),
-        )
-        assert persisted.semantic_kind == "tool_result"
-        assert persisted.payload == item["payload"]
-        assert isinstance(persisted.payload, dict)
-        assert persisted.payload["tool_call_id"] == operation
-        result = persisted.payload["content"]
-        assert isinstance(result, str)
-        assert "detail-unavailable" in result and "line_offset=1" in result
-        messages = case.request(followup)["messages"]
-        assert isinstance(messages, list)
-        tool_message, = [message for message in messages if message["role"] == "tool" and message["tool_call_id"] == wire_id]
-        assert tool_message["content"] == result
-        tool_call, = [tool for message in messages for tool in message.get("tool_calls", []) if tool["id"] == wire_id]
-        assert tool_call["function"]["name"] == "read_compaction_history"
-        assert str(session_root) not in result and "history.md" not in result and "archive-log-secret" not in result
-        assert not archive.exists()
-        results.append({"job": job, "tool_item": persisted.to_dict(), "followup_call": followup})
-    assert len(diagnostic_causes) == 1
-    cause = diagnostic_causes[0]
-    assert isinstance(cause, RuntimeError) and "history.md" in str(cause)
-    if log_fails:
-        assert len(failures) == 1 and failures[0].errno == errno.ENOTDIR
-        assert any(str(failures[0]) in note for note in cause.__notes__)
-    else:
-        assert not failures and not getattr(cause, "__notes__", [])
-    assert results[0]["tool_item"]["payload"]["content"] == results[1]["tool_item"]["payload"]["content"]
-    root = resolver.resolve_thread_node(session, thread) / "rollout"
-    assert str(session_root).encode() not in (root / "rollout.jsonl").read_bytes()
-    assert b"archive-log-secret" not in (root / "rollout.jsonl").read_bytes()
-    captures = {call: json.loads((case.model.artifacts / (call + ".json")).read_text()) for call in case.planned_calls}
-    proof = audit_sealed_requests(root / "index.sqlite", (session_root / "logs/llm_requests").glob("*.json"), captures)
-    case.write_actual(f"compaction-history-failure-{log_fails}", {
-        "results": results, "sealed_requests": proof, "diagnostic_sink_errors": len(failures),
-    })
-
-
-async def test_archive_write_failure_preserves_compaction_activity_and_same_session_recovery(
-    source_case: RuntimeSourceCase,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    tmp_path: Path,
-) -> None:
-    case = source_case
-    catalog = await case.client.get("/api/v1/tools", params={"agent_id": "default"})
-    assert catalog.status_code == 200, catalog.text
-    tool, = [item for item in catalog.json()["data"] if item["name"] == "compact_conversation"]
-    selected = await case.client.patch("/api/v1/tools/selection", json={
-        "agent_id": "default", "changes": [
-            {"tool_id": tool["tool_id"], "execution_enabled": True, "model_visible": True},
-        ],
-    })
-    assert selected.status_code == 200, selected.text
-    session = await create_session(case.client, "压缩活动失败和原会话恢复")
-    main = await case.client.get(f"/api/v1/sessions/{session}/main-thread")
-    assert main.status_code == 200, main.text
-    thread = main.json()["data"]["thread_id"]
-    resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
-    session_root = resolver.resolve_session_node(session)
-    replies = [f"archive-activity-answer-{index}:" + "已完成的详细记录。" * 120 for index in range(6)]
+    session = await create_session(case.client, "canonical 原文失败及同会话恢复")
+    thread = await case.container.session_service.resolve_main_thread(session)
+    replies = [f"canonical-history-answer-{index}:" + "已完成的详细记录。" * 60 for index in range(3)]
+    accepted = []
     for index, reply in enumerate(replies):
         await case.plan(session, [{"content": reply}])
-        accepted = await _send(case, session, f"archive-activity-question-{index}")
-        await _job(case, str(accepted["job_id"]))
-    blocker = session_root / "context"
-    assert not blocker.exists()
-    blocker.write_text("保留归档目录冲突原件", encoding="utf-8")
-    sink_blocker = tmp_path / "compaction-log-secret"
-    sink_blocker.write_text("保留日志目录冲突原件", encoding="utf-8")
-    destination = sink_blocker / "service.log"
-    failures: list[OSError] = []
-    causes: list[BaseException] = []
+        turn = await _send(case, session, f"canonical-history-question-{index}")
+        await _job(case, str(turn["job_id"]))
+        accepted.append(turn)
+    assert case.sql(session, thread, "SELECT COUNT(*) FROM context_compaction_candidates") == [(0,)]
+    return case, session, thread, replies, accepted
+
+
+async def _compaction_task(case: RuntimeSourceCase, session: str, thread: str, *, expected: str):
+    response = await case.client.post(f"/api/v1/sessions/{session}/compact", params={"thread_id": thread})
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"]
+    receipt = response.json()["data"]
+    assert receipt["status"] == "scheduled" and receipt["summarized_message_count"] == 0
+    async with asyncio.timeout(30):
+        while True:
+            handle = case.container.background_task_registry.get_handle(session, receipt["task_id"])
+            assert handle is not None and handle.thread_id == thread
+            if handle.status not in {"pending", "running"}:
+                assert handle.status == expected, handle.metadata
+                return handle
+            await asyncio.sleep(.05)
+
+
+async def _events(case: RuntimeSourceCase, session: str, thread: str, turn_id: str):
+    response = await case.client.get(f"/api/v1/sessions/{session}/turns/{turn_id}/message-stream/events",
+                                     params={"thread_id": thread})
+    assert response.status_code == 200, response.text
+    assert response.headers["X-Request-ID"] == response.json()["request_id"]
+    return response.json()["data"]
+
+
+def _sealed_proof(case: RuntimeSourceCase, session: str, thread: str):
+    resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
+    captures = {call: json.loads((case.model.artifacts / (call + ".json")).read_text()) for call in case.planned_calls}
+    return audit_sealed_requests(resolver.resolve_thread_node(session, thread) / "rollout/index.sqlite",
+                                 (resolver.resolve_session_node(session) / "logs/llm_requests").glob("*.json"), captures)
+
+
+@pytest.mark.parametrize("log_fails", [False, True], ids=["log-ok", "log-failed"])
+async def test_canonical_history_read_failure_keeps_paired_result_and_same_thread_recovery(
+    canonical_history, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    tmp_path: Path, log_fails: bool,
+) -> None:
+    case, session, thread, replies, _turns = canonical_history
+    saver = case.container.checkpointer
+    candidates = saver._storage.compactions
+    # 未采用范围正常为空；先由真实后台生成和后继消息建立原文回读范围。
+    assert candidates.read_history(session, thread) == ""
+    await case.plan(session, [{"content": "已完成前两轮资料的冻结摘要。"}])
+    handle = await _compaction_task(case, session, thread, expected="completed")
+    assert candidates.read_history(session, thread) == ""
+    await case.plan(session, [{"content": "已采用完整候选。"}])
+    adopted = await _send(case, session, "采用已安排的候选后继续。")
+    await _job(case, str(adopted["job_id"]))
+    original_history = candidates.read_history(session, thread)
+    assert replies[0] in original_history
+    assert case.sql(session, thread, "SELECT applied_view_id FROM context_compaction_candidates WHERE task_id=?",
+                    (handle.task_id,))[0][0] is not None
+    root = saver._storage.storage.root(session, thread_id=thread)
+    original_bytes = (root / "rollout.jsonl").read_bytes()
+    blocker, log_blocker = tmp_path / "canonical-read-native", tmp_path / "canonical-log-secondary"
+    blocker.write_text("原文页读取的原生故障", encoding="utf-8")
+    log_blocker.write_text("日志输出的原生故障", encoding="utf-8")
+    causes: list[OSError] = []
+    sink_errors: list[OSError] = []
+    logged: list[str] = []
     capture = caplog.handler.emit
+
+    def fail_page(*_args, **_kwargs):
+        try:
+            return (blocker / "original.jsonl").open("rb")
+        except OSError as error:
+            causes.append(error)
+            raise
 
     def emit(record: logging.LogRecord) -> None:
         capture(record)
-        if not (record.name == "app.agents.summarization.middleware" or
-                record.name == "app.core.failures" and "stage=context.compaction" in record.getMessage()):
+        if record.name != "app.core.failures" or "stage=tool-execution" not in record.getMessage():
             return
-        if record.exc_info and isinstance(record.exc_info[1], BaseException):
-            causes.append(record.exc_info[1])
+        logged.append(record.getMessage())
+        if log_fails:
+            try:
+                (log_blocker / "service.log").write_text(record.getMessage(), encoding="utf-8")
+            except OSError as error:
+                sink_errors.append(error)
+                raise
+
+    wire_id = "read-canonical-failed"
+    call, = await case.plan(session, [_tool_reply("read_compaction_history", {"line_offset": 1, "limit": 200}, wire_id)])
+    with monkeypatch.context() as patch:
+        patch.setattr(compaction_candidates, "read_history_page", fail_page)
+        patch.setattr(caplog.handler, "emit", emit)
+        failed = await _send(case, session, "读取已采用摘要对应的原文。")
+        job = await _job(case, str(failed["job_id"]), expected="failed")
+    operation = call + ":tool-call:" + wire_id
+    item, = [item for item in saver._storage.storage.read_items(session, thread)
+             if item.semantic_kind == "tool_result" and isinstance(item.payload, dict)
+             and item.payload["tool_call_id"] == operation]
+    # handler 异常没有成功回执；沿工具执行合同保留 unknown，并单独核失败归属。
+    assert item.payload["tool_outcome"] == "unknown"
+    failure = item.payload["content"]
+    assert "stage=tool-execution" in failure and "NotADirectoryError" in failure
+    assert "read_compaction_history" in failure and str(blocker / "original.jsonl") in failure
+    assert "NotADirectoryError" in job["error_message"]
+    cause, = causes
+    assert cause.errno == errno.ENOTDIR
+    logged_message, = logged
+    assert all(fragment in logged_message for fragment in (
+        "stage=tool-execution", "read_compaction_history", "NotADirectoryError",
+        str(blocker / "original.jsonl"), f"call_id={wire_id}",
+    ))
+    if log_fails:
+        sink_error, = sink_errors
+        assert sink_error.errno == errno.ENOTDIR and "diagnostic_sink_error=NotADirectoryError" in failure
+        assert any(str(sink_error) in note for note in cause.__notes__)
+    else:
+        assert not sink_errors and "diagnostic_sink_error" not in failure
+    assert str(log_blocker) not in failure
+    failed_events = await _events(case, session, thread, str(failed["turn_id"]))
+    stream_id = failed_events[-1]["turn_stream_id"]
+    resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
+    cold = MessageStreamStore(path_resolver=resolver)
+    await cold.open_existing(session_id=session, thread_id=thread, turn_id=str(failed["turn_id"]), turn_stream_id=stream_id)
+    assert [_public_event_json(event) for event in await cold.list_events(
+        session_id=session, turn_stream_id=stream_id,
+    )] == failed_events
+    completed, = [event for event in failed_events if event["type"] == "tool.completed"]
+    assert completed["payload"]["status"] == "failed"
+    assert completed["payload"]["outcome"] == "outcome_unknown"
+    assert completed["payload"]["completion_reason"] == "execution_error"
+    assert (await cold.get_state(stream_id))["stream_status"] == "failed"
+
+    _, followup = await case.plan(session, [
+        _tool_reply("read_compaction_history", {"line_offset": 1, "limit": 200}, "read-canonical-recovered"),
+        {"content": "原文读取恢复，继续同一会话。"},
+    ])
+    resumed = await _send(case, session, "读取原文后继续。")
+    assert resumed["thread_id"] == thread
+    await _job(case, str(resumed["job_id"]))
+    messages = case.request(followup)["messages"]
+    paired, = [message for message in messages if message["role"] == "tool" and message["tool_call_id"] == wire_id]
+    recovered, = [message for message in messages if message["role"] == "tool" and message["tool_call_id"] == "read-canonical-recovered"]
+    assert paired["content"] == failure and recovered["content"] == original_history
+    assert (root / "rollout.jsonl").read_bytes().startswith(original_bytes)
+    assert [_public_event_json(event) for event in await cold.list_events(
+        session_id=session, turn_stream_id=stream_id,
+    )] == failed_events
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold_saver:
+        stored, = cold_saver._storage.storage.read_items(session, thread, item_ids=(item.item_id,))
+        assert stored.to_dict() == item.to_dict()
+        assert cold_saver._storage.compactions.read_history(session, thread) == original_history
+    case.write_actual(f"canonical-history-read-failure-{log_fails}", {
+        "failed_job": job, "tool_result": item.to_dict(), "failed_events": failed_events,
+        "recovered": resumed, "diagnostic_sink_errors": len(sink_errors),
+        "sealed_requests": _sealed_proof(case, session, thread),
+    })
+
+
+async def test_background_canonical_source_failure_does_not_fail_turn_and_manual_request_recovers(
+    canonical_history, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path,
+) -> None:
+    case, session, thread, replies, turns = canonical_history
+    saver = case.container.checkpointer
+    storage, candidates = saver._storage.storage, saver._storage.compactions
+    original_events = await _events(case, session, thread, str(turns[-1]["turn_id"]))
+    original_bytes = storage.jsonl_path(session, thread_id=thread).read_bytes()
+    original_calls = case.call_count(session, thread)
+    missing = tmp_path / "canonical-original-missing.jsonl"
+    log_blocker = tmp_path / "background-log-secondary"
+    log_blocker.write_text("日志输出的原生故障", encoding="utf-8")
+    causes: list[OSError] = []
+    sink_errors: list[OSError] = []
+    consumed_refs = []
+    capture = caplog.handler.emit
+
+    def fail_source(*_args, **kwargs):
+        consumed_refs.extend(kwargs["refs"])
         try:
-            destination.write_text(record.getMessage(), encoding="utf-8")
+            return missing.open("rb")
         except OSError as error:
-            failures.append(error)
+            causes.append(error)
             raise
 
-    await case.plan(
-        session, [_tool_reply("compact_conversation", {}, "request-compaction")],
-        usage={"prompt_tokens": 100000, "completion_tokens": 16, "total_tokens": 100016},
-    )
-    with monkeypatch.context() as patch:
-        patch.setattr(caplog.handler, "emit", emit)
-        accepted = await _send(case, session, "归档必须成功保存后才能压缩。")
-        job = await _job(case, str(accepted["job_id"]), expected="failed")
-    response = await case.client.get(
-        f"/api/v1/sessions/{session}/turns/{accepted['turn_id']}/message-stream/events",
-        params={"thread_id": thread},
-    )
-    assert response.status_code == 200, response.text
-    assert response.headers["X-Request-ID"] == response.json()["request_id"]
-    events = response.json()["data"]
-    started, failed = [event for event in events
-                      if event["type"] in {"activity.started", "activity.failed"}
-                      and event["payload"]["kind"] == "context.compaction"]
-    assert started["type"] == "activity.started" and failed["type"] == "activity.failed"
-    assert started["payload"]["activity_id"] == failed["payload"]["activity_id"]
-    assert failed["thread_id"] == started["thread_id"] == thread
-    assert failed["payload"]["summary"] == "活动处理失败: phase=context.compaction, error=RuntimeError"
-    assert failed["payload"]["outcome"] == "outcome_unknown"
-    assert failed["payload"]["detail"] == {"phase": "failed"}
-    assert job["error_message"] == "缓存优先压缩无法保存被摘要的历史消息"
-    cause, = causes
-    assert type(cause) is RuntimeError and str(cause) == job["error_message"]
-    assert len(failures) == 1 and failures[0].errno == errno.ENOTDIR
-    assert any(str(failures[0]) in note for note in cause.__notes__)
-    assert blocker.read_text(encoding="utf-8") == "保留归档目录冲突原件"
-    assert "compaction-log-secret" not in json.dumps([job, events], ensure_ascii=False)
-    assert str(session_root) not in json.dumps([job, events], ensure_ascii=False)
-    stream_id = str(failed["turn_stream_id"])
-    stored = await case.container.message_stream_store.list_events(session_id=session, turn_stream_id=stream_id)
-    cold = MessageStreamStore(path_resolver=resolver)
-    await cold.open_existing(session_id=session, turn_id=str(accepted["turn_id"]), thread_id=thread, turn_stream_id=stream_id)
-    assert await cold.list_events(session_id=session, turn_stream_id=stream_id) == stored
-    cold_state = await cold.get_state(stream_id)
-    activity, = [item for item in cold_state["activities"] if item["kind"] == "context.compaction"]
-    assert activity["status"] == "failed" and activity["summary"] == failed["payload"]["summary"]
-    root = resolver.resolve_thread_node(session, thread) / "rollout"
-    original = (root / "rollout.jsonl").read_bytes()
-    assert case.sql(session, thread, "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind='compaction_summary'") == [(0,)]
+    def emit(record: logging.LogRecord) -> None:
+        capture(record)
+        if record.name != "app.core.failures" or "stage=background-task-execution" not in record.getMessage():
+            return
+        try:
+            (log_blocker / "service.log").write_text(record.getMessage(), encoding="utf-8")
+        except OSError as error:
+            sink_errors.append(error)
+            raise
 
-    # 只解除原生故障；新输入仍通过原消息入口，产品自行恢复压缩状态。
-    blocker.unlink()
-    await case.plan(session, [{"content": "archive-activity-recovery-summary"}, {"content": "archive-activity-recovered"}])
-    resumed = await _send(case, session, "修复归档位置后继续完成。")
-    await _job(case, str(resumed["job_id"]))
-    archive = blocker / thread / "history.md"
-    assert archive.is_file() and any(reply in archive.read_text(encoding="utf-8") for reply in replies)
-    assert case.sql(session, thread, "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind='compaction_summary'") == [(1,)]
-    assert (root / "rollout.jsonl").read_bytes().startswith(original)
-    assert await cold.list_events(session_id=session, turn_stream_id=stream_id) == stored
-    original_response = await case.client.get(
-        f"/api/v1/sessions/{session}/turns/{accepted['turn_id']}/message-stream/events",
-        params={"thread_id": thread},
-    )
-    assert original_response.status_code == 200 and original_response.json()["data"] == events
-    captures = {call: json.loads((case.model.artifacts / (call + ".json")).read_text()) for call in case.planned_calls}
-    proof = audit_sealed_requests(root / "index.sqlite", (session_root / "logs/llm_requests").glob("*.json"), captures)
-    case.write_actual("compaction-activity-failure", {
-        "failed_job": job, "failed_events": events, "recovered": resumed, "sealed_requests": proof,
+    with monkeypatch.context() as patch:
+        patch.setattr(storage, "read_ref_items", fail_source)
+        patch.setattr(caplog.handler, "emit", emit)
+        failed = await _compaction_task(case, session, thread, expected="failed")
+    cause, = causes
+    sink_error, = sink_errors
+    assert cause.errno == errno.ENOENT and cause.filename == str(missing)
+    assert sink_error.errno == errno.ENOTDIR and any(str(sink_error) in note for note in cause.__notes__)
+    assert consumed_refs and all((ref.session_id, ref.thread_id) == (session, thread) for ref in consumed_refs)
+    note = failed.metadata["status_note"]
+    assert "stage=background-task-execution" in note and "FileNotFoundError" in note
+    assert str(missing) in note and "diagnostic_sink_error=NotADirectoryError" in note
+    assert case.call_count(session, thread) == original_calls
+    assert case.sql(session, thread, "SELECT discarded_reason,applied_view_id FROM context_compaction_candidates WHERE task_id=?",
+                    (failed.task_id,)) == [("task-failed", None)]
+    assert candidates.read_history(session, thread) == ""
+    assert storage.jsonl_path(session, thread_id=thread).read_bytes() == original_bytes
+    assert await _events(case, session, thread, str(turns[-1]["turn_id"])) == original_events
+
+    await case.plan(session, [{"content": "后台原文不可读未改变正常对话。"}])
+    continued = await _send(case, session, "先继续当前对话，不重做后台摘要。")
+    await _job(case, str(continued["job_id"]))
+    continued_events = await _events(case, session, thread, str(continued["turn_id"]))
+    assert not [event for event in continued_events if event["type"] in {"activity.failed", "stream.failed"}]
+    assert case.sql(session, thread, "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind='compaction_summary'") == [(0,)]
+    await case.plan(session, [{"content": "已重新完整概括冻结历史。"}])
+    recovered = await _compaction_task(case, session, thread, expected="completed")
+    assert recovered.task_id != failed.task_id
+    await case.plan(session, [{"content": "新候选已采用，同会话恢复。"}])
+    adopted = await _send(case, session, "采用刚安排的完整候选后继续。")
+    await _job(case, str(adopted["job_id"]))
+    assert replies[0] in candidates.read_history(session, thread)
+    assert case.sql(session, thread, "SELECT COUNT(*) FROM context_compaction_candidates WHERE applied_view_id IS NOT NULL") == [(1,)]
+    resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
+    with closing(SessionControlStore(resolver.resolve_session_node(session) / "session-control.sqlite", read_only=True)) as control:
+        cold_task = control.get_background_task(failed.task_id)
+        assert cold_task.status == "failed" and cold_task.metadata["status_note"] == note
+    cold = MessageStreamStore(path_resolver=resolver)
+    stream_id = original_events[-1]["turn_stream_id"]
+    await cold.open_existing(session_id=session, thread_id=thread, turn_id=str(turns[-1]["turn_id"]), turn_stream_id=stream_id)
+    assert [_public_event_json(event) for event in await cold.list_events(
+        session_id=session, turn_stream_id=stream_id,
+    )] == original_events
+    assert (await cold.get_state(stream_id))["stream_status"] == "completed"
+    case.write_actual("background-canonical-source-failure", {
+        "failed_task": failed.to_dict(), "continued": continued, "adopted": adopted,
+        "original_events": original_events, "diagnostic_sink_errors": len(sink_errors),
+        "sealed_requests": _sealed_proof(case, session, thread),
     })

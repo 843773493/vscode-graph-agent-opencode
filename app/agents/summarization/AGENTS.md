@@ -1,38 +1,27 @@
 # 目录用途
 
-`app/agents/summarization/` 是缓存优先上下文压缩链路的垂直子包，按“常量/状态 → 事件投影 → 分区与事件构造 → 摘要生成辅助 → 响应解释 → 中间件 → 工具中间件 → 工厂”的单向依赖顺序组织模块。生产、测试及动态引用直接使用符号的实际 owner 模块；完整迁移调用方后删除旧 `app/agents/cache_preserving_summarization.py` 重导出层。
+`app/agents/summarization/` 只负责完整冻结范围的候选摘要生成与工具接入。自动准备、HTTP 和模型工具共用原后台任务与候选 owner；采用由 Saver 的 typed intent 原子完成。
 
-各模块职责：
-
-- `state.py`：策略常量、错误类型与 `CachePreservingPartition`，不导入 Agent 图或中间件。
-- `projection.py`：把 `_summarization_event` 投影为模型可见消息与状态边界（`apply_summarization_event` 及两个 cutoff 映射）。
-- `planning.py`：只读保留范围规划、缓存前缀切点候选、自动/HTTP/工具入口共用的安全压缩分区与事件构造。预览与执行共用容量、计数和尾部切点算法，分区只消费明确切点，不持有模型或中间件。
-- `retry.py`：摘要指令构造、媒体剥离、大型工具载荷压缩、overflow 重试中段切分、重试标记与摘要文本校验。
-- `responses.py`：把摘要 handler 的 `ModelResponse` 解释为摘要正文。
-- `middleware.py`：`CachePreservingSummarizationState`（LangGraph 状态 schema）与同步 `wrap_model_call` 与异步 `awrap_model_call`/`_awrap_model_call_impl` 两条对等 wrap 链路。
-- 压缩归档只从显式 SessionThread owner 经权威 catalog resolver 取得路径，再交内部工作区 backend；不依赖旧 `session-artifacts` 路由，不公开私有归档路径。
-- `preflight.py`：无 durable owner 装配下的压缩 preflight 显式失败端口。
-- `tool_middleware.py`：`compact_conversation` 工具的缓存优先压缩中间件。
-- `factory.py`：由 `BaseChatModel` + backend + preflight 端口构造中间件。
+- `generation.py`：按真实请求预算分块、完整有序覆盖、有限合并及绝对期限；通过共同派生模型入口发送，不修改主 view。
+- `retry.py`：冻结历史范围的摘要指令与纯文本结果校验；上游失败保留真实异常。
+- `state.py`：摘要业务错误类型。
+- `tool_middleware.py`：声明并绑定 `compact_conversation` 与 `read_compaction_history`，只登记原任务或读取当前精确 Thread 的 canonical 原文。
 
 # 可修改内容
 
-- 可以调整各模块内部实现与模块划分，并将调用方导入迁到实际 owner 模块。
-- 可以按业务子链路继续下沉拆分过大的模块（当前 `middleware.py` 最大）。
+- 可以维护冻结摘要计划、分块／合并、输出校验及工具参数。
+- 可以在既有 owner 边界内删除已迁齐的旧代码。
 
 # 不可修改内容
 
-- 不得新增旧路径重导出或兼容入口；删除旧入口前必须全仓核对并迁移直接、间接导入与测试字符串引用。
-- 不得合并同步 `wrap_model_call` 与异步 `awrap_model_call`/`_awrap_model_call_impl`：二者是对等实现，语义差异只登记不合并。
-- 不得改变 LangGraph 状态注解（如 `_force_cache_compaction: Annotated[NotRequired[bool], PrivateStateAttr]`）与 `serialized_name`、`state_schema` 等运行期契约。
-- 不在本目录直接读写 checkpoint 中的原消息，不做业务规则或会话状态计算。
+- 不得恢复 offset 事件投影、force／continuation 状态、独立阈值中间件或 history.md 新写链路。
+- 不得截断成后缀伪装完整摘要、剥除媒体后假报完整覆盖或执行摘要请求中的工具。
+- 不得复制主请求组装器、模型发送器、任务状态或 canonical 正文。
 
 # 规范
 
-- `tool_middleware.py` 的压缩／归档读取工具共用唯一参数声明；目录仅消费声明，执行工厂绑定原实现，不为 schema 构造模型或 CSM。
-- 压缩失败的活动摘要直接使用统一错误出口返回的有界脱敏原因，与原日志共用一次提取，不再用仅含类型的文字覆盖原因。
-- 保持从 `state` 出发的单向 import 图，禁止引入循环依赖；跨模块引用只在确实需要时引入具体符号。
-- 单据改动聚焦一条垂直子链路，自底向上改透并移除旧实现，不做外层包胶水式补丁。
-- 与 DeepAgents 私有实现类交互时保留其 `TODO` 说明，并集中在适配点内。
-- 修改本目录后运行 `ruff check`，并带进程外保护地跑对应单元测试（如 `tests/unit/agents/test_cache_preserving_summarization.py`）。
+- 同一 attempt 的所有派生调用共用固定绝对期限；首次上游失败终结后的唯一关联补 attempt 可用新前台期限，原任务累计32次预算不重置，冻结输入仍保留首次期限身份。只有完整覆盖才可发布 ready。
+- 原始范围和实际前序摘要输入分别冻结，来源版本、结果引用及稳定 Item 身份都必须核对。
+- 工具保持公开名称及行号分页参数；正文只从 canonical provenance 读取，受保护 reasoning 沿安全历史投影。
+- 修改后运行 Ruff 及受保护的 `tests/unit/agents/test_compaction_tools.py`、真实 `test_compaction_generation.py` 定向检查。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

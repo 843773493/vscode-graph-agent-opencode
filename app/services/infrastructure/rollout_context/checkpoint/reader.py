@@ -271,7 +271,7 @@ class RolloutContextReader:
         self,
         snapshot: RolloutReadSnapshot,
         chain: ContextChain,
-        turn_ids: Iterable[str], *, activity_before: tuple[int, int] | None = None,
+        turn_ids: Iterable[str], *, activity_before: int | None = None,
         activity_limit: int | None = None, item_ids: tuple[str, ...] | None = None,
         outline: bool = False, include: frozenset[str] | None = None,
     ) -> dict[str, dict[str, object]]:

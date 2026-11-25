@@ -155,6 +155,35 @@ class BackgroundWorkMixin:
                 "SELECT * FROM background_tasks WHERE task_id=?", (task_id,),
             ).fetchone())
 
+    def retry_background_task(self, task_id: str, *, expected_token: int, deadline: datetime) -> BackgroundTaskHandle:
+        """显式前台补尝试复用原 task；终态 lease 保持不可逆，只新建一次 retry lease。"""
+        with self._write_transaction() as connection:
+            row = connection.execute("SELECT * FROM background_tasks WHERE task_id=?", (task_id,)).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            if row["status"] != "failed" or row["fencing_token"] != expected_token or row["external_effect_pending"]:
+                raise RuntimeError(f"后台补尝试 CAS 失败: {task_id}, token={expected_token}")
+            previous = self.get_lease(row["lease_id"])
+            if previous.operation_identity != task_id or previous.state != "failed":
+                raise RuntimeError(f"后台任务已使用补尝试或原 lease 未结算: {task_id}")
+            lease = self.create_or_get_lease(
+                operation_kind="runtime_owner", operation_identity=f"{task_id}:foreground-retry:1",
+                preimage_hash=row["preimage_hash"], recovery_ref=f"background_task:{task_id}",
+                expected_generation=previous.captured_lifecycle_generation, transaction_connection=connection,
+            )
+            if lease.state != "active":
+                raise RuntimeError(f"后台任务唯一补尝试已经结算: {task_id}")
+            changed = connection.execute(
+                "UPDATE background_tasks SET status='pending',lease_id=?,ended_at=NULL,"
+                "fencing_token=fencing_token+1,runtime_generation=0,"
+                "metadata_json=json_set(json_remove(metadata_json,'$.status_note'),'$.deadline',?) "
+                "WHERE task_id=? AND status='failed' AND fencing_token=?",
+                (lease.lease_id, deadline.isoformat(), task_id, expected_token),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError(f"后台补尝试 CAS 失败: {task_id}, token={expected_token}")
+            return background_task_from_row(connection.execute("SELECT * FROM background_tasks WHERE task_id=?", (task_id,)).fetchone())
+
     def mark_background_external_effect(self, task_id: str, *, token: int) -> None:
         with self._write_transaction() as connection:
             updated = connection.execute(

@@ -50,12 +50,13 @@ class MessageStreamFinalizationMixin:
             # 参数片段只在 Runtime 累计；封存时一次交给原 canonical draft。
             for call_id in self._tool_call_order:
                 if self._tool_call_model_call_ids.get(call_id) == model_call_id:
-                    arguments, _ = self._read_tool_call_arguments(call_id)
+                    arguments, arguments_complete = self._read_tool_call_arguments(call_id)
                     accumulator.accept({
                         "block_id": call_id,
                         "block_index": self._tool_call_indexes_by_id[call_id],
                         "carrier_type": "tool_call",
-                        "args": arguments,
+                        "args": arguments if arguments_complete else self._tool_call_arguments[call_id].getvalue(),
+                        "arguments_complete": arguments_complete,
                     })
             status = (
                 CanonicalItemStatus.PARTIAL.value
@@ -243,13 +244,13 @@ class MessageStreamFinalizationMixin:
                     tool_invocation_id=tool_invocation_id,
                 )
             self._completed_tool_call_ids.add(tool_call_id)
-        for tool_execution_id, (tool_call_id, tool_name) in tuple(
+        for tool_execution_id, execution in tuple(
             self._active_tool_executions.items()
         ):
             await self.complete_tool(
                 tool_execution_id=tool_execution_id,
-                tool_call_id=tool_call_id,
-                tool_name=tool_name,
+                tool_call_id=execution.tool_call_id,
+                tool_name=execution.tool_name,
                 status="completed",
                 outcome="unknown",
                 result="",

@@ -26,7 +26,10 @@ async function inspectTurn(thread, turnId) {
   await expect(turn.getByText(final, { exact: true })).toBeVisible({ timeout: 45_000 });
   const expand = turn.locator(".chat-turn-activity > .chat-thinking-toggle");
   await expect(expand).toBeVisible();
-  await expand.click();
+  // 正文可先于终态到达；等真实终态后再展开，避免误点仍自动展开的live过程。
+  await expect(expand.locator(":scope > .codicon-check")).toBeVisible();
+  if (await expand.getAttribute("aria-expanded") !== "true") await expand.click();
+  await expect(expand).toHaveAttribute("aria-expanded", "true");
   await expect(turn.locator(".chat-activity-group").first()).toBeVisible();
   for (const group of await turn.locator('.chat-activity-group > button').all()) {
     if (await group.getAttribute('aria-expanded') === 'false') await group.click();
@@ -47,44 +50,54 @@ async function inspectTurn(thread, turnId) {
   const [detail] = history.body.data.items;
   assert.equal(detail.session_id, owner.sessionId);
   assert.equal(detail.turn_id, turnId);
-  const parts = detail.response_parts.filter(part => ["tool_call", "tool_result"].includes(part.kind));
-  const rejected = [0, 1, 2].map(index => `${modelCalls[0]}:tool-call:rejected-${index}`);
-  const corrected = `${modelCalls[1]}:tool-call:corrected-0`;
-  assert.deepEqual(parts.map(part => [part.kind, part.tool_call_id]), [
-    ...rejected.map(id => ["tool_call", id]), ...rejected.map(id => ["tool_result", id]),
-    ["tool_call", corrected], ["tool_result", corrected],
+  const parts = detail.response_items.filter(part => ["tool_call", "tool_result"].includes(part.kind));
+  // request／runtime载体保留各自原ID；调用身份由ModelCall及Provider原ID共同确定。
+  const callIdentity = part => {
+    const model = part.source.model_call_id;
+    const prefix = `${model}:tool-call:`;
+    const id = part.tool_call_id;
+    assert(typeof id === "string" && model);
+    return [part.kind, model, id.startsWith(prefix) ? id.slice(prefix.length) : id];
+  };
+  assert.deepEqual(parts.map(callIdentity), [
+    ...["tool_call", "tool_result"].flatMap(kind => [0, 1, 2].map(index => [kind, modelCalls[0], `rejected-${index}`])),
+    ["tool_call", modelCalls[1], "corrected-0"], ["tool_result", modelCalls[1], "corrected-0"],
   ]);
   const rows = turn.locator(".chat-tool-row");
-  // 并发调用与结果保持权威位置；只有最后一组相邻调用/结果合成一张卡片。
-  await expect(rows).toHaveCount(7);
-  await expect(turn.locator(".chat-tool-row.is-failed")).toHaveCount(6);
+  // 每个结果按精确ModelCall／调用身份合入原声明行，保留独立Item来源。
+  await expect(rows).toHaveCount(4);
+  await expect(turn.locator(".chat-tool-row.is-failed")).toHaveCount(3);
   await expect(turn.locator(".chat-tool-row.is-complete")).toHaveCount(1);
   const results = [];
   const sources = [];
-  for (let index = 0; index < 7; index++) {
+  const callParts = parts.filter(part => part.kind === "tool_call");
+  for (let index = 0; index < 4; index++) {
     const row = rows.nth(index);
     const references = JSON.parse(await row.getAttribute("data-response-sources"));
+    assert.deepEqual(references.map(callIdentity), [
+      callIdentity(callParts[index]), ["tool_result", ...callIdentity(callParts[index]).slice(1)],
+    ]);
     sources.push(...references);
     const summary = row.locator(".chat-tool-summary");
     if (await summary.getAttribute("aria-expanded") !== "true") await summary.click();
-    if (index < 3) {
-      const input = row.locator(".chat-tool-details pre code").first();
-      await expect(input).toBeVisible();
-      // 原调用参数逐字保留其目标；错误输出与原生路径输入分别验收。
-      assert.deepEqual(JSON.parse(await input.innerText()), JSON.parse(parts[index].arguments));
-      continue;
-    }
+    const input = row.locator(".chat-tool-details pre code").first();
+    await expect(input).toBeVisible();
+    // 原调用参数逐字保留其目标；错误输出与原生路径输入分别验收。
+    assert.deepEqual(JSON.parse(await input.innerText()), JSON.parse(callParts[index].arguments));
     const output = row.locator(".chat-tool-details pre code").last();
     await expect(output).toBeVisible();
-    if (index < 6) {
+    if (index < 3) {
       await expect(output).toHaveText(safeError);
       results.push((await output.innerText()).trim());
     } else {
       assert.equal(JSON.parse(await output.innerText()).scope, "workspace");
     }
   }
-  assert.deepEqual(sources.map(({ part_id, kind, source }) => ({ part_id, kind, source })), parts.map(({ part_id, kind, source }) => ({ part_id, kind, source })));
-  return { failed: 6, completed: 1, results, partIds: sources.map(part => part.part_id) };
+  assert(sources.every(part => typeof part.id === "string" && part.id === part.source.item_id));
+  const byId = (left, right) => left.id.localeCompare(right.id);
+  assert.deepEqual(sources.map(({ id, kind, source }) => ({ id, kind, source })).sort(byId),
+    parts.map(({ id, kind, source }) => ({ id, kind, source })).sort(byId));
+  return { failed: 3, completed: 1, results, itemIds: sources.map(part => part.id) };
 }
 
 try {

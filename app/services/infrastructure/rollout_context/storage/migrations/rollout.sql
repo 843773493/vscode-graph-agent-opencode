@@ -7,7 +7,7 @@
             last_control_sequence INTEGER NOT NULL, committed_jsonl_offset INTEGER NOT NULL,
             active_branch_id TEXT, projection_epoch INTEGER NOT NULL,
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-            rollout_format_version INTEGER NOT NULL DEFAULT 2,
+            rollout_format_version INTEGER NOT NULL DEFAULT 3,
             last_item_sequence INTEGER NOT NULL DEFAULT 0,
             history_view_revision INTEGER NOT NULL DEFAULT 0,
             source_overlay_epoch INTEGER NOT NULL DEFAULT 0
@@ -94,19 +94,17 @@
             , PRIMARY KEY(tool_call_id, assistant_message_sequence)
         );
         CREATE TABLE IF NOT EXISTS reasoning_blocks (
-            message_sequence INTEGER NOT NULL,
-            content_block_index INTEGER NOT NULL,
-            item_index INTEGER NOT NULL DEFAULT 0,
+            item_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
             carrier_type TEXT NOT NULL,
-            item_id TEXT,
             reasoning_text TEXT,
             summary_text TEXT,
+            reasoning_truncated INTEGER NOT NULL DEFAULT 0,
+            summary_truncated INTEGER NOT NULL DEFAULT 0,
             signature_present INTEGER NOT NULL DEFAULT 0,
             encrypted_length INTEGER,
             encrypted_hash TEXT,
-            provider_id TEXT,
-            projection_version INTEGER NOT NULL,
-            PRIMARY KEY(message_sequence, content_block_index, item_index)
+            projection_version INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS checkpoints (
             checkpoint_id TEXT PRIMARY KEY, checkpoint_ns TEXT NOT NULL, commit_id INTEGER NOT NULL,
@@ -169,7 +167,6 @@
             jsonl_offset INTEGER NOT NULL,
             jsonl_length INTEGER NOT NULL,
             commit_id INTEGER,
-            operation_anchor_capable INTEGER NOT NULL DEFAULT 0,
             searchable INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             tool_call_id TEXT,
@@ -226,35 +223,6 @@
                     AND canonical_relation_ordinal >= 0)),
             UNIQUE(canonical_item_id, canonical_relation_ordinal),
             UNIQUE(relation, source_ref, target_ref, attempt)
-        );
-        CREATE TABLE IF NOT EXISTS item_parts (
-            item_id TEXT NOT NULL,
-            part_id TEXT NOT NULL,
-            part_ordinal INTEGER NOT NULL,
-            part_semantic_kind TEXT NOT NULL,
-            content_prefix_hash TEXT,
-            content_hash TEXT NOT NULL,
-            locator_json TEXT NOT NULL,
-            line_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY(item_id, part_id),
-            UNIQUE(item_id, part_ordinal)
-        );
-        CREATE TABLE IF NOT EXISTS operation_anchors (
-            anchor_id TEXT PRIMARY KEY,
-            anchor_kind TEXT NOT NULL,
-            item_id TEXT NOT NULL,
-            part_id TEXT,
-            mode TEXT NOT NULL CHECK(mode IN ('before','inclusive')),
-            view_id TEXT,
-            branch_id TEXT,
-            recovery_capability TEXT NOT NULL,
-            fragment_identity TEXT,
-            fragment_length INTEGER,
-            fragment_hash TEXT,
-            fragment_layout_json TEXT,
-            created_at TEXT NOT NULL,
-            UNIQUE(item_id, part_id, mode, view_id, branch_id)
         );
         CREATE TABLE IF NOT EXISTS turn_acceptances (
             accepted_ingress_id TEXT PRIMARY KEY,
@@ -493,18 +461,6 @@
                 AND json_extract(detail_ref, '$.assembly_id') = assembly_id
                 AND json_extract(detail_ref, '$.detail_id') = detail_id)
         );
-        CREATE TABLE IF NOT EXISTS legacy_migration_reports (
-            migration_id TEXT PRIMARY KEY,
-            source_session_id TEXT NOT NULL,
-            target_session_id TEXT,
-            source_format_version INTEGER NOT NULL,
-            target_format_version INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            report_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            completed_at TEXT,
-            error_message TEXT
-        );
         CREATE INDEX IF NOT EXISTS turns_ordinal_index ON turns(turn_ordinal);
         CREATE INDEX IF NOT EXISTS context_view_turns_ordinal_index ON context_view_turns(view_id, logical_turn_ordinal);
         CREATE INDEX IF NOT EXISTS context_view_turns_turn_index ON context_view_turns(turn_id, view_id);
@@ -519,11 +475,9 @@
         CREATE INDEX IF NOT EXISTS item_catalog_semantic_index ON item_catalog(semantic_kind, item_sequence);
         CREATE INDEX IF NOT EXISTS item_catalog_status_index ON item_catalog(status, item_sequence);
         CREATE INDEX IF NOT EXISTS item_catalog_commit_index ON item_catalog(commit_id, item_sequence);
-        CREATE INDEX IF NOT EXISTS item_catalog_operation_index ON item_catalog(operation_anchor_capable, item_sequence);
         CREATE INDEX IF NOT EXISTS item_projections_turn_index ON item_projections(turn_id, item_sequence);
         CREATE INDEX IF NOT EXISTS item_projections_semantic_index ON item_projections(semantic_kind, item_sequence);
         CREATE INDEX IF NOT EXISTS item_projections_status_index ON item_projections(status, item_sequence);
-        CREATE INDEX IF NOT EXISTS item_parts_hash_index ON item_parts(content_hash);
         CREATE INDEX IF NOT EXISTS executions_turn_index ON executions(turn_id, attempt);
         CREATE INDEX IF NOT EXISTS model_calls_execution_index ON model_calls(execution_id, attempt);
         CREATE INDEX IF NOT EXISTS executions_owner_index ON executions(session_id, thread_id, turn_id, attempt);

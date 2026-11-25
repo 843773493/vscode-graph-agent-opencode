@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import { useEffect, useState } from "react";
 import { previewSessionGeneration } from "../../../api/session/sessionGenerations";
@@ -67,7 +68,7 @@ export default function GenerationActionEditor({ apiPort, target, name, value, o
     <label>{t("tasks.generation.titleTemplate")}<input aria-label={t("tasks.generation.titleTemplate")} required value={value.title_template} onChange={(event) => update({ title_template: event.target.value })} /></label>
     <label>{t("tasks.generation.pathTemplate")}<input aria-label={t("tasks.generation.pathTemplate")} value={value.path_template.join("/")} onChange={(event) => update({ path_template: event.target.value.split("/") })} /></label>
     <button type="button" disabled={previewing} onClick={() => void previewName()}>{previewing ? t("tasks.generation.previewing") : t("tasks.generation.preview")}</button>
-    {preview ? <p role="status">{preview}</p> : null}{error ? <div role="alert">{error}</div> : null}
+    {preview ? <p role="status">{preview}</p> : null}{error ? <div className="failure-summary" role="alert">{failureSummary(error)}</div> : null}
     <details><summary>{t("tasks.generation.options")}</summary>
       <label>{t("tasks.generation.contextSource")}<select aria-label={t("tasks.generation.contextSource")} value={source.kind} onChange={(event) => update({ context_source: event.target.value === "fresh" ? { kind: "fresh" } : { kind: event.target.value, workspace_id: placement.workspace_id, session_id: "", thread_id: "" } })}><option value="fresh">{t("tasks.generation.fresh")}</option><option value="live_session">{t("tasks.generation.liveSession")}</option></select></label>
       {source.kind === "live_session" ? <>

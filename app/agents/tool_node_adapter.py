@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
 from typing import Any, Literal
 
+from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolCall, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.prebuilt.tool_node import ToolCallRequest, ToolNode, ToolRuntime
@@ -14,7 +16,49 @@ from app.agents.tool_confirmation_middleware import (
     approved_tool_call,
     complete_tool_approval_results,
 )
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.core.execution_pause import execution_pause_boundary
+from app.core.shielded_cleanup import run_sync_shielded
+
+
+class DerivedToolPolicyMiddleware(AgentMiddleware):
+    """派生只收窄实际调用权限，模型可见 schema 仍取冻结的来源。"""
+
+    def __init__(self, allowed_tool_ids: tuple[str, ...], permit: Callable[[str], bool] | None = None) -> None:
+        self._allowed = frozenset(allowed_tool_ids)
+        self._permit = permit
+
+    def _denial(self, request: ToolCallRequest) -> ToolMessage | None:
+        call = approved_tool_call(request.state, request.tool_call)
+        target = call["name"]
+        if target == EXTENSION_TOOL_INVOKER_NAME:
+            arguments = call.get("args")
+            target = arguments.get("tool_name") if isinstance(arguments, Mapping) else None
+        if (not isinstance(target, str) or target not in self._allowed
+                or self._permit is not None and not self._permit(target)):
+            return ToolMessage(
+                content=f"derived-tool-denied: 本次派生未授权或当前策略已撤销工具 {target!r}",
+                name=request.tool_call["name"], tool_call_id=request.tool_call["id"], status="error",
+            )
+        return None
+
+    @staticmethod
+    def _result(result: ToolMessage | Command) -> ToolMessage:
+        if not isinstance(result, ToolMessage):
+            raise TypeError("derived-tool-command-unsupported: 派生工具不得修改 Graph 状态；已发生的操作仍由原 owner 保存")
+        return result
+
+    def wrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command],
+    ) -> ToolMessage:
+        denied = self._denial(request)
+        return denied if denied is not None else self._result(handler(request))
+
+    async def awrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
+    ) -> ToolMessage:
+        denied = await run_sync_shielded(self._denial, request)
+        return denied if denied is not None else self._result(await handler(request))
 
 
 class AgentToolNode(ToolNode):

@@ -46,7 +46,6 @@ from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
     resolve_bundled_skill_groups,
 )
-from app.agents.summarization.projection import apply_summarization_event
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.api import message_stream as message_stream_api
 from app.api import messages as messages_api
@@ -66,7 +65,10 @@ from app.core.execution_admission_context import (
     execution_admission_scope,
     require_current_execution_admission,
 )
-from app.core.model_delta_context import AgentRunLifecycleCallbackHandler
+from app.core.model_delta_context import (
+    AgentRunLifecycleCallbackHandler,
+    AgentToolExecutionCallbackHandler,
+)
 from app.core.path_utils import get_boxteam_home, workspace_context
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
@@ -166,9 +168,11 @@ def runner_case(
     config = json.loads(render_test_workspace_config(
         (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
     ))
-    for provider in config["llm"]["providers"].values():
-        if "auth" not in provider["defaults"]:
-            provider["defaults"]["api_key"] = ""
+    for provider in config["settings"]["workspace"]["llm"]["providers"].values():
+        profile_name = provider["config_ref"].removeprefix("#/profiles/")
+        options = config["profiles"][profile_name]["settings"]["model_options"]
+        if "auth" not in options:
+            options["api_key"] = ""
     config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
@@ -306,6 +310,7 @@ async def runtime_case(
             api_key="runtime-fixture-key",
             api_base="http://127.0.0.1:1/v1",
             custom_llm_provider="openai",
+            proxy_routes=provider["proxy_routes"],
             streaming=True,
             max_retries=0,
             admission_observer=case.model_admissions.append,
@@ -579,11 +584,9 @@ async def test_real_tool_callback_rejection_preserves_original_error_without_att
     producer_tasks: set[asyncio.Task[object]] = set()
     callback_tasks: list[asyncio.Task[object]] = []
     runtimes: list[MessageStreamRuntime] = []
-    middleware_failed = asyncio.Event()
     create_agent = agent_factory.create_model_call_agent
-    on_tool_start = AgentRunLifecycleCallbackHandler.on_tool_start
+    on_tool_start = AgentToolExecutionCallbackHandler.on_tool_start
     wrap_tool_call = ToolInvocationContextMiddleware.awrap_tool_call
-    tool_call_for_callback = MessageStreamRuntime.tool_call_for_callback
     process = stream_retry.process_agent_event_stream
 
     def record_agent(*args, **kwargs):
@@ -599,9 +602,9 @@ async def test_real_tool_callback_rejection_preserves_original_error_without_att
         selected.coroutine = record_body
         return create_agent(*args, **kwargs)
 
-    async def reject_claimed_callback(handler, *args, **kwargs):
+    def reject_claimed_callback(handler, *args, **kwargs):
         if kwargs.get("tool_call_id") != provider_id:
-            return await on_tool_start(handler, *args, **kwargs)
+            return on_tool_start(handler, *args, **kwargs)
         task = asyncio.current_task()
         assert task is not None
         callback_tasks.append(task)
@@ -617,7 +620,7 @@ async def test_real_tool_callback_rejection_preserves_original_error_without_att
         assert call_id == f"{model_call_id}:tool-call:{provider_id}"
         assert runtime._active_tool_executions == runtime._pending_tool_starts == {}
         try:
-            return await on_tool_start(handler, *args, **kwargs)
+            return on_tool_start(handler, *args, **kwargs)
         except BaseException as error:
             callback_errors.append(error)
             raise
@@ -627,15 +630,7 @@ async def test_real_tool_callback_rejection_preserves_original_error_without_att
             return await wrap_tool_call(middleware, request, handler)
         except BaseException as error:
             middleware_errors.append(error)
-            middleware_failed.set()
             raise
-
-    async def read_rejected_binding(runtime, callback_run_id):
-        # 固定两条并发链的消费顺序，证明失败收口能在外层 close 之前结束。
-        # 若它仍等待不存在的 start，这里会超时，不能被 producer 取消掩盖。
-        await asyncio.wait_for(middleware_failed.wait(), 2)
-        assert runtime._pending_tool_starts == {}
-        return await tool_call_for_callback(runtime, callback_run_id)
 
     async def record_processor(**kwargs):
         runtimes.append(kwargs["message_stream_runtime"])
@@ -662,9 +657,8 @@ async def test_real_tool_callback_rejection_preserves_original_error_without_att
         ]
 
     monkeypatch.setattr(agent_factory, "create_model_call_agent", record_agent)
-    monkeypatch.setattr(AgentRunLifecycleCallbackHandler, "on_tool_start", reject_claimed_callback)
+    monkeypatch.setattr(AgentToolExecutionCallbackHandler, "on_tool_start", reject_claimed_callback)
     monkeypatch.setattr(ToolInvocationContextMiddleware, "awrap_tool_call", record_middleware)
-    monkeypatch.setattr(MessageStreamRuntime, "tool_call_for_callback", read_rejected_binding)
     monkeypatch.setattr(stream_retry, "process_agent_event_stream", record_processor)
     case.response_chunks = model_reply
     job = await _start_job(case.runner, "user", session_id, thread_id)
@@ -1213,7 +1207,7 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
     def model_reply(_payload):
         nonlocal history_count, candidate_count, compaction_calls
         dispatch = case.model_dispatches[-1]
-        if dispatch.snapshot.selection_policy == "summary_candidate":
+        if dispatch.snapshot.selection_policy == "derived_request":
             candidate_count += 1
             if candidate_count % 2 == 1:
                 return text_chunks("候选私有思考，不应进入用户正文。", reasoning=True)
@@ -1248,7 +1242,7 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
     phase = "compact"
     admission = await _complete_job(case, session_id, thread_id, timeout_seconds=30)
     assert all(observed == admission for observed in case.model_admissions[5:])
-    candidates = [dispatch for dispatch in case.model_dispatches if dispatch.snapshot.selection_policy == "summary_candidate"]
+    candidates = [dispatch for dispatch in case.model_dispatches if dispatch.snapshot.selection_policy == "derived_request"]
     assert len(candidates) == 2 and candidate_count == 2 and compaction_calls == 2
     assert len({dispatch.snapshot.assembly_id for dispatch in candidates}) == 2
     assert len({dispatch.callback_model_call_id for dispatch in candidates}) == 2
@@ -1257,7 +1251,7 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
     assert final.seal_binding.prefix.consumed_transition is not None
     assert all(dispatch.snapshot.seal_binding.prefix.consumed_transition is None for dispatch in candidates)
     candidate_requests = [payload for payload, dispatch in zip(case.model_requests, case.model_dispatches, strict=True)
-                          if dispatch.snapshot.selection_policy == "summary_candidate"]
+                          if dispatch.snapshot.selection_policy == "derived_request"]
     assert candidate_requests[0]["tools"] and not candidate_requests[1].get("tools")
     assert all("历史段1：" in json.dumps(payload["messages"], ensure_ascii=False) for payload in candidate_requests)
     assert all("历史段5：" not in json.dumps(payload["messages"], ensure_ascii=False) for payload in candidate_requests)
@@ -1306,20 +1300,41 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
         checkpoint = await cold.aget_tuple(build_checkpoint_config(thread_id))
         restored_messages = await acheckpoint_messages(cold, checkpoint)
     values = {**checkpoint.checkpoint["channel_values"], "messages": restored_messages}
-    event = values["_summarization_event"]
-    prefix_ids = {message.id for message in event["cache_prefix_messages"]}
-    compacted_messages = [message for message in values["messages"][:event["cutoff_index"]] if message.id not in prefix_ids]
-    compacted_ids = {message.id for message in compacted_messages}
-    compacted_markers = {
-        f"历史段{index}：" for index in range(1, 6)
-        if any(f"历史段{index}：" in str(message.content) for message in compacted_messages)
-    }
-    assert compacted_ids and compacted_markers
-    effective = apply_summarization_event(values["messages"], event)
-    assert sum(message.id == summaries[0].projection_identity.projection_message_id for message in effective) == 1
-    assert prefix_ids <= {message.id for message in effective}
-    assert compacted_ids.isdisjoint(message.id for message in effective)
-    assert all(marker not in str(message.content) for message in effective for marker in compacted_markers)
+    with cold._storage.storage.read_connection(session_id, thread_id) as connection:
+        applied_candidate_id, = connection.execute(
+            "SELECT candidate_id FROM context_compaction_candidates WHERE applied_view_id IS NOT NULL",
+        ).fetchone()
+    applied_frozen = cold._storage.compactions.read(session_id, thread_id, applied_candidate_id)
+    applied_result = cold._storage.compactions.read_result(session_id, thread_id, applied_candidate_id)
+    assert applied_result is not None and applied_result.text in summaries[0].payload["summary"]
+    assert tuple(ref.ref_id for ref in applied_result.coverage) == tuple(ref.ref_id for ref in applied_frozen.refs)
+    applied_source_items = cold.read_canonical_items(
+        session_id, thread_id, item_ids=tuple(ref.ref_id for ref in applied_frozen.refs),
+    )
+    applied_source_text = json.dumps([item.payload for item in applied_source_items], ensure_ascii=False)
+    compacted_markers = {f"历史段{index}：" for index in range(1, 6)
+                         if f"历史段{index}：" in applied_source_text}
+    assert compacted_markers
+    with cold._storage.storage.read_connection(session_id, thread_id) as connection:
+        active_view = connection.execute(
+            "SELECT branch.head_view_id FROM checkpoint_namespace_state namespace "
+            "JOIN branches branch ON branch.branch_id=namespace.active_branch_id "
+            "WHERE namespace.checkpoint_ns='' AND branch.status='active'",
+        ).fetchone()[0]
+        active_anchors = tuple(row[0] for row in connection.execute(
+            "SELECT item_id FROM context_view_items WHERE view_id=? AND visible=1 AND context_selected=1 "
+            "AND source_kind='canonical' ORDER BY context_ordinal", (active_view,),
+        ))
+    assert set(active_anchors).isdisjoint(ref.ref_id for ref in applied_frozen.refs)
+    assert summaries[0].item_id in active_anchors
+    compacted_context = await case.runner.container.message_service.get_agent_context_state(session_id, thread_id)
+    assert compacted_context["compacted"] is True
+    assert compacted_context["raw_message_count"] == cold.raw_message_count(
+        session_id, thread_id, item_ids=active_anchors,
+    )
+    assert compacted_context["raw_message_count"] > len(active_anchors)
+    assert all(marker not in json.dumps(case.model_requests[-1]["messages"], ensure_ascii=False)
+               for marker in compacted_markers)
     root_url = f"/api/v1/sessions/{session_id}/turns/{admission.turn_id}/message-stream"
     response = await cold_message_stream_client.get(root_url + "/snapshot", params={"thread_id": thread_id})
     assert response.status_code == 200, response.text
@@ -1351,7 +1366,7 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
     assert json.dumps(case.model_requests[-1]["messages"], ensure_ascii=False).count(first_summary_wire) == 1
     assert all(marker not in json.dumps(case.model_requests[-1]["messages"], ensure_ascii=False) for marker in compacted_markers)
 
-    # 旧 event 仍在的同一 thread 再积累真实历史，再由新 Turn 发起第二次压缩。
+    # 在同一 canonical history 上继续追加，再由新 Turn 发起第二次压缩。
     phase = "history"
     history_start = len(case.model_admissions)
     dispatch_start = len(case.model_dispatches)
@@ -1369,8 +1384,7 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
     with session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id):
         before_second = await cold.aget_tuple(build_checkpoint_config(thread_id))
         before_second_messages = await acheckpoint_messages(cold, before_second)
-    assert before_second.checkpoint["channel_values"]["_summarization_event"] == event
-    assert before_second_messages[:event["cutoff_index"]] == values["messages"][:event["cutoff_index"]]
+    assert before_second_messages[:len(values["messages"])] == values["messages"]
     phase = "compact"
     summary_round = 2
     compaction_calls = 0
@@ -1379,7 +1393,7 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
     assert second_admission.turn_id != admission.turn_id and second_admission.execution_id != admission.execution_id
     assert second_admission.job_id != admission.job_id
     assert all(observed == second_admission for observed in case.model_admissions[second_start:])
-    all_candidates = [dispatch for dispatch in case.model_dispatches if dispatch.snapshot.selection_policy == "summary_candidate"]
+    all_candidates = [dispatch for dispatch in case.model_dispatches if dispatch.snapshot.selection_policy == "derived_request"]
     assert len(all_candidates) == 4 and candidate_count == 4 and compaction_calls == 2
     assert len({dispatch.snapshot.assembly_id for dispatch in all_candidates}) == 4
     assert len({dispatch.callback_model_call_id for dispatch in all_candidates}) == 4
@@ -1406,7 +1420,7 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
     assert json.dumps(case.model_requests[-1]["messages"], ensure_ascii=False).count(latest_summary_wire) == 1
     assert latest_summary.projection_identity.projection_message_id != summaries[0].projection_identity.projection_message_id
     trigger_snapshots = [next(dispatch.snapshot for dispatch in case.model_dispatches
-                              if dispatch.snapshot.turn_id == owner.turn_id and dispatch.snapshot.selection_policy != "summary_candidate")
+                              if dispatch.snapshot.turn_id == owner.turn_id and dispatch.snapshot.selection_policy != "derived_request")
                          for owner in (admission, second_admission)]
     with saver._storage.storage._connect(thread_id, session_id=session_id, read_only=True) as connection:
         transitions = connection.execute(
@@ -1458,28 +1472,52 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
         assert (await recovered.aget_tuple(checkpoint.config)).checkpoint == checkpoint.checkpoint
         repeated_messages = await acheckpoint_messages(recovered, repeated_checkpoint)
     repeated_values = {**repeated_checkpoint.checkpoint["channel_values"], "messages": repeated_messages}
-    repeated_event = repeated_values["_summarization_event"]
-    assert repeated_event["summary_message"].content == latest_summary.payload["summary"]
-    assert repeated_event["cutoff_index"] > event["cutoff_index"]
-    assert repeated_values["messages"][repeated_event["cutoff_index"] - 1].id == repeated_event["cutoff_message_id"]
-    assert repeated_event["cache_prefix_messages"] == event["cache_prefix_messages"]
-    repeated_middle = [message for message in repeated_values["messages"][:repeated_event["cutoff_index"]]
-                       if message.id not in prefix_ids]
-    repeated_ids = {message.id for message in repeated_middle}
-    assert compacted_ids < repeated_ids
+    with recovered._storage.storage.read_connection(session_id, thread_id) as connection:
+        second_candidate_id, = connection.execute(
+            "SELECT candidate_id FROM context_compaction_candidates WHERE applied_view_id IS NOT NULL "
+            "ORDER BY rowid DESC LIMIT 1",
+        ).fetchone()
+    second_frozen = recovered._storage.compactions.read(session_id, thread_id, second_candidate_id)
+    second_result = recovered._storage.compactions.read_result(session_id, thread_id, second_candidate_id)
+    assert second_result is not None and second_result.text in latest_summary.payload["summary"]
+    assert second_result.coverage == second_frozen.refs
+    second_source_items = recovered.read_canonical_items(
+        session_id, thread_id, item_ids=tuple(ref.ref_id for ref in second_frozen.refs),
+    )
+    second_source_text = json.dumps([item.payload for item in second_source_items], ensure_ascii=False)
     repeated_markers = {f"历史段{index}：" for index in range(1, 11)
-                        if any(f"历史段{index}：" in str(message.content) for message in repeated_middle)}
-    assert compacted_markers < repeated_markers
+                        if f"历史段{index}：" in second_source_text}
+    assert repeated_markers
+    with recovered._storage.storage.read_connection(session_id, thread_id) as connection:
+        active_view = connection.execute(
+            "SELECT branch.head_view_id FROM checkpoint_namespace_state namespace "
+            "JOIN branches branch ON branch.branch_id=namespace.active_branch_id "
+            "WHERE namespace.checkpoint_ns='' AND branch.status='active'",
+        ).fetchone()[0]
+        active_anchors = tuple(row[0] for row in connection.execute(
+            "SELECT item_id FROM context_view_items WHERE view_id=? AND visible=1 AND context_selected=1 "
+            "AND source_kind='canonical' ORDER BY context_ordinal", (active_view,),
+        ))
+    assert set(active_anchors).isdisjoint(ref.ref_id for ref in second_frozen.refs)
+    assert latest_summary.item_id in active_anchors
+    assert summaries[0].item_id not in active_anchors
+    latest_context = await case.runner.container.message_service.get_agent_context_state(session_id, thread_id)
+    assert latest_context["compacted"] is True
+    assert latest_context["raw_message_count"] == recovered.raw_message_count(
+        session_id, thread_id, item_ids=active_anchors,
+    )
+    assert latest_context["raw_message_count"] > len(active_anchors)
     for index in range(6, 11):
         marker = f"历史段{index}："
         assert all((marker in json.dumps(payload["messages"], ensure_ascii=False)) == (marker in repeated_markers)
                    for payload in second_requests)
-    repeated_effective = apply_summarization_event(repeated_values["messages"], repeated_event)
-    assert sum(message.id == latest_summary.projection_identity.projection_message_id for message in repeated_effective) == 1
-    assert summaries[0].projection_identity.projection_message_id not in {message.id for message in repeated_effective}
-    assert prefix_ids <= {message.id for message in repeated_effective}
-    assert repeated_ids.isdisjoint(message.id for message in repeated_effective)
-    assert all(marker not in str(message.content) for message in repeated_effective for marker in repeated_markers)
+    assert sum(message.id == latest_summary.projection_identity.projection_message_id
+               for message in repeated_values["messages"]) == 1
+    assert summaries[0].projection_identity.projection_message_id not in {
+        message.id for message in repeated_values["messages"]
+    }
+    assert all(marker not in json.dumps(case.model_requests[-1]["messages"], ensure_ascii=False)
+               for marker in repeated_markers)
     root_url = f"/api/v1/sessions/{session_id}/turns/{second_admission.turn_id}/message-stream"
     response = await cold_message_stream_client.get(root_url + "/snapshot", params={"thread_id": thread_id})
     assert response.status_code == 200, response.text
@@ -1532,10 +1570,11 @@ async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_
         fork_head = await recovered.aget_tuple(build_checkpoint_config(forked.thread_id))
         fork_messages = await acheckpoint_messages(recovered, fork_head)
     fork_values = {**fork_head.checkpoint["channel_values"], "messages": fork_messages}
-    assert "_summarization_event" not in fork_values and "_force_cache_compaction" not in fork_values
+    assert fork_values["messages"]
     assert [message.content for message in fork_values["messages"]].count(latest_summary.payload["summary"]) == 1
     assert summary_text not in str([message.content for message in fork_values["messages"]])
-    assert repeated_ids.isdisjoint(message.id for message in fork_values["messages"])
+    assert all(message.id != summaries[0].projection_identity.projection_message_id
+               for message in fork_values["messages"])
     assert all(marker not in str(message.content) for message in fork_values["messages"] for marker in repeated_markers)
     context = await case.runner.container.message_service.get_agent_context_state(session_id, forked.thread_id)
     assert json.dumps(context["records"], ensure_ascii=False).count(latest_summary_wire) == 1

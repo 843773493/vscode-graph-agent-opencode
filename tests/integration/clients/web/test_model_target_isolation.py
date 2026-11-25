@@ -44,14 +44,20 @@ def model_target_configuration(
     source = Path(integration_workspace_config_path)
     configuration = commentjson.loads(source.read_text(encoding="utf-8"))
     secret_id = f"sec_{uuid4().hex}"
-    configuration["llm"]["providers"]["primary"] = {
+    workspace = configuration["settings"]["workspace"]
+    workspace["llm"]["providers"]["primary"] = {
         "name": "同名模型服务",
-        "defaults": {"endpoint": catalog.endpoint, "api_key": f"secret:{secret_id}",
-            "custom_llm_provider": "openai", "request_options": {"no_proxy": True},
-            "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True}}},
-        "models": {"default": {"model": "same-main"}, "backup": {"model": "same-backup"}},
+        "config_ref": "#/profiles/provider.primary",
+        "models": {"default": {"model": "same-main", "config_ref": "context:provider/primary"},
+                   "backup": {"model": "same-backup", "config_ref": "context:provider/primary"}},
     }
-    for agent in configuration["agents"].values():
+    configuration["profiles"]["provider.primary"]["settings"] = {
+        "network": {"proxy": {"mode": "direct"}},
+        "model_options": {"endpoint": catalog.endpoint, "api_key": f"secret:{secret_id}",
+            "custom_llm_provider": "openai",
+            "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True}}},
+    }
+    for agent in workspace["agents"].values():
         agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"},
             "fallbacks": [{"provider_id": "primary", "model_id": "backup"}]}
     source.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

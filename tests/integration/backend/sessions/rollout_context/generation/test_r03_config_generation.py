@@ -159,8 +159,8 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
     for step, mode in enumerate(("team", "single_agent", "team")):
         before = config.get_snapshot()
         assert before.to_dict()["runtime"]["agent"]["run"]["mode"] != mode
-        source_config = read_jsonc_object(config_path) if config_path.exists() else {}
-        source_config.setdefault("runtime", {}).setdefault("agent", {}).setdefault(
+        source_config = read_jsonc_object(config_path)
+        source_config["settings"]["workspace"].setdefault("runtime", {}).setdefault("agent", {}).setdefault(
             "run", {}
         )["mode"] = mode
         config_path.write_text(json.dumps(source_config, ensure_ascii=False), encoding="utf-8")

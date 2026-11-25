@@ -12,7 +12,7 @@ import type {
   SessionGoal,
   SessionResource,
   TraceEvent,
-  TurnResponsePart,
+  TurnResponseItem,
   TurnSummary,
   WebUiSettings,
   DeliveryPolicy,
@@ -102,6 +102,8 @@ export interface ConversationView {
     last_item_sequence?: number | null;
   };
   activityOutline?: {beforeCursor: string | null};
+  /** 原历史详情受预算限制；轮廓补读仍沿同一个 Item 游标。 */
+  historyTruncated?: boolean;
   sessionId: string;
   /** pending-request 提供的精确 thread 归属，不从消息 DTO 或展示坐标推导。 */
   threadId?: string;
@@ -117,7 +119,7 @@ export interface ConversationView {
     status: string;
     tool_call_id?: string | null;
   }>;
-  responseParts?: TurnResponsePart[];
+  responseItems?: TurnResponseItem[];
   messageStream?: {
     connectionStatus: MessageStreamState["connectionStatus"];
     streamStatus: MessageStreamState["streamStatus"];

@@ -320,10 +320,6 @@ class SessionTurnReplayService:
             latest_versions.get("messages"),
             None,
         )
-        next_summarization_version = self._checkpointer.get_next_version(
-            latest_versions.get("_summarization_event"),
-            None,
-        )
 
         # 消息入口与 Turn 入口共用 canonical anchor；固定 checkpoint 的
         # messages channel 可以为空，不能据此推断历史 selection 的截断点。
@@ -359,14 +355,6 @@ class SessionTurnReplayService:
 
         channel_values["messages"] = message_snapshot(base_messages)
         new_versions: dict[str, str] = {}
-        summarization_event = channel_values.get("_summarization_event")
-        if isinstance(summarization_event, Mapping):
-            cutoff_index = summarization_event.get("cutoff_index")
-            if isinstance(cutoff_index, int) and cutoff_index > len(base_messages):
-                channel_values.pop("_summarization_event")
-                channel_versions["_summarization_event"] = next_summarization_version
-                new_versions["_summarization_event"] = next_summarization_version
-
         channel_versions["messages"] = next_messages_version
         new_versions["messages"] = next_messages_version
         checkpoint["channel_values"] = channel_values

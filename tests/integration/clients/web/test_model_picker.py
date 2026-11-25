@@ -54,35 +54,47 @@ async def test_model_picker_uses_native_controls_and_backend_identity(
     source = Path(integration_workspace_config_path)
     backend_port, gateway_port = probe_service_ports
     config = commentjson.loads(source.read_text(encoding="utf-8"))
-    provider = config["llm"]["providers"]["primary"]
-    provider["name"] = "团队模型服务"
+    workspace_settings = config["settings"]["workspace"]
     secret_id = f"sec_{uuid4().hex}"
-    provider["defaults"].update({"endpoint": catalog.endpoint, "api_key": f"secret:{secret_id}"})
-    providers = {
-        **commentjson.loads(Path("configs/workspace_inline.jsonc").read_text(encoding="utf-8"))["llm"]["providers"],
-        **config["llm"]["providers"],
-    }
-    for index in range(20 - len(providers)):
-        providers[f"catalog-{index}"] = deepcopy(provider)
+    inline = commentjson.loads(Path("configs/workspace_inline.jsonc").read_text(encoding="utf-8"))
+    provider_ids = list({**inline["settings"]["workspace"]["llm"]["providers"],
+                         **workspace_settings["llm"]["providers"]})
+    provider_ids.extend(f"catalog-{index}" for index in range(20 - len(provider_ids)))
     model_ids = ["default", "backup", "catalog-only", *(f"model-{index}" for index in range(7))]
-    for definition in providers.values():
-        definition["models"] = {key: {"model": f"picker-{key}"} for key in model_ids}
-    provider["models"]["default"]["name"] = "日常助手"
-    provider["models"]["backup"]["name"] = "备用助手"
+    providers = {provider_id: {
+        "name": "团队模型服务" if provider_id == "primary" else provider_id,
+        "config_ref": "#/profiles/catalog-base",
+        "models": {key: {"model": f"picker-{key}", "config_ref": f"context:provider/{provider_id}"}
+                   for key in model_ids},
+    } for provider_id in provider_ids}
+    providers["primary"]["models"]["default"]["name"] = "日常助手"
+    providers["primary"]["models"]["backup"]["name"] = "备用助手"
+    options = deepcopy(config["profiles"]["provider.primary"]["settings"]["model_options"])
+    options.update({"endpoint": catalog.endpoint, "api_key": f"secret:{secret_id}"})
     home = context.boxteam_home_for_node(request.node.nodeid)
     install_user_configuration(config_root=home / "config", profile="default", project_root=Path.cwd())
     user_source = home / "config/workspace.jsonc"
-    user_source.write_text(json.dumps({"config_version": 3, "llm": {"providers": providers}}, ensure_ascii=False) + "\n", encoding="utf-8")
+    user_source.write_text(json.dumps({
+        "config_version": 4, "extends": "builtin:workspace",
+        "settings": {"workspace": {"llm": {"providers": providers}}},
+        "profiles": {"catalog-base": {"extends": "context:workspace", "settings": {"model_options": options}}},
+    }, ensure_ascii=False) + "\n", encoding="utf-8")
     original_user_source = user_source.read_bytes()
-    # 内置定义、用户目录和工作区局部覆盖走真实三层加载，不预写执行或展示状态。
-    config["llm"] = {"providers": {"primary": {"models": {"backup": {
-        "overrides": {"request_options": {"parameters": {"temperature": 0}}},
-    }}}}}
-    for agent_id, agent in config["agents"].items():
+    # 工作区显式继承 user_local → user → inline，模型局部选项只写一个子节点。
+    config["extends"] = "user:workspace_local"
+    workspace_settings["llm"] = {"providers": {"primary": {
+        "config_ref": "user:workspace#/profiles/catalog-base",
+        "models": {"backup": {"config_ref": "#/profiles/model.primary.backup"}},
+    }}}
+    config["profiles"]["model.primary.backup"] = {
+        "extends": "context:provider/primary",
+        "settings": {"model_options": {"request_options": {"parameters": {"temperature": 0}}}},
+    }
+    for agent_id, agent in workspace_settings["agents"].items():
         agent["model"]["primary"] = {"provider_id": "primary", "model_id": "default"}
         agent["model"]["fallbacks"] = ([{"provider_id": "primary", "model_id": "backup"}]
                                          if agent_id == "default" else [])
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
     source.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     original_source = source.read_bytes()
     backend = await asyncio.to_thread(start_backend_process, workspace_root=str(workspace), port=backend_port,

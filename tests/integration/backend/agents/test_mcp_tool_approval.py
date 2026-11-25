@@ -152,7 +152,7 @@ async def test_approval_resumes_original_calls_across_http_replacement(
         # 从产品配置输入替换 HTTP 连接；schema 保持相同，原资格不得迁投新 Server。
         path = case.mount.workspace_root / ".boxteam/workspace.jsonc"
         configuration = read_jsonc_object(path)
-        mcp = configuration["mcp"]
+        mcp = configuration["settings"]["workspace"]["mcp"]
         assert isinstance(mcp, dict) and isinstance(mcp["servers"], dict)
         mcp["servers"]["schema"]["url"] = replacement.url
         path.write_text(json.dumps(configuration), encoding="utf-8")

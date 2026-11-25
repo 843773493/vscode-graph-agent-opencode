@@ -1,4 +1,4 @@
-"""rollout v2 SQLite schema 的唯一建表 owner。"""
+"""rollout 当前格式 SQLite schema 的唯一建表 owner。"""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Callable
 
 from app.core.sqlite_state import _execute_migration_sql, load_sql
+from app.domain.itemized.records import CANONICAL_ITEM_FORMAT_VERSION
 from app.services.infrastructure.rollout_context.storage.schema_assembly_refs import (
     ASSEMBLY_REF_SCHEMA_SQL,
 )
@@ -20,7 +21,8 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
     RUNTIME_WAKEUP_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 30
+ROLLOUT_SCHEMA_VERSION = 34
+COMPACTION_CANDIDATES_SCHEMA_SQL = load_sql(__package__, "migrations/context_sources/compaction_candidates.sql")
 ITEM_CATALOG_LOCATOR_INDEX_SQL = load_sql(__package__, "migrations/catalog/item_catalog_locator_index.sql")
 COMMIT_IDEMPOTENCY_INDEX_SQL = load_sql(__package__, "migrations/catalog/commit_idempotency_index.sql")
 ITEM_CATALOG_MODEL_TOOL_INDEX_SQL = load_sql(__package__, "migrations/catalog/item_catalog_model_tool_index.sql")
@@ -38,7 +40,7 @@ VIEW_CREATION_SCHEMA_SQL = load_sql(__package__, "migrations/views/view_creation
 VIEW_CREATION_MIGRATION_SQL = load_sql(__package__, "migrations/views/view_creation_025_026.sql") + VIEW_CREATION_SCHEMA_SQL
 
 MESSAGE_FORMAT_VERSION = 1
-ROLLOUT_FORMAT_VERSION = 2
+ROLLOUT_FORMAT_VERSION = CANONICAL_ITEM_FORMAT_VERSION
 
 ASSEMBLY_CONTENT_SCHEMA_SQL = load_sql(__package__, "migrations/assembly/assembly_content.sql")
 VIEW_MEMBERSHIP_SCHEMA_SQL = load_sql(__package__, "migrations/views/view_membership.sql")
@@ -48,7 +50,6 @@ MESSAGES_SCHEMA_SQL = load_sql(__package__, "migrations/checkpoint/messages.sql"
 MESSAGE_PROJECTIONS_SCHEMA_SQL = load_sql(__package__, "migrations/checkpoint/message_projections.sql")
 RESPONSE_OUTLINE_MIGRATION_SQL = (
     load_sql(__package__, "migrations/checkpoint/v29_sqlite_to_v30_sqlite.sql")
-    + MESSAGE_PROJECTIONS_SCHEMA_SQL
 )
 MESSAGES_VERSION_MIGRATION_SQL = (
     load_sql(__package__, "migrations/checkpoint/messages_020_021_prepare.sql")
@@ -115,6 +116,7 @@ def initialize_rollout_schema(
         + EXECUTION_QUEUE_SCHEMA_SQL
         + EXECUTION_SCHEDULING_MIGRATION_SQL
         + EXECUTION_PAUSE_SCHEMA_SQL
+        + COMPACTION_CANDIDATES_SCHEMA_SQL
     )
 
     ensure_query_indexes(connection)

@@ -91,9 +91,10 @@ ${BOXTEAM_HOME}/
 ```
 
 发行包内置默认值位于 `configs/gateway_inline.jsonc` 与
-`configs/workspace_inline.jsonc`，不直接写入用户目录。启动时按
-`inline → 用户配置 → *_local` 合并；上图中的 `gateway.jsonc`、
-`workspace.jsonc` 是用户覆盖文件，`.env` 仍是环境变量来源。
+`configs/workspace_inline.jsonc`，不直接写入用户目录。安装器把
+`inline → 用户配置 → *_local` 写成真实 `extends` 父边，工作区入口再明确继承
+`user:workspace_local`；启动只跟随所选入口的单父链，不按文件名额外叠加。
+上图中的 `gateway.jsonc`、`workspace.jsonc` 是用户定义节点，`.env` 仍是环境变量来源。
 
 产品级 Agent Skill 源码位于 `resources/skills/`，不属于 `asset/` 测试模板。运行时发行包将其复制到 `application/resources/skills/`；manifest 通过 `skill_resources` 声明该目录。Gateway 根据 `runtime.workspace.default_skill_groups` 把默认 Skill 组传给受管 Workspace，Workspace 以只读虚拟路径加载它们。
 
@@ -110,7 +111,7 @@ ${BOXTEAM_HOME}/
 - 普通 `boxteam start` 只初始化缺失配置，不覆盖已有用户配置。
 - `bun run dev` 在启动进程前把源码 `.env`、完整 Gateway 开发配置和完整 Workspace 开发配置安装到 development home。
 - development、源码安装和 npm 安装在运行期都只读取 `${BOXTEAM_HOME}/config/.env`、`gateway.jsonc`、`workspace.jsonc` 和显式工作区的 `.boxteam/workspace.jsonc`，不直接读取源码配置。
-- Gateway 只读取用户级 Gateway 配置；Workspace 配置覆盖用户级 Workspace 配置，只有最终有效配置发生变化才触发 reload revision。
+- Gateway 只读取用户级 Gateway 配置；Workspace 只沿入口文档显式声明的 `extends` 父链解析，只有最终有效配置发生变化才触发 reload revision。
 
 ## Runtime manifest
 

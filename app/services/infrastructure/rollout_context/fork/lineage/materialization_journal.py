@@ -66,7 +66,7 @@ class ForkMaterializationJournalMixin:
                 self._storage._lock(target_thread_id, checkpoint_ns, session_id=target_session_id),
                 self._storage._connect(target_thread_id, checkpoint_ns, session_id=target_session_id) as connection,
             ):
-                self._storage._require_v2_runtime(connection)
+                self._storage._require_current_rollout_format(connection)
                 if current_scope(connection) != (target_session_id, target_thread_id):
                     raise RuntimeError("fork journal 当前存储 owner 不一致")
                 existing = connection.execute(

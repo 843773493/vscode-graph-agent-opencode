@@ -98,24 +98,55 @@ def test_ambiguous_or_non_object_ancestor_is_rejected(text: str) -> None:
 
 @pytest.mark.parametrize("reference", ["${TARGET_MODEL_KEY}", "secret:sec_00000000000040008000000000000001", ""])
 @pytest.mark.parametrize("scope", ["provider", "model"])
-def test_model_key_reference_stays_visible_when_connection_is_edited(reference: str, scope: str) -> None:
+@pytest.mark.parametrize("preparsed", [False, True])
+def test_model_key_reference_stays_visible_when_connection_is_edited(reference: str, scope: str, preparsed: bool) -> None:
     options = {"endpoint": "https://model.example/old", "api_key": reference}
     original = json.dumps({"config_version": 4, "settings": {}, "profiles": {
         scope: {"settings": {"model_options": options}},
     }})
-    public = redact_source_text(original)
+    public = redact_source_text(original, payload=parse_source_text(original) if preparsed else None)
     assert public == original, "公开引用和无认证不能变成绑定旧地址的秘密占位"
     edited = public.replace("https://model.example/old", "https://model.example/new")
     assert restore_source_text(edited, original) == edited
 
 
-def test_literal_model_key_and_arbitrary_headers_remain_secret() -> None:
+@pytest.mark.parametrize("preparsed", [False, True])
+def test_literal_model_key_and_arbitrary_headers_remain_secret(preparsed: bool) -> None:
     original = json.dumps({"config_version": 4, "settings": {}, "profiles": {"provider": {"settings": {"model_options": {
         "api_key": "literal-key-must-stay-hidden", "endpoint": "https://model.example/old",
         "request_options": {"default_headers": {"X-Custom": "header-must-stay-hidden"}},
     }}}}})
-    public = redact_source_text(original)
+    public = redact_source_text(original, payload=parse_source_text(original) if preparsed else None)
     assert "literal-key-must-stay-hidden" not in public and "header-must-stay-hidden" not in public
     assert restore_source_text(public, original) == original
     with pytest.raises(ValueError, match="地址已改变"):
         restore_source_text(public.replace("https://model.example/old", "https://model.example/new"), original)
+
+
+@pytest.mark.parametrize("preparsed", [False, True])
+def test_public_source_keeps_exact_comments_spacing_and_string_escapes(preparsed: bool) -> None:
+    original = '# 保留\r\n{ "title": "\\u0061", "list": [1, null,], // 原注释\r\n}\r\n'
+    assert redact_source_text(original, payload=parse_source_text(original) if preparsed else None) == original
+
+
+@pytest.mark.parametrize("preparsed", [False, True])
+def test_header_reference_stays_public_beside_literal_secret(preparsed: bool) -> None:
+    reference = {"kind": "mcp_private_header", "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "server_id": "secure", "header_name": "Authorization", "endpoint": "https://mcp.example/server", "version": "2" * 32}
+    original = '// 保留\n' + json.dumps({"settings": {"workspace": {"mcp": {"servers": {"secure": {
+        "headers": {"Authorization": reference, "X-Plain": "private-header"},
+    }}}}}}) + '\n'
+    expected = original.replace('"private-header"', '"boxteam-redacted:/settings/workspace/mcp/servers/secure/headers/X-Plain"')
+    assert redact_source_text(original, payload=parse_source_text(original) if preparsed else None) == expected
+
+
+@pytest.mark.parametrize("preparsed", [False, True])
+def test_duplicate_key_cannot_hide_an_earlier_secret_token(preparsed: bool) -> None:
+    original = '{"profiles":{"provider":{"settings":{"model_options":{"api_key":"private-overwritten-key","api_key":""}}}}}'
+    assert redact_source_text(original, payload=parse_source_text(original) if preparsed else None) == original.replace('"private-overwritten-key"', '""')
+
+
+def test_redaction_rejects_invalid_jsonc_without_echoing_body() -> None:
+    with pytest.raises(ValueError) as failure:
+        redact_source_text('{ "api_key": "private-marker", invalid }')
+    assert "private-marker" not in str(failure.value)

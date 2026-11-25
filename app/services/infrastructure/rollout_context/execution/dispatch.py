@@ -34,7 +34,7 @@ class RolloutExecutionDispatchMixin:
         owner_thread_id = self._storage.fork_paths.thread_identity(session_id, strict_text(thread_id, field="thread_id"))
         turn_id = strict_text(turn_id, field="turn_id")
         with self._storage.read_connection(session_id, owner_thread_id, checkpoint_ns, connection=writer_connection) as connection:
-            self._storage._require_v2_runtime(connection)
+            self._storage._require_current_rollout_format(connection)
             require_resumable_turn(connection, session_id, owner_thread_id, turn_id)
             row = connection.execute(
                 """

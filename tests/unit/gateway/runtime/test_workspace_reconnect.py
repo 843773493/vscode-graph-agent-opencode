@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -65,6 +66,45 @@ GATEWAY_ID = "gateway_00000000000040008000000000000001"
 UUID_A = "00000000-0000-4000-8000-000000000001"
 UUID_B = "00000000-0000-4000-8000-000000000002"
 UUID_C = "00000000-0000-4000-8000-000000000003"
+
+
+@pytest.fixture
+def delegated_control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    registry = MagicMock()
+    registry.gateway_id = GATEWAY_ID
+    registry.remote_connection_for_target.return_value = SimpleNamespace(connection_id="rgw_control")
+    registry.remote_gateway_url.return_value = "http://remote-control.invalid"
+    registry.target_request_headers.return_value = {"X-BoxTeam-Federation-Token": "test-token"}
+    controller = GatewayWorkspaceRuntimeController(registry=registry, project_root=tmp_path, log_dir=tmp_path / "logs")
+    target = WorkspaceTarget(gateway_id=REMOTE_GATEWAY_ID, workspace_id=UUID_A, name="remote", root_path=None,
+        backend_url="http://remote-control.invalid", connection_kind="remote_gateway", managed=True)
+    captured = []
+    client_class = httpx.AsyncClient
+
+    def client(**options):
+        assert options["trust_env"] is False, "远端生命周期控制不能读取外部代理环境"
+        def respond(request):
+            captured.append(request)
+            status = "restarted" if "/restart-" in request.url.path else "started"
+            return httpx.Response(200, json={"data": {"status": status}})
+        return client_class(**options, transport=httpx.MockTransport(respond))
+
+    monkeypatch.setattr(runtime_controller_module.httpx, "AsyncClient", client)
+    monkeypatch.setattr(controller, "_delegated_result", AsyncMock(return_value="control-result"))
+    return controller, target, captured
+
+
+@pytest.mark.parametrize("operation", ["probe", "restart", "state"])
+async def test_delegated_controls_keep_explicit_direct_transport(delegated_control, operation: str):
+    controller, target, captured = delegated_control
+    if operation == "probe":
+        await controller._delegated_probe(target)
+    elif operation == "restart":
+        assert await controller._delegated_restart(target, request_id="req-control", forced=False) == "control-result"
+    else:
+        assert await controller._delegated_runtime_state(target, "start", request_id="req-control") == "control-result"
+    assert len(captured) == 1
+    assert captured[0].headers["X-BoxTeam-Federation-Token"] == "test-token"
 
 
 @dataclass
@@ -408,13 +448,14 @@ async def test_reconnect_http_keeps_published_projection_and_reports_both_errors
                 assert response.status_code == 502, response.text
                 assert response.headers["X-Request-ID"] == "reconnect-postcommit-01"
                 assert response.json() == {
-                    "detail": "工作区重连失败: stage=workspace_reconnect, error=RuntimeError",
+                    "detail": "工作区重连失败: stage=workspace_reconnect, error=RuntimeError, reason=observer failed after remote projection commit",
                     "request_id": "reconnect-postcommit-01",
                 }
-                record = next(record for record in caplog.records if record.exc_info and record.exc_info[1] is primary_error)
-                assert record.exc_text is not None
-                assert "observer failed after remote projection commit" in record.exc_text
-                assert "port-forward reconcile failed after commit" in record.exc_text
+                record = next(record for record in caplog.records if record.name == "app.core.failures"
+                              and f"{type(primary_error).__name__}: {primary_error}" in record.getMessage())
+                assert record.exc_info is None
+                assert "observer failed after remote projection commit" in record.getMessage()
+                assert "port-forward reconcile failed after commit" in record.getMessage()
 
         assert primary_error.args == (
             "observer failed after remote projection commit",
@@ -464,13 +505,13 @@ async def test_reconnect_refusal_keeps_status_without_publishing_exception_body(
         response = await client.post("/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/reconnect", headers={"X-Request-ID": "reconnect-refusal-01"})
     assert response.status_code == status
     assert response.json() == {
-        "detail": f"工作区重连失败: stage=workspace_reconnect, error={error_type.__name__}" + (", errno=None" if error_type is PermissionError else ""),
+        "detail": f"工作区重连失败: stage=workspace_reconnect, error={error_type.__name__}" + (", errno=None" if error_type is PermissionError else "") + f", reason={error}",
         "request_id": "reconnect-refusal-01",
     }
     assert response.headers["X-Request-ID"] == "reconnect-refusal-01"
     assert registry._last_committed_snapshot is previous_commit
     assert registry.resolve("00000000-0000-4000-8000-000000000001").connection_error is None
-    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    assert any(record.exc_info is None and f"{type(error).__name__}: {error}" in record.getMessage() for record in caplog.records)
     assert error.args == (native_location,)
 
 
@@ -549,10 +590,10 @@ async def test_reconnect_http_preserves_primary_error_when_connection_error_reco
 
     assert response.status_code == 502, response.text
     assert response.headers["X-Request-ID"] == "reconnect-mark-error-secondary-01"
-    expected = "工作区重连失败: stage=workspace_reconnect, error=OSError, errno=5"
+    expected = f"工作区重连失败: stage=workspace_reconnect, error=OSError, errno=5, reason={primary_error}"
     if sink_fails:
         expected += ", diagnostic_sink_error=OSError"
-    secondary_detail = "; 记录连接失败状态失败: stage=workspace_reconnect_record, error=RuntimeError"
+    secondary_detail = f"; 记录连接失败状态失败: stage=workspace_reconnect_record, error=RuntimeError, reason={secondary_error}"
     if sink_fails:
         secondary_detail += ", diagnostic_sink_error=OSError"
     assert response.json() == {
@@ -565,15 +606,15 @@ async def test_reconnect_http_preserves_primary_error_when_connection_error_reco
     if sink_fails:
         assert any("诊断日志输出失败" in note and str(sink_error) in note for note in primary_error.__notes__)
     else:
-        record = next(record for record in caplog.records if record.exc_info and record.exc_info[1] is primary_error)
-        assert record.exc_info is not None and record.exc_text is not None
-        assert record.exc_info[1] is primary_error
-        assert f"原始连接诊断: {native_location}" in record.exc_text
+        record = next(record for record in caplog.records if record.name == "app.core.failures"
+                              and f"{type(primary_error).__name__}: {primary_error}" in record.getMessage())
+        assert record.exc_info is None
+        assert f"原始连接诊断: {native_location}" in record.getMessage()
     if record_fails:
         if sink_fails:
             assert any("诊断日志输出失败" in note and str(sink_error) in note for note in secondary_error.__notes__)
         else:
-            assert any(record.exc_info and record.exc_info[1] is secondary_error for record in caplog.records)
+            assert any(record.exc_info is None and f"{type(secondary_error).__name__}: {secondary_error}" in record.getMessage() for record in caplog.records)
         assert any(str(secondary_error) in note for note in primary_error.__notes__)
     assert calls == 1
     assert registry.registry_revision == previous_revision + (0 if record_fails else 1)
@@ -587,7 +628,6 @@ async def test_reconnect_http_preserves_primary_error_when_connection_error_reco
     items = await cold.list_dtos(check_health=False)
     item = next(item for item in items if item.workspace_id == target.workspace_id)
     assert item.connection_error == expected_record
-    assert native_location not in item.model_dump_json()
 
 
 @pytest.mark.asyncio
@@ -1154,13 +1194,13 @@ async def test_auxiliary_stop_failure_keeps_failed_handle_and_whole_group_intent
     failed.failure = RuntimeError("辅助进程清理失败")
     try:
         with pytest.raises(RuntimeError, match="stage=backend_member_stop, error=RuntimeError") as stopped_error:
-            registry.stop_backend_owner(graph.owner)
+            await registry.stop_backend_owner(graph.owner)
     finally:
         failed.failure = None
     assert isinstance(stopped_error.value.__cause__, ExceptionGroup)
     original_error, = stopped_error.value.__cause__.exceptions
     assert isinstance(original_error, RuntimeError) and "辅助进程清理失败" in str(original_error)
-    assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
+    assert any(record.exc_info is None and f"{type(original_error).__name__}: {original_error}" in record.getMessage() for record in caplog.records)
     assert graph.owner.process is None
     assert not registry.has_runtime("00000000-0000-4000-8000-000000000001")
     assert registry.managed_runtime("00000000-0000-4000-8000-000000000002") is runtime
@@ -1832,11 +1872,11 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
             failed_handle.failure = None
         assert response.status_code == 502, response.text
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == "group-request-01"
-        assert "group-failure" not in response.text
+        assert str(primary) in response.json()["detail"]
         assert "error=RuntimeError" in response.json()["detail"]
         assert ("diagnostic_sink_error=OSError" in response.json()["detail"]) is sink_fails
         assert graph.owner.contract is previous and graph.owner.process is None
-        assert graph.owner.error and "group-failure" not in graph.owner.error
+        assert graph.owner.error and str(primary) in graph.owner.error
         assert all(registry.resolve(member_id).connection_error == graph.owner.error for member_id in previous.workspace_ids)
         if fault == "start":
             assert "stage=backend_start" in graph.owner.error
@@ -1848,9 +1888,9 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
             if fault == "stop":
                 assert str(primary) in caplog.text
             else:
-                assert any(record.exc_info and record.exc_info[1] is primary for record in caplog.records)
+                assert any(record.exc_info is None and f"{type(primary).__name__}: {primary}" in record.getMessage() for record in caplog.records)
             if fault == "restart":
-                assert any(record.exc_info and record.exc_info[1] is recovery for record in caplog.records)
+                assert any(record.exc_info is None and f"{type(recovery).__name__}: {recovery}" in record.getMessage() for record in caplog.records)
         elif fault != "stop":
             assert any(str(sink) in note for note in primary.__notes__)
         if fault == "restart":
@@ -1862,7 +1902,7 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
         assert stored_failure is not None
         stored_targets = stored_failure["targets"]
         assert isinstance(stored_targets, list)
-        assert all("group-failure" not in target["connection_error"] for target in stored_targets)
+        assert all(target["connection_error"] == graph.owner.error for target in stored_targets)
         cold = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=controller_registry_store)
         cold_owner = cold.backend_owner("00000000-0000-4000-8000-000000000001")
         assert cold_owner is not None and cold_owner.contract == previous
@@ -1947,7 +1987,7 @@ async def test_external_probe_failure_keeps_native_diagnostics_and_original_targ
         monkeypatch.setattr(failures.logger, "error", fail_log)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
         response = await client.post("/api/gateway/workspaces/00000000-0000-4000-8000-000000000003/probe", headers={"X-Request-ID": "external-probe-01"})
-        expected = f"工作区探测失败: stage=workspace_probe, error={type(failure).__name__}, errno={fault_errno}"
+        expected = f"工作区探测失败: stage=workspace_probe, error={type(failure).__name__}, errno={fault_errno}, reason={failure}"
         if sink_fails:
             expected += ", diagnostic_sink_error=RuntimeError"
         assert response.status_code == (409 if fault_errno == 13 else 502) and response.json()["detail"] == expected
@@ -1958,13 +1998,14 @@ async def test_external_probe_failure_keeps_native_diagnostics_and_original_targ
         assert target.workspace_id == UUID_C and not target.managed
         stored = controller_registry_store.load_workspace_registry()
         assert stored is not None
-        assert "probe-failure" not in str(stored)
+        stored_target = next(item for item in stored["targets"] if item["workspace_id"] == UUID_C)
+        assert stored_target["connection_error"] == target.connection_error
         cold = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=controller_registry_store)
         assert cold.resolve(UUID_C).connection_error == target.connection_error
         if sink_fails:
             assert any("sink failed" in note for note in failure.__notes__)
         else:
-            assert any(record.exc_info and record.exc_info[1] is failure for record in caplog.records)
+            assert any(record.exc_info is None and f"{type(failure).__name__}: {failure}" in record.getMessage() for record in caplog.records)
 
         async def healthy(*_args: object, **_kwargs: object) -> None:
             return None

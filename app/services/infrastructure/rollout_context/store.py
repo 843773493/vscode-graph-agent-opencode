@@ -12,6 +12,9 @@ from app.services.infrastructure.rollout_context.activation.schema import (
 from app.services.infrastructure.rollout_context.assembly.store import (
     ContextAssemblyStore,
 )
+from app.services.infrastructure.rollout_context.checkpoint.durable.compaction_candidates import (
+    RolloutCompactionCandidates,
+)
 from app.services.infrastructure.rollout_context.checkpoint.durable.store import (
     RolloutCheckpointStore,
 )
@@ -64,5 +67,6 @@ class RolloutContextStore:
         self.executions = RolloutExecutionStore(self)
         self.checkpoints = RolloutCheckpointStore(self)
         self.assemblies = ContextAssemblyStore(self)
+        self.compactions = RolloutCompactionCandidates(self)
         self.forks = fork_store_factory(self)
         self.pruning = RolloutPruningOwner(self.storage)

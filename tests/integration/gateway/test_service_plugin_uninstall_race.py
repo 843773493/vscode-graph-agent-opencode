@@ -48,7 +48,7 @@ def plugin_uninstall_race_case(request: pytest.FixtureRequest, unused_tcp_port: 
     for root in (gateway_workspace, workspace):
         config_path = root / ".boxteam/workspace.jsonc"
         payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+        payload["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
         config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     gateway = start_gateway_process(
@@ -156,7 +156,7 @@ def test_uninstall_serializes_after_pending_binding_publication(plugin_uninstall
     workspace_headers = {"X-BoxTeam-Workspace-Id": workspace_id}
     source = request("GET", source_path, headers={"X-BoxTeam-Workspace-Id": workspace_id}).raise_for_status().json()["data"]
     config = commentjson.loads(source["jsonc"])
-    config.setdefault("plugins", {})["runtime"] = {"entries": []}
+    config["settings"]["workspace"].setdefault("plugins", {})["runtime"] = {"entries": []}
     empty_config = json.dumps(config, ensure_ascii=False, indent=2)
     empty_cas = {
         "gateway_id": gateway_id,
@@ -185,7 +185,7 @@ def test_uninstall_serializes_after_pending_binding_publication(plugin_uninstall
 
         source = request("GET", source_path, headers={"X-BoxTeam-Workspace-Id": workspace_id}).raise_for_status().json()["data"]
         config = commentjson.loads(source["jsonc"])
-        config.setdefault("plugins", {})["runtime"] = {"entries": [{
+        config["settings"]["workspace"].setdefault("plugins", {})["runtime"] = {"entries": [{
             "package_id": "race.probe",
             "package_version": "1.0.0",
             "plugin_id": "probe",
@@ -227,7 +227,7 @@ def test_uninstall_serializes_after_pending_binding_publication(plugin_uninstall
     assert active["active_revision"] == baseline_active_revision
     assert candidate_document["edit"]["state"] == "conflict"
     rejected_source = commentjson.loads(candidate_document["jsonc"])
-    assert rejected_source["plugins"]["runtime"]["entries"][0]["package_id"] == "race.probe"
+    assert rejected_source["settings"]["workspace"]["plugins"]["runtime"]["entries"][0]["package_id"] == "race.probe"
     inventory = request("POST", "/api/gateway/service-plugins/inventory", {"gateway_id": gateway_id})
     inventory.raise_for_status()
     assert not any(

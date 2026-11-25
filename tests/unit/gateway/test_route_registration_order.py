@@ -3,6 +3,11 @@
 不以接口总数或整个 OpenAPI 的摘要代替行为断言；正常新增接口不应要求更新不透明 hash。
 """
 
+import warnings
+
+from fastapi.openapi.utils import get_openapi
+from fastapi.routing import APIRoute
+
 from app.gateway.main import app
 
 
@@ -26,3 +31,15 @@ def test_route_registration_order_is_stable() -> None:
     ):
         assert paths.count(path) == 1, f"Gateway 自有路由必须唯一登记: {path}"
         assert paths.index(path) < workspace_proxy_index, f"Gateway 自有路由被通配代理遮蔽: {path}"
+
+
+def test_workspace_proxy_is_routable_without_exporting_a_wildcard_api() -> None:
+    proxy, = (route for route in app.routes if isinstance(route, APIRoute) and route.path == "/api/v1/{path:path}")
+    assert proxy.methods == {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+    # 从实际路由重新生成，避免文档缓存遮住重复 ID 警告。
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message="Duplicate Operation ID.*", category=UserWarning)
+        schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+    assert "/api/v1/{path}" not in schema["paths"]
+    assert "/api/gateway/workspaces" in schema["paths"]
+    assert "/api/v1/context/read" in schema["paths"]

@@ -1,6 +1,6 @@
 ## 目录用途
 
-承载 v2 rollout 的逻辑 pruning 操作；逻辑 compaction/view 边界由 checkpoint adapter 调用统一事务。
+承载 canonical rollout 的逻辑 pruning 操作；逻辑 compaction/view 边界由 checkpoint adapter 调用统一事务。
 
 ## 可修改内容
 

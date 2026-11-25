@@ -124,7 +124,7 @@ class ConfigSnapshotStore:
 
     def _commit(self, candidate: ConfigSnapshot) -> None:
         # revision 表示最终有效配置内容；即使内容相同，也要刷新来源路径和加载时间，
-        # 让元数据准确反映 json/jsonc 优先级切换后的当前来源。
+        # 让元数据准确反映当前显式父链及已读取来源。
         self._snapshot = candidate
         active = self.current()
         now = datetime.now(UTC)

@@ -307,7 +307,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
         gateway = None
         config_path = boxteam_home / "config" / "gateway.jsonc"
         config_payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        config_payload["workspaces"] = []
+        config_payload.setdefault("settings", {}).setdefault("gateway", {})["workspaces"] = []
         config_path.write_text(
             json.dumps(config_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",

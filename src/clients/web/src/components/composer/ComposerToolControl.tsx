@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { t } from "../../../../shared/core/i18n/index.js";
 import React, {
   useCallback,
@@ -412,7 +413,7 @@ export default function ComposerToolControl({
               </button> : null}
             </div>
           </header>
-          {error ? <div className="composer-tool-error">{error}</div> : null}
+          {error ? <div className="composer-tool-error failure-summary">{failureSummary(error)}</div> : null}
           <ComposerToolTree
             groups={groups}
             loading={loading}

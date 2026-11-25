@@ -1,6 +1,6 @@
 # 目录用途
 
-`storage/` 负责 v2 JSONL、catalog、commit 和恢复边界的基础持久化适配。
+`storage/` 负责格式3 canonical JSONL、catalog、commit 和恢复边界的基础持久化适配；SQLite 结构版本独立由原迁移清单登记。当前结构34在未发布的32语义 Item、33压缩候选／直接前序结果引用／原文行范围基础上登记手动采用意图；不为开发中间库自动迁移。
 
 # 可修改内容
 

@@ -7,8 +7,13 @@ from datetime import datetime
 
 from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.compaction import CanonicalTextRange
+from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
-from app.domain.itemized.hashing import contribution_content_hash_and_length
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    contribution_content_hash_and_length,
+)
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.resource_activation import (
@@ -48,6 +53,39 @@ class ContextDetailOwnerMixin:
             if contribution_content_hash_and_length(kind, body) != (content_hash, record.length):
                 raise ValueError("source-mismatch: contribution 正文与封存版本不一致")
             return body
+
+    def validate_summary_result_source(
+        self, session_id: str, thread_id: str, body: object, *, checkpoint_ns: str,
+    ) -> None:
+        """合并只复用实际发布的结果 manifest；正文随后与 canonical output 联校。"""
+        if not isinstance(body, Mapping) or set(body) != {"message", "result_ref", "output_refs", "dispatch_ref", "coverage"}:
+            raise ValueError("summary-source-mismatch: 合并结果 manifest 非法")
+        reference = DetailRef.from_dict(body["result_ref"])
+        reference.require_owner(session_id, thread_id)
+        record = self._storage.assemblies.get_context_plan_detail(
+            session_id, thread_id, detail_ref=reference, checkpoint_ns=checkpoint_ns,
+        )
+        if (record.detail_kind, record.retention_class) != ("compaction_result", "compaction_candidate"):
+            raise ValueError("summary-source-mismatch: 合并来源不是已发布摘要结果")
+        manifest = self._detail_store.read(
+            session_id=session_id, thread_id=thread_id, record=record, include_sensitive=True,
+        )["detail"]
+        expected = {key: body[key] for key in ("output_refs", "dispatch_ref", "coverage")}
+        if (not isinstance(manifest, Mapping) or set(manifest) != {*expected, "source_versions", "text_ranges"}
+                or canonical_json_bytes({key: manifest[key] for key in expected}) != canonical_json_bytes(expected)):
+            raise ValueError("summary-source-mismatch: 合并结果与原发布 manifest 不一致")
+        parts = tuple(CanonicalTextRange.from_dict(value) for value in manifest["text_ranges"])
+        coverage = tuple(manifest["coverage"])
+        if (len({part.ref for part in parts}) != len(parts)
+                or any(part.ref.to_dict() not in coverage for part in parts)):
+            raise ValueError("summary-source-mismatch: 合并结果文本范围不属于原发布覆盖")
+        dispatch = SealedContextDispatchRef.from_dict(body["dispatch_ref"])
+        original = self._storage.assemblies.get_context_assembly(
+            session_id, thread_id, assembly_id=dispatch.assembly_id, checkpoint_ns=checkpoint_ns,
+        )
+        dispatch.validate_snapshot(original)
+        if original.selection_policy != "derived_request" or original.turn_id is not None:
+            raise ValueError("summary-source-mismatch: 合并来源不是独立摘要请求")
 
     def seal_context_plan(
         self,

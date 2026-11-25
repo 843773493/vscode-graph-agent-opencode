@@ -1,6 +1,6 @@
 ## Purpose
 
-定义 BoxTeam 用户配置从首次安装到日常启动的完整生命周期，包括缺失初始化、显式强制重建、版本化 schema 安装、源码开发配置安装，以及统一配置优先级与热重载判定。
+定义 BoxTeam 用户配置从首次安装到日常启动的完整生命周期，包括缺失初始化、显式强制重建、版本化 schema 安装、源码开发配置安装，以及单父来源链与热重载判定。
 ## Requirements
 ### Requirement: 仅在缺失时初始化、升级或迁移配置布局
 配置初始化 SHALL（必须）仅在 Gateway 或 Workspace 用户配置不存在时，从对应普通静态 JSONC 模板创建该配置及同目录 schema；普通启动 MUST NOT（不得）完整重建或覆盖现有用户配置，但 SHALL 在加载前执行保留用户值的逐版本迁移。
@@ -47,25 +47,25 @@
 - **THEN** development profile 在启动任何服务前失败，并报告源配置路径
 
 ### Requirement: 统一运行时配置来源
-development、源码安装和 npm 安装的 runtime MUST（必须）只从 `${BOXTEAM_HOME}/config/.env`、`${BOXTEAM_HOME}/config/gateway.jsonc`、`${BOXTEAM_HOME}/config/workspace.jsonc` 以及当前工作区 `.boxteam/workspace.jsonc` 加载配置。
+development、源码安装和 npm 安装的 runtime MUST（必须）只从 `${BOXTEAM_HOME}/config/.env`、Gateway 的显式入口 `${BOXTEAM_HOME}/config/gateway_local.jsonc`、当前工作区的显式入口 `.boxteam/workspace.jsonc` 及各入口明确引用的同域祖先加载配置；用户可显式选择其它合法入口。
 
 #### Scenario: 运行源码开发版本
 - **WHEN** Gateway 或 Workspace Backend 在 development profile 中启动
 - **THEN** runtime 不访问项目根 `.env` 或 `configs/*_dev.jsonc`
 
-### Requirement: 有效配置优先级
+### Requirement: 有效配置沿单父来源链解析
 
-Workspace runtime SHALL（必须）保持用户级 Workspace 配置与显式工作区配置的优先级，并且仅在最终有效配置发生变化时触发重载操作；Gateway 配置不参与该合并。产品诊断日志迁移后 SHALL 从 Gateway `logging.runtime` 获取进程设置，不再作为 Workspace 的配置层。已由连接监督支持的 MCP 变更 SHALL（必须）通过统一候选流水线准备和热应用，不能仅因属于 MCP 段就要求重启；未支持安全替换的路径 SHALL（必须）保留真实重启分类。
+Workspace runtime SHALL（必须）按实际单父链解析用户级与当前工作区配置；来源类别不决定优先级，且仅在最终有效配置或来源归属发生变化时刷新相应配置状态。Gateway 配置不参与 Workspace 合并。产品诊断日志 SHALL 从 Gateway `logging.runtime` 获取进程设置，不再作为 Workspace 的配置层。已由连接监督支持的 MCP 变更 SHALL（必须）通过统一候选流水线准备和热应用，不能仅因属于 MCP 段就要求重启；未支持安全替换的路径 SHALL（必须）保留真实重启分类。
 
 #### Scenario: 迁移旧 SSH 直连 Gateway 配置
 
 - **WHEN** v3 配置包含 kind: ssh 或旧的远程后端直连字段
 - **THEN** runtime 将其迁移为 kind: remote_gateway、补充 remote_gateway_port 并删除新 schema 不再支持的直连字段
 
-#### Scenario: 被遮蔽的低优先级修改
+#### Scenario: 被子节点遮蔽的父值修改
 
-- **WHEN** 低优先级来源修改了仍被工作区配置覆盖的值
-- **THEN** 有效 revision 和重载状态保持不变
+- **WHEN** 父节点修改了仍被后代节点明确覆盖的值
+- **THEN** 有效值与资源应用保持不变，来源 revision／digest 仍更新并保留可核验归属
 
 #### Scenario: 必须重启的配置段变化
 
@@ -89,11 +89,11 @@ Workspace runtime SHALL（必须）保持用户级 Workspace 配置与显式工�
 
 ### Requirement: 配置变化必须经过统一候选流水线
 
-Gateway 与 Workspace SHALL（必须）对 JSONC 文件变化、配置 API/UI 修改使用同一条候选配置流水线。流水线 MUST（必须）在提交前完成来源解析、优先级合并、schema 校验、业务预检和生效策略分类；只有有效配置发生变化时才能提交新的 active revision。
+Gateway 与 Workspace SHALL（必须）对 JSONC 文件变化、配置 API/UI 修改使用同一条候选配置流水线。流水线 MUST（必须）在提交前完成实际单父链解析、schema 校验、业务预检和生效策略分类；有效值或需展示的来源归属变化按各自发布合同处理。
 
 #### Scenario: 工作区级 JSONC 被修改
 - **WHEN** 用户修改当前工作区 `.boxteam/workspace.jsonc`
-- **THEN** Workspace 读取完整有效配置并按既有优先级生成候选快照，而不是只解析该覆盖片段或静默忽略变化
+- **THEN** Workspace 沿该入口的实际父链生成完整候选快照，不只解析本地片段或静默忽略变化
 
 #### Scenario: 连续修改多个配置来源
 - **WHEN** 用户在一个防抖窗口内连续修改用户级和工作区级配置

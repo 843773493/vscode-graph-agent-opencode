@@ -7,39 +7,17 @@ replaces 关系，不解释 extensions，也不从消息 ID、正文或相邻记
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol
 
 from app.domain.itemized.enums import SemanticKind
-from app.domain.itemized.identity.item_projection import (
-    ItemProjectionIdentity,
-    ItemProvenanceRelation,
-)
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import CanonicalItemRecord
 
 
-class ContentCarrier(Protocol):
-    """内容择一所需的无正文事实；canonical item 与 catalog 镜像共用。"""
-
-    @property
-    def item_id(self) -> str: ...
-
-    @property
-    def semantic_kind(self) -> str: ...
-
-    @property
-    def projection_identity(self) -> ItemProjectionIdentity | None: ...
-
-    @property
-    def provenance_relations(self) -> tuple[ItemProvenanceRelation, ...]: ...
-
-
-def projection_message_group_id(item: CanonicalItemRecord) -> str:
-    """投影按显式模型调用分组；没有调用归属的独立 item 保留物理分组。"""
+def projection_message_group_id(item: CanonicalItemRecord) -> tuple[str | None, str | None, str]:
+    """只按显式消息归属成组，ModelCall 不替代原消息身份。"""
     identity = item.projection_identity
-    if identity is not None and identity.model_call_id is not None:
-        return f"message-model-call:{identity.model_call_id}"
-    return item.message_group_id or item.item_id
+    return (item.turn_id, identity.model_call_id if identity else None,
+            item.message_group_id or item.item_id)
 
 
 def normalized_tool_call_ids(item: CanonicalItemRecord) -> set[str]:
@@ -80,7 +58,7 @@ def superseded_tool_group_item_ids(
     """同 Turn/model-call 的工具组整体择一，保留声明先于真实 terminal 的顺序。"""
     groups: dict[tuple[_ToolCarrierScope | None, str], list[CanonicalItemRecord]] = {}
     for item in items:
-        if item.semantic_kind in {SemanticKind.REASONING, SemanticKind.TOOL_CALL}:
+        if item.semantic_kind in {SemanticKind.ASSISTANT_OUTPUT, SemanticKind.REASONING, SemanticKind.TOOL_CALL}:
             groups.setdefault((_scope(item), item.message_group_id or item.item_id), []).append(item)
     checkpoint: dict[tuple[_ToolCarrierScope, frozenset[str]], list[CanonicalItemRecord]] = {}
     stream: dict[tuple[_ToolCarrierScope, frozenset[str]], list[CanonicalItemRecord]] = {}
@@ -140,19 +118,26 @@ def superseded_tool_group_item_ids(
 
 
 def superseded_stream_content_item_ids(
-    items: Sequence[ContentCarrier],
+    items: Sequence[CanonicalItemRecord],
 ) -> set[str]:
-    """只按显式 part 三元坐标与替代目标排除旧 assistant carrier。"""
+    """按显式来源排除旧流式块及原消息组，不保留组内思考重影。"""
     parts: set[tuple[str, str, int]] = set()
-    replaced_messages: set[str] = set()
+    replaced_messages: set[tuple[str | None, str | None, str]] = set()
     for item in items:
+        group = item.projection_group
+        if group is not None and group.ordinal != group.size - 1:
+            continue
         identity = item.projection_identity
         relations = [
             relation for relation in item.provenance_relations
             if relation.relation == "replaces"
             and relation.target_kind == "projection_message"
         ]
-        replaced_messages.update(relation.target_id for relation in relations)
+        replaced_messages.update(
+            (item.turn_id, relation.target_model_call_id or (identity.model_call_id if identity else None),
+             relation.target_id)
+            for relation in relations
+        )
         if identity is None:
             continue
         scopes = {relation.target_model_call_id for relation in relations
@@ -164,6 +149,13 @@ def superseded_stream_content_item_ids(
         for scope in scopes:
             parts.update((scope, f"{scope}:block:{ref.id}", ref.index)
                          for ref in identity.content_part_refs)
+    replaced_groups = {
+        projection_message_group_id(item)
+        for item in items
+        if item.projection_identity is not None
+        and (item.turn_id, item.projection_identity.model_call_id,
+             item.projection_identity.projection_message_id) in replaced_messages
+    }
     return {
         item.item_id for item in items
         if item.semantic_kind in {SemanticKind.ASSISTANT_OUTPUT, SemanticKind.REASONING}
@@ -172,7 +164,7 @@ def superseded_stream_content_item_ids(
             (item.projection_identity.model_call_id,
              item.projection_identity.block_id,
              item.projection_identity.block_index) in parts
-            or item.projection_identity.projection_message_id in replaced_messages
+            or projection_message_group_id(item) in replaced_groups
         )
     }
 
@@ -216,3 +208,9 @@ def superseded_item_ids(items: Sequence[CanonicalItemRecord]) -> set[str]:
     replaced = superseded_canonical_message_item_ids(items)
     selected = tuple(item for item in items if item.item_id not in replaced)
     return replaced | superseded_tool_group_item_ids(selected) | superseded_stream_content_item_ids(selected)
+
+
+def select_item_carriers(items: Sequence[CanonicalItemRecord]) -> tuple[CanonicalItemRecord, ...]:
+    """保留实际上下文载体及原有顺序，物理历史中的 shadow 仍保持不变。"""
+    superseded = superseded_item_ids(items)
+    return tuple(item for item in items if item.item_id not in superseded)

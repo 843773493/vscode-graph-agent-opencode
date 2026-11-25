@@ -53,6 +53,30 @@ PAYLOADS = (
 STATUSES = ("completed", "partial", "incomplete", "cancelled", "failed", "unknown")
 
 
+@pytest.mark.parametrize("call_count", [0, 1, 2])
+def test_tool_call_envelope_carries_exactly_one_declaration(user_item, call_count):
+    calls = [
+        {"id": f"call-{index}", "name": "read", "args": {"paths": ["a", "b"]}}
+        for index in range(call_count)
+    ]
+    payload = {"tool_calls": calls}
+    # 重算合法 hash，确保拒绝原因是单调用合同，而非正文被篡改。
+    envelope = {
+        **user_item.to_dict(),
+        "semantic_kind": "tool_call", "payload_kind": "tool_call",
+        "turn_scope": "turn_member", "wire_role": "assistant",
+        "producer_ref": {"producer_kind": "provider", "producer_id": "response"},
+        "payload": payload, "content_hash": content_hash("tool_call", payload),
+    }
+    if call_count != 1:
+        with pytest.raises(ItemSchemaError, match="必须恰含一次调用"):
+            CanonicalItemRecord.from_dict(envelope)
+    else:
+        item = CanonicalItemRecord.from_dict(envelope)
+        assert item.tool_call_id == "call-0"
+        assert item.payload["tool_calls"][0]["args"] == {"paths": ["a", "b"]}
+
+
 @pytest.mark.parametrize("has_directory", [False, True])
 def test_user_attachment_identity_survives_canonical_serialization_and_job_projection(
     user_item: CanonicalItemRecord, has_directory: bool,
@@ -644,14 +668,14 @@ def test_canonical_item_round_trip_rejects_legacy_message_fields(
         CanonicalItemRecord.from_dict(legacy)
 
 
-@pytest.mark.parametrize("format_version", [2.0, True, "2"])
+@pytest.mark.parametrize("format_version", [1, 2, 3.0, True, "3", 4])
 def test_canonical_item_rejects_non_exact_format_version(
     user_item: CanonicalItemRecord,
     format_version: object,
 ) -> None:
     raw = user_item.to_dict()
     raw["format_version"] = format_version
-    with pytest.raises(FormatDispatchError, match="v2 item envelope"):
+    with pytest.raises(FormatDispatchError, match="v3 item envelope"):
         CanonicalItemRecord.from_dict(raw)
 
 

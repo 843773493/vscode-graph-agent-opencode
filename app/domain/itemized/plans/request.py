@@ -100,7 +100,10 @@ class ContextRequestPlan:
         for ref in self.refs:
             if not isinstance(ref, ContextRef):
                 raise ItemSchemaError("ContextRequestPlan.refs 元素非法")
-            if ref.session_id != self.session_id:
+            # 派生来源保留 fork 历史的原 owner；读取授权由 rollout 的冻结 scope 核验。
+            if ref.session_id != self.session_id and not (
+                self.selection_policy == "derived_request" and ref.ref_type == "canonical_item"
+            ):
                 raise ItemSchemaError("source-mismatch: ContextRef 不属于当前 session")
             if ref.ref_type == "request_only" and ref.plan_id != self.plan_id:
                 raise ItemSchemaError("source-mismatch: ContextRef 不属于当前 plan")
@@ -196,7 +199,9 @@ class ContextRequestPlan:
             if not isinstance(entry, ContextSelectionEntry):
                 raise ItemSchemaError("ContextRequestPlan.selection 元素非法")
             ref = entry.ref
-            if ref.session_id != self.session_id:
+            if ref.session_id != self.session_id and not (
+                self.selection_policy == "derived_request" and isinstance(ref, ContextRef) and ref.ref_type == "canonical_item"
+            ):
                 raise ItemSchemaError("source-mismatch: selection ref 不属于当前 session")
             identity = selection_ref_identity(ref)
             if isinstance(ref, ToolSetIdentityRef):

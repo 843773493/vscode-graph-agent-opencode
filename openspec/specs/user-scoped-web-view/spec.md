@@ -2,47 +2,58 @@
 
 ## Purpose
 浏览器展示状态由现有本地存储与 Workbench profile 持有，按 Gateway、工作区、Session、Thread 及窗口或编辑器归属隔离，不依赖已退役的 Gateway 用户体系。
-
 ## Requirements
 ### Requirement: 浏览器视图隔离
 
-前端 SHALL 复用既有 IndexedDB 和 Workbench 存储保存主题、布局、Composer 草稿及阅读状态；会话阅读与折叠记录使用入口 Gateway、资源 Gateway／工作区、Session、真实 Thread 的完整稳定归属，不使用端口、显示名或已退役用户身份。main 别名与真实 main Thread 必须汇入同一记录。首次使用 SHALL 采用产品默认值，不读取或自动导入旧用户档案。新 Session 和 fork 不继承来源阅读记录。
+前端 SHALL 复用既有 IndexedDB 和 Workbench 存储保存主题、布局、Composer 草稿、折叠和阅读状态，工作区与会话状态使用完整稳定 owner。阅读与折叠状态 MUST 属于当前客户端安装／浏览器配置；相同 Gateway、工作区、Session 和 Thread 的业务身份可以共享，不意味着 Web、Electron、移动端或其它浏览器共享阅读游标。首次使用采用产品默认值，不从后端导入其它客户端展示状态。
 
 #### Scenario: 切换工作区或 Thread
-- **WHEN** 用户切换不同 Gateway、工作区或 Thread
-- **THEN** 视图、折叠和草稿按对应归属恢复，同名 Item 或 Turn 不造成跨 owner 混入
+- **WHEN** 用户在同一客户端切换 Gateway、工作区或 Thread
+- **THEN** 按各自完整 scope 恢复视图和草稿，不混入其它 owner 数据
+
+#### Scenario: 两个客户端独立阅读
+- **WHEN** 浏览器 A 阅读同一 Thread 的 Item X，另一个独立客户端阅读 Item Y
+- **THEN** A 的滚动、折叠、刷新和重新打开不改变另一客户端的位置；后端更新只同步业务内容，不下发 A 的阅读状态
 
 #### Scenario: 新浏览器访问
-- **WHEN** 使用没有该站点本地数据的浏览器访问同一 Gateway
-- **THEN** 使用默认展示状态，不从 Gateway 用户视图恢复另一浏览器的偏好
+- **WHEN** 没有该站点本地数据的浏览器访问相同 Gateway
+- **THEN** 使用默认展示状态，不从 Gateway 用户视图或另一客户端恢复阅读偏好
 
 #### Scenario: main 别名解析与 fork
-- **WHEN** 页面由 main 别名取得真实 Thread ID，或打开刚创建的 fork Session
-- **THEN** 前者继续使用同一主线程记录，后者使用独立 scope，不复制来源锚点和折叠状态
+- **WHEN** 用户以 main 入口打开或 fork 后进入新 Thread
+- **THEN** main 先解析为权威真实 Thread ID，再按完整 scope 读写本客户端视图；fork 使用新 owner，不继承来源阅读位置或跨客户端偏好。
 
 ### Requirement: 会话阅读位置恢复
 
-前端 SHALL 保存一个稳定展示节点锚点、节点内位置、viewport_offset_px（内容点相对滚动视口顶部的有符号 CSS 像素差）、是否跟随最新、折叠选择和阅读记录 projection_version（目标2，与历史 revision、projection_epoch、正文缓存版本分离）。reading_anchor 的坐标为 node_key＋content_position＋viewport_offset_px；node_key 由 scope 内 source_ref＋slot 构成，不含阶段或展示父链。节点使用原稳定来源与展示部位：内容关联真实 item_id／part_id，标题关联真实过程／组边界，附加数据虚线关联原消费请求／上下文边界；不为展示制造业务 Item。恢复 SHALL 先读取折叠状态，再通过原 owner 有界加载来源窗口并定位实际可见节点；目标被折叠隐藏时定位最近可见祖先，不强制展开。follow_latest 为真时只跟随尾部，不同时执行节点锁定补偿；显式定位暂停跟随，用户主动滚动中止旧定位补偿。像素仅用于目标范围内微调和屏幕位置保留，不依赖整段 Turn 高度或绝对 scrollTop；读取位置与分页／实时游标必须分离。展示态与定位行为使用原视图 owner 和统一阅读位置入口，业务 owner 不因此被合并。
+前端 SHALL 保存稳定来源＋展示 slot、客户端内内容位置、相对视口偏移、follow_latest、折叠选择和阅读格式版本。已提交内容的来源 MUST 只引用真实 `item_id`，不包含 `part_id`、Part ordinal、DOM 下标或展示父容器；标题与上下文标记继续引用原过程／组首 Item／消费边界。长正文的块号与局部偏移仅为当前渲染器的内容内位置，不升级为后端实体、URI 或业务操作边界。
+
+恢复 SHALL 先应用折叠状态，再沿原 owner 有界加载 Item 及其可见祖先；普通恢复不强制展开，显式 Item 跳转遵循原展开规则。宽度、折叠和分页改变时保持相同内容附近，不依赖绝对 scrollTop 或整轮像素偏移。follow_latest 与锚点保位互斥，用户主动滚动或取消后停止旧定位补偿。
+
+未提交 draft SHALL 只在当前编辑器临时定位，持久记录使用可恢复的真实过程来源和跟随模式；实际提交后按来源关联替换，不伪造持久 Item。支持来源的旧阅读记录只有能确证 Item 对应关系时才能转换；未支持格式保留原记录并明确恢复受限，不删除全库或静默丢弃 Part 坐标后宣称精确恢复。
 
 #### Scenario: 返回已浏览 Thread
-- **WHEN** 用户返回同一浏览器已浏览的普通或子 Thread，目标是工具结果、普通消息或无 Turn 内部执行
-- **THEN** 恢复该 Thread 的折叠和阅读模式，定位稳定内容或其可见祖先，不因 turn_id 为空而跳到尾部
+- **WHEN** 用户返回同一客户端已浏览的 Thread
+- **THEN** 恢复该 scope 的 Item、折叠和跟随模式，不默认跳尾；单个长文本内使用本地内容位置恢复附近内容
 
 #### Scenario: 目标位于折叠组内
-- **WHEN** 保存的 Item 存在，但其第一或第二层祖先按已保存状态收起
-- **THEN** 页面定位最近可见标题并维持收起，不为了阅读恢复加载全部隐藏正文
+- **WHEN** 所读 Item 被过程或活动组收起
+- **THEN** 定位最近真实可见祖先，保留目标 Item 身份，不自动展开或误选同名兄弟内容
 
 #### Scenario: 宽度或内容高度变化
-- **WHEN** 恢复前编辑器宽度、Markdown 高度、图片尺寸或上方折叠状态改变
-- **THEN** 先定位相同稳定目标，再限制局部偏移，不沿原 Turn 像素距离落入别的 Item
+- **WHEN** 上方插入上下文虚线、final 内容移出过程区、图片增高或宽度重排
+- **THEN** 保持原 Item／slot 附近阅读位置，不重新选视口外目标；final 容器变更不改变内容 Item 节点键
 
-#### Scenario: 流式 Part 尚未持久提交
-- **WHEN** 当前可见流式 Part 只有真实 part_id、尚无 canonical item_id
-- **THEN** 当前编辑器可按流实体／Part 临时保位，持久位置保存真实过程标题与跟随模式；原提交补齐来源后沿真实 producer／内容部位关联真实 Item，临时与 canonical part_id 不要求相等，不伪造持久身份或要求扫描实时历史恢复
+#### Scenario: 虚拟列表尚未挂载
+- **WHEN** Item 因分页或虚拟列表尚未成为 DOM 节点
+- **THEN** 沿原分页／虚拟列表入口有界加载并挂载，不能判为已删除、全量拉历史或定时无限重试
 
 #### Scenario: 锚点已不可恢复
-- **WHEN** 原 owner 确认锚点因历史可见范围变化或删除已不可用，或当前支持投影明确取消该展示部位
-- **THEN** 普通恢复在同一 owner 中有界确定可见祖先或相邻位置并说明原目标未恢复；无可确定邻居时保留正常初始窗口或空态，不扫描全历史或伪报恢复成功
+- **WHEN** 原 owner 确认 Item 不可见、已删除、无权限、过期，或请求遭遇网络／服务故障
+- **THEN** 区分真实结果；普通恢复明确说明受限并选择声明的可用位置，显式跳转报告目标结果，网络错误不能伪装成目标删除或空成功
+
+#### Scenario: 流式 Part 尚未持久提交
+- **WHEN** 当前阅读来源仍为未提交的流式 draft
+- **THEN** 仅在编辑器内临时定位，持久记录使用可恢复过程来源；真实提交沿明确来源关联接续，不保存 Part 或伪造 Item ID。
 
 ### Requirement: 新消息与阅读位置共存
 

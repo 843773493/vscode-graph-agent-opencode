@@ -88,7 +88,7 @@ def test_backfill_restores_lifecycles_without_overwriting_later_metadata() -> No
         for seq, kind in ((1, started), (2, completed)):
             events.append({
                 "type": kind, "event_seq": seq, "emitted_at": f"time-{seq}",
-                "payload": {identity_key: "shared"},
+                "payload": {identity_key: "shared", **({"started_at": "source-start"} if kind == "tool.started" else {})},
             })
     state["blocks"][0].update(last_event_seq=10, updated_at="later")
 
@@ -97,7 +97,7 @@ def test_backfill_restores_lifecycles_without_overwriting_later_metadata() -> No
     for collection, entities in state.items():
         first, duplicate = entities
         assert first["started_seq"] == 1
-        assert first["started_at"] == "time-1"
+        assert first["started_at"] == ("source-start" if collection == "tool_executions" else "time-1")
         assert first["completed_seq"] == 2
         assert first["completed_at"] == "time-2"
         assert first["last_event_seq"] == (10 if collection == "blocks" else 2)

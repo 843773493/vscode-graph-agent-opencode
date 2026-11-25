@@ -52,6 +52,7 @@ class AgentEventStreamResult:
     final_text: str
     latest_model_content_blocks: tuple[dict[str, object], ...]
     last_tool_result_text: str
+    final_message_id: str | None = None
     successful_tool_calls: tuple[SuccessfulToolCall, ...] = ()
     completed_custom_tool_names: tuple[str, ...] = ()
     token_usage: ModelTokenUsagePayload = field(default_factory=ModelTokenUsagePayload)

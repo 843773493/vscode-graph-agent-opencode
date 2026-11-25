@@ -179,6 +179,7 @@ function toolFromSnapshot(value: SnapshotToolExecution): MessageStreamToolExecut
     tool_name: defaultedTextValue(value.tool_name, "tool"),
     status: toolExecutionStatusValue(value.status),
     outcome: toolExecutionOutcomeValue(value.outcome),
+    execution_completed_at: optionalTextValue(value.execution_completed_at),
     completion_reason: optionalTextValue(value.completion_reason),
     result: value.result
       ? boundedMessageStreamText(value.result, MESSAGE_STREAM_TOOL_TEXT_MAX_CHARS)

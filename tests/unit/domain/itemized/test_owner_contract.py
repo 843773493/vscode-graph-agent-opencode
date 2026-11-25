@@ -407,9 +407,11 @@ def test_restore_rejects_consistently_forged_omitted_owner(
 
 
 @pytest.mark.parametrize("kind", ["canonical_item", "request_only", "tool_set"])
+@pytest.mark.parametrize("selection_policy", ["active_view", "derived_request"])
 def test_unselected_registry_cannot_hide_a_foreign_session(
     user_item: CanonicalItemRecord,
     kind: str,
+    selection_policy: str,
 ) -> None:
     if kind == "canonical_item":
         ref = ContextRef.canonical_item(user_item, session_id="foreign-session", thread_id="thread-1")
@@ -430,6 +432,13 @@ def test_unselected_registry_cannot_hide_a_foreign_session(
             source_revision="r1",
             tools=[],
         )
+    if selection_policy == "derived_request" and kind == "canonical_item":
+        plan = ContextRequestPlan(
+            session_id="session-owner", thread_id="thread-1", plan_id="plan-owner",
+            refs=(ref,), selection_policy=selection_policy,
+        )
+        assert plan.refs == (ref,)
+        return
     with pytest.raises(ItemSchemaError, match="session"):
         ContextRequestPlan(
             session_id="session-owner",
@@ -437,7 +446,32 @@ def test_unselected_registry_cannot_hide_a_foreign_session(
             plan_id="plan-owner",
             refs=(ref,) if isinstance(ref, ContextRef) else (),
             tool_set_refs=(ref,) if isinstance(ref, ToolSetRef) else (),
+            selection_policy=selection_policy,
         )
+
+
+def test_derived_snapshot_preserves_canonical_source_owner_and_hashes(
+    user_item: CanonicalItemRecord, omitted_snapshot: ContextAssemblySnapshot,
+) -> None:
+    snapshot = omitted_snapshot
+    ref = ContextRef.canonical_item(user_item, session_id="fork-source-session", thread_id="fork-source-thread")
+    entry = ContextSelectionEntry(
+        assembly_id=snapshot.assembly_id, plan_ordinal=0, ref=ref, selection_kind="canonical_history",
+        source_revision=ref.source_revision, content_length=ref.content_length, content_hash=ref.content_hash,
+        visibility=ref.visibility, protection=ref.protection, availability=ref.availability,
+    )
+    plan = ContextRequestPlan(
+        session_id=snapshot.session_id, thread_id=snapshot.thread_id, plan_id=snapshot.plan_id,
+        refs=(ref,), selection_policy="derived_request",
+    ).seal_for_assembly(snapshot.assembly_id, selection=(entry,))
+    derived = replace(
+        snapshot, refs=plan.refs, selection=plan.selection, selection_policy=plan.selection_policy,
+        plan_hash=plan.plan_hash(), request_hash=context_request_hash(plan, "provider-1", target_format="native"),
+    )
+    restored = ContextAssemblySnapshot.from_dict(derived.to_dict())
+    restored.validate_hashes()
+    assert restored == derived and restored.refs == (ref,)
+    assert restored.as_sealed_plan().refs == (ref,)
 
 
 @pytest.fixture(params=["canonical_history", "request_only", "tool_set"])

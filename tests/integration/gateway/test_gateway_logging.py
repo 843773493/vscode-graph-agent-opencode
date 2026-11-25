@@ -51,12 +51,13 @@ def logging_case(
     port = integration_ports_for_file(Path(request.node.path)).port(0)
     config_path = workspace / ".boxteam/workspace.jsonc"
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = config["llm"]["providers"]["primary"]
+    workspace_settings = config["settings"]["workspace"]
+    provider = workspace_settings["llm"]["providers"]["primary"]
     provider["models"]["default"]["model"] = "e2e-stub-model"
-    provider["defaults"]["api_key"] = ""
-    config["agents"]["default"]["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{port}"
-    config.setdefault("plugins", {}).setdefault("runtime", {})["entries"] = [
+    config["profiles"]["provider.primary"]["settings"]["model_options"]["api_key"] = ""
+    workspace_settings["agents"]["default"]["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{port}"
+    workspace_settings.setdefault("plugins", {}).setdefault("runtime", {})["entries"] = [
         {"package_id": "boxteam.developer-tools", "package_version": "0.1.1", "plugin_id": plugin_id, "enabled": True}
         for plugin_id in ("terminal", "browser")
     ]
@@ -235,7 +236,7 @@ def test_warning_keeps_real_terminal_tool_bytes_and_workspace_records(logging_ca
         "include": ["tool_call", "tool_result"],
     }).raise_for_status().json()["data"]
     (case.artifacts / "terminal-history.json").write_text(json.dumps(detail, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    visible_result, = [part for item in detail["items"] for part in item["response_parts"] if part["kind"] == "tool_result"]
+    visible_result, = [part for item in detail["items"] for part in item["response_items"] if part["kind"] == "tool_result"]
     assert json.loads(visible_result["result"]) == result
     assert visible_result["tool_call_id"] == tool_item["payload"]["tool_call_id"]
     logs = sorted((node / "logs/llm_requests").glob("*.json"))

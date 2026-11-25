@@ -57,25 +57,26 @@ export function compactInternalExecutionBodies(executions: readonly InternalExec
         recent.sort((left, right) => right.ordinal - left.ordinal);
         recent.length = Math.min(recent.length, 2);
       };
-      for (const part of execution.display_parts) visit(part.item_id, part.logical_item_ordinal);
-      for (const part of execution.response_parts) if (part.kind !== "context_notice") {
+      for (const part of execution.display_items) visit(part.item_id, part.logical_item_ordinal);
+      for (const part of execution.response_items) if (part.kind !== "context_notice") {
         visit(part.source.item_id, part.source.logical_item_ordinal);
       }
       retained = new Set([...retainedItems, ...recent.map(item => item.id)]);
     }
     let changed = false;
-    const display_parts = execution.display_parts.map(part => {
+    const display_items = execution.display_items.map(part => {
       if (part.bodyEvicted || retained.has(part.item_id)) return part;
       changed = true;
       return { ...part, text: "", bodyEvicted: true as const };
     });
-    const response_parts = execution.response_parts.map(part => {
+    const response_items = execution.response_items.map(part => {
       // context notice 本来就只有来源 metadata；正文始终由 inspect 按需读取。
       if (part.kind === "context_notice" || part.bodyEvicted || retained.has(part.source.item_id ?? "")) return part;
       changed = true;
-      return { part_id: part.part_id, kind: part.kind, projection: "summary" as const,
-        status: part.status, source: part.source, tool_call_id: part.tool_call_id, tool_name: part.tool_name, bodyEvicted: true as const };
+      // 只释放正文，结果、终态和来源仍是工具行与阅读定位所需的真实事实。
+      const { text: _text, content: _content, arguments: _arguments, result: _result, ...metadata } = part;
+      return { ...metadata, projection: "summary" as const, bodyEvicted: true as const };
     });
-    return changed ? { ...execution, activityOutline: undefined, display_parts, response_parts } : execution;
+    return changed ? { ...execution, activityOutline: undefined, display_items, response_items } : execution;
   });
 }

@@ -175,7 +175,7 @@ test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独�
       ...history(threadId), internal_executions: [{
         execution_id: body.execution_id, job_id: "job-internal", session_id: SESSION, thread_id: threadId,
         status: "completed", created_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:01Z",
-        display_parts: [], response_parts: [],
+        display_items: [], response_items: [],
       }],
     } : history(threadId));
   });
@@ -299,7 +299,7 @@ test("来源报告固定历史 execution，新报告发布后不改投或误标�
     return response({ ...history(CHILDREN[0]!.thread_id), internal_executions: [{
       execution_id: body.execution_id, job_id: "job-report", session_id: SESSION, thread_id: CHILDREN[0]!.thread_id,
       status: "completed", created_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:01Z",
-      display_parts: [], response_parts: [],
+      display_items: [], response_items: [],
     }] });
   });
   act(() => { renderer = create(<Harness />); });
@@ -342,7 +342,7 @@ test("同一 child 快速切换报告，旧成功和错误都不能覆盖新 exe
   const report = (execution: string) => response({ ...history(CHILDREN[0]!.thread_id), internal_executions: [{
     execution_id: execution, job_id: "job-report", session_id: SESSION, thread_id: CHILDREN[0]!.thread_id,
     status: "completed", created_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:01Z",
-    display_parts: [], response_parts: [],
+    display_items: [], response_items: [],
   }] });
   await act(async () => { replies.get("selected-execution")!(report("selected-execution")); });
   await until(() => current.snapshot.report !== null && !current.snapshot.loading);
@@ -373,7 +373,7 @@ test("报告选择已提交但 passive effect 尚未取消旧请求时，旧正�
   reply(response({ ...history(CHILDREN[0]!.thread_id), internal_executions: [{
     execution_id: "old-execution", job_id: "job-report", session_id: SESSION, thread_id: CHILDREN[0]!.thread_id,
     status: "completed", created_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:01Z",
-    display_parts: [], response_parts: [],
+    display_items: [], response_items: [],
   }] }));
   for (let microtask = 0; microtask < 20; microtask += 1) await Promise.resolve();
   expect(current.snapshot.report).toBeNull();
@@ -399,7 +399,7 @@ test("报告请求在途时重复点击同一 child 报告保留唯一读取并�
     complete(response({ ...history(CHILDREN[0]!.thread_id), internal_executions: [{
       execution_id: "execution-1", job_id: "job-report", session_id: SESSION, thread_id: CHILDREN[0]!.thread_id,
       status: "completed", created_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:01Z",
-      display_parts: [], response_parts: [],
+      display_items: [], response_items: [],
     }] }));
   });
   await until(() => !current.snapshot.loading);
@@ -407,15 +407,14 @@ test("报告请求在途时重复点击同一 child 报告保留唯一读取并�
   expect(current.snapshot.error).toBeNull();
 });
 
-test("报告续页合并同一 execution 的 256 加 44 个 response part 并按成员坐标排序", async () => {
+test("报告续页合并同一 execution 的 300 个独立 Item 并按成员坐标排序", async () => {
   const threadId = CHILDREN[0]!.thread_id;
   const part = (
     logicalItemOrdinal: number,
-    partOrdinal = 0,
     projection: "summary" | "detail" = "detail",
-    text = `正文 ${logicalItemOrdinal}.${partOrdinal}`,
+    text = `正文 ${logicalItemOrdinal}`,
   ) => ({
-    part_id: `item-${logicalItemOrdinal}:part:${partOrdinal}`,
+    id: `item-${logicalItemOrdinal}`,
     kind: "text",
     projection,
     status: "completed",
@@ -424,17 +423,14 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
       item_id: `item-${logicalItemOrdinal}`,
       item_sequence: logicalItemOrdinal + 1,
       logical_item_ordinal: logicalItemOrdinal,
-      part_ordinal: partOrdinal,
       created_at: "2026-10-08T00:00:00Z",
     },
     text,
   });
   const tailParts = Array.from({ length: 256 }, (_, index) => index + 44)
-    .flatMap((ordinal) => ordinal === 50
-      ? [part(ordinal, 1), part(ordinal, 0)]
-      : [part(ordinal, 0, ordinal === 100 ? "summary" : "detail", ordinal === 100 ? "摘要投影" : undefined)]);
+    .map((ordinal) => part(ordinal, ordinal === 100 ? "summary" : "detail", ordinal === 100 ? "摘要投影" : undefined));
   const olderParts = Array.from({ length: 44 }, (_, ordinal) => part(ordinal));
-  olderParts.push(part(100, 0, "detail", "完整投影"));
+  olderParts.push(part(100, "detail", "完整投影"));
   const requests: { path: string; body: Record<string, unknown> }[] = [];
   installSessionApiFetchMock(({ path, init }) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -453,8 +449,8 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
         status: "completed",
         created_at: "2026-10-08T00:00:00Z",
         updated_at: "2026-10-08T00:00:01Z",
-        display_parts: [],
-        response_parts: isTail ? tailParts : olderParts,
+        display_items: [],
+        response_items: isTail ? tailParts : olderParts,
       }],
     });
   });
@@ -462,8 +458,8 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
   act(() => { renderer = create(<Harness />); });
   act(() => current.selectThread(threadId, "report"));
   await until(() => !current.snapshot.loading && current.snapshot.report?.before_cursor === "cursor-before-256");
-  expect(current.snapshot.report?.internal_executions?.[0]?.response_parts).toHaveLength(257);
-  expect(new Set(current.snapshot.report?.internal_executions?.[0]?.response_parts.map(({ source }) => source.item_id)).size).toBe(256);
+  expect(current.snapshot.report?.internal_executions?.[0]?.response_items).toHaveLength(256);
+  expect(new Set(current.snapshot.report?.internal_executions?.[0]?.response_items.map(({ source }) => source.item_id)).size).toBe(256);
 
   act(() => { void current.loadEarlier(); });
   await until(() => !current.snapshot.loading && current.snapshot.report?.before_cursor === null);
@@ -488,17 +484,13 @@ test("报告续页合并同一 execution 的 256 加 44 个 response part 并按
       },
     },
   ]);
-  expect(loaded?.response_parts).toHaveLength(301);
-  expect(new Set(loaded?.response_parts.map(({ part_id }) => part_id)).size).toBe(301);
-  expect(loaded?.response_parts.map((entry) => [
-    entry.source.logical_item_ordinal,
-    entry.source.part_ordinal,
-  ])).toEqual(Array.from({ length: 300 }, (_, ordinal) => ordinal === 50
-    ? [[ordinal, 0], [ordinal, 1]]
-    : [[ordinal, 0]]).flat());
-  expect(loaded?.response_parts.filter(({ source }) => source.item_id === "item-50").map(({ part_id }) => part_id))
-    .toEqual(["item-50:part:0", "item-50:part:1"]);
-  expect(loaded?.response_parts.find(({ part_id }) => part_id === "item-100:part:0"))
+  expect(loaded?.response_items).toHaveLength(300);
+  expect(new Set(loaded?.response_items.map(({ id }) => id)).size).toBe(300);
+  expect(loaded?.response_items.map((entry) => entry.source.logical_item_ordinal))
+    .toEqual(Array.from({ length: 300 }, (_, ordinal) => ordinal));
+  expect(loaded?.response_items.filter(({ source }) => source.item_id === "item-50").map(({ id }) => id))
+    .toEqual(["item-50"]);
+  expect(loaded?.response_items.find(({ id }) => id === "item-100"))
     .toMatchObject({ projection: "detail", text: "完整投影" });
 });
 

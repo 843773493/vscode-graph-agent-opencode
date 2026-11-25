@@ -14,6 +14,7 @@ from boxteam_plugin_sdk.request_context import get_current_request_id
 
 from app.abstractions.execution_queue import (
     ExecutionQueueClaimProtocol,
+    ExecutionQueueLoad,
     ExecutionQueueProtocol,
 )
 from app.abstractions.job_event_bus import JobEventBusProtocol
@@ -55,8 +56,6 @@ from app.schemas.internal_v2.message import AttachmentRef
 from app.schemas.internal_v2.pending_request import (
     DeliveryBoundary,
     DeliveryPolicy,
-    PendingRequestControl,
-    PendingRequestDTO,
     PendingRequestListDTO,
     PendingRequestSummaryListDTO,
 )
@@ -1269,11 +1268,8 @@ class JobService:
             if current_job_id != finished_job.job_id:
                 return
 
-            if not self._pending_queue.peek_head(finished_job.session_id, finished_job.thread_id):
-                self._thread_current_job.pop((finished_job.session_id, finished_job.thread_id), None)
-                should_dispatch = False
-            else:
-                should_dispatch = True
+            self._thread_current_job.pop((finished_job.session_id, finished_job.thread_id))
+            should_dispatch = self._pending_queue.peek_head(finished_job.session_id, finished_job.thread_id) is not None
 
         if not should_dispatch:
             await self._pending_requests.refresh_version(finished_job.session_id)
@@ -1716,46 +1712,36 @@ class JobService:
                         thread_ids[thread_id] = None
             if not thread_ids:
                 return
-            await self._pending_requests.refresh_version(session_id)
             for thread_id in thread_ids:
                 await self._start_next_pending(session_id, thread_id=thread_id, boundary="idle")
 
     async def _load_pending_records(
-        self, session_id: str, records: list[PendingRequestDTO], *, deleting: bool = False,
+        self, session_id: str, loaded: ExecutionQueueLoad, *, deleting: bool = False,
     ) -> None:
         """刷新持久队列投影，保留原活动槽、Job 与 sibling task。"""
-        if self._input_owner is not None:
-            live_records = []
-            for record in records:
-                reference = PendingRequestControl.model_validate(record.model_dump(exclude={
-                    "content", "attachments", "message_created_at", "message_metadata", "reorderable",
-                }))
-                outcome = await asyncio.to_thread(
-                    self._input_owner.accepted_job_outcome,
-                    reference,
-                )
-                if outcome == "unknown":
-                    live_records.append(record)
-                elif outcome not in {"completed", "completed_empty", "failed", "interrupted", "cancelled", "execution_lost"}:
-                    raise RuntimeError(f"待处理引用的 canonical execution outcome 无效: {record.job_id} {outcome}")
-            # 只消费原 canonical execution，绝不由队列投影推导业务终态。
-            records = live_records
-        queue_records = {record.job_id: await self._pending_requests.execution_queue.record(session_id, record.thread_id, record.job_id) for record in records}
-        queue_snapshot_version = max(
-            (record.snapshot_version for record in records),
-            default=0,
-        )
+        # 原快照已联查 canonical outcome 并校验 phase；不把同次恢复拆成多次读。
+        # 已持有的 Job 保留其不可变输入；只有冷恢复才经原 reader 读取正文。
+        # I/O 不持调度锁；重新取得锁后仍检查原 Job 的身份及最新运行状态。
+        inputs = {
+            record.cursor.admission.job_id: await self._pending_requests.execution_queue.project(
+                record, position=position, snapshot_version=loaded.snapshot_version,
+            )
+            for position, record in enumerate(loaded.records)
+            if record.cursor.admission.job_id not in self._jobs
+        }
         async with self._dispatch_lock:
             if session_id in self._closed_sessions and not deleting:
                 raise RuntimeError(
                     f"会话正在删除，拒绝恢复待处理队列: {session_id}"
                 )
             restored: list[QueueEntry] = []
-            for record in records:
-                existing = self._jobs.get(record.job_id)
+            for queued in loaded.records:
+                admission = queued.cursor.admission
+                existing = self._jobs.get(admission.job_id)
                 if existing is not None and existing.status not in {JobStatus.accepted, JobStatus.queued}:
                     continue
                 if existing is None:
+                    record = inputs[admission.job_id]
                     self._jobs[record.job_id] = JobState(
                         job_id=record.job_id,
                         session_id=record.session_id,
@@ -1777,30 +1763,28 @@ class JobService:
                         attachments=list(record.attachments),
                         created_at=record.created_at,
                         updated_at=record.updated_at,
-                        delivery_policy=record.delivery_policy, queue_record=queue_records[record.job_id],
+                        delivery_policy=queued.delivery_policy, queue_record=queued,
                     )
                 else:
                     if (existing.session_id, existing.thread_id, existing.message_id, existing.execution_binding) != (
-                        record.session_id, record.thread_id, record.message_id, record.execution_binding,
+                        admission.session_id, admission.thread_id, queued.input.message_id, queued.input.execution_binding,
                     ):
                         raise RuntimeError("已加载的 Job 与持久队列 identity 冲突")
-                    existing.queue_record = queue_records[record.job_id]
-                    existing.delivery_policy = record.delivery_policy
+                    existing.queue_record = queued
+                    existing.delivery_policy = queued.delivery_policy
                 restored.append(
                     QueueEntry(
-                        job_id=record.job_id,
-                        thread_id=record.thread_id,
-                        enqueue_sequence=record.enqueue_sequence,
-                        delivery_policy=record.delivery_policy,
-                        waiting_reason=record.waiting_reason,
-                        last_boundary=record.last_boundary,
+                        job_id=admission.job_id,
+                        thread_id=admission.thread_id,
+                        enqueue_sequence=queued.cursor.commit_id,
+                        delivery_policy=queued.delivery_policy,
                     )
                 )
             self._pending_queue.clear(session_id)
             self._pending_queue.restore(
                 session_id,
                 restored,
-                queue_snapshot_version=queue_snapshot_version,
+                queue_snapshot_version=loaded.snapshot_version,
             )
             # 准入已落盘不代表 FIFO 已发布；装载失败时仍由原 accepted Job 接受取消和排空。
             for entry in restored:
@@ -1916,7 +1900,7 @@ class JobService:
                 await self._pending_requests.refresh_version(session_id)
                 return False
             # durable claim 不随 FIFO 镜像移除；任务创建失败仍沿原 Job 重试。
-            await self._pending_requests.refresh_version(session_id)
+            # claim 到 start 之间没有版本消费者，启动提交后再刷新发布版本。
             async with self._dispatch_lock:
                 if (
                     self.advancement_paused(session_id, thread_id)

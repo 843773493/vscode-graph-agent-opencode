@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { t } from "../../../../shared/core/i18n/index.js";
 import React, { useEffect, useRef, useState } from "react";
 import { useWorkspaceFileReferenceContext, type WorkspaceFileReferenceResolution } from "../workspace/WorkspaceFileReferenceContext";
@@ -29,7 +30,7 @@ export default function WorkspaceFileReferenceLink({ target, children, inlineCod
       if (generation === lifetime.current) setResolution({ status: "error", message: errorMessage(error) });
     } finally { if (generation === lifetime.current) setOpening(false); }
   };
-  const errorTitle = resolution?.status === "error" ? t("chat.file.validationFailed", resolution.message) : undefined;
+  const errorTitle = resolution?.status === "error" ? failureSummary(t("chat.file.validationFailed", resolution.message)) : undefined;
   if (context && isLikelyWorkspaceFileReference(target) && shouldResolveWorkspaceFileReference(target) && resolution?.status !== "missing") {
     return <button type="button" className={`chat-file-reference${inlineCode ? " inline-code" : ""}`}
       title={errorTitle ?? t("chat.file.open", target, "")} aria-label={t("chat.file.openAria", target, "")}

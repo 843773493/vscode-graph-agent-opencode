@@ -59,7 +59,7 @@ app/services/infrastructure/config/
 - 公开失败状态、事件与应用记录复用 `app/core/failures.py` 的阶段、类别及脱敏原因；诊断沿同一 SDK 原语限量格式化，不把原始输入、凭据或 raw exc_info 复制到日志。
 - 待重启协作者的状态库和配置域必须通过构造参数显式注入，回读状态只允许通过注入的 reload status provider。
 - 事件游标协作者只做逐字转发，after/limit/consumer_id 语义与越界异常必须由状态库承担，不得在本目录改写分页或吞掉 CursorGone。
-- LLM 解析协作者只接收无参、返回不可变值的叶子提供者（生效配置与默认 Agent id），不得注入整个 `ConfigService` 或快照存储。命名密钥由异步执行边界经所属 Gateway 批量解析，再在构建作用域显式绑定；同步列表查询不联网、不解密，快照只保存引用。驻留模型的代身份包含所需密钥修订号，后续 Turn 不复用旧密钥实例。
+- LLM 解析协作者只接收当前不可变 `ConfigGraph`、默认 Agent id 和 schema 的叶子提供者，不得注入整个 `ConfigService` 或快照存储。Provider／Model 目录只用 `config_ref` 选择节点，选项沿该节点唯一父链解析，不恢复 defaults／overrides 二次合并；inspection 及实际调用共用解析结果。命名密钥由异步执行边界经所属 Gateway 批量解析，再在构建作用域显式绑定；同步列表查询不联网、不解密，快照只保存引用。驻留模型的代身份包含所需密钥修订号，后续 Turn 不复用旧密钥实例。
 - 会话默认值协作者复用宿主传入的 `workspace_root`，不得另造 `.boxteam` 根路径拼接，也不得自行向上推导工作区根目录。
 - 会话默认值文件必须校验可解析、是对象且 schema 版本匹配；损坏或过期文件直接报错，不得静默回落默认值。
 - 重载状态协作者只接收快照状态的叶子提供者（无参、返回不可变 `ConfigReloadStatus`），不得注入 `ConfigSnapshotStore`，以免把候选快照构建反向拖入本目录。

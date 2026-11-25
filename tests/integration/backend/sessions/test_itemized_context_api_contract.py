@@ -244,7 +244,7 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
         (after,) = saver.load_history(session_id, thread_id, history_query).items
         assert result["resource_refs"], "必须真正封存 request-only resource binding"
         assert after.activity_stats == before.activity_stats, "封存资源不能改变 Turn 统计或计时"
-        assert after.response_parts == before.response_parts, "封存资源不能新增可展开内容或改变 identity/order/elapsed"
+        assert after.response_items == before.response_items, "封存资源不能新增可展开内容或改变 identity/order/elapsed"
         assert saver.read_canonical_items(session_id, saver._storage.storage.main_thread_id(session_id)) == canonical, "request-only binding 不能产生 canonical Item"
         binding_activity.append({"before": before.model_dump(mode="json"), "after": after.model_dump(mode="json"),
             "resource_refs": [ref.model_dump(mode="json") for ref in result["resource_refs"]]})

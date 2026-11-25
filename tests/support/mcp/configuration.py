@@ -22,9 +22,10 @@ def write_mcp_config(
     )
     with default_config_path.open("r", encoding="utf-8") as stream:
         workspace_config = commentjson.load(stream)
-    workspace_config["mcp"] = {"servers": servers}
-    workspace_config["agents"]["default"]["tools"]["denylist"] = ["all"]
-    workspace_config["agents"]["default"]["tools"]["allowlist"] = list(allowed_mcp_tools)
+    workspace_settings = workspace_config["settings"]["workspace"]
+    workspace_settings["mcp"] = {"servers": servers}
+    workspace_settings["agents"]["default"]["tools"]["denylist"] = ["all"]
+    workspace_settings["agents"]["default"]["tools"]["allowlist"] = list(allowed_mcp_tools)
 
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     output_config_path = artifacts_dir / "workspace.jsonc"

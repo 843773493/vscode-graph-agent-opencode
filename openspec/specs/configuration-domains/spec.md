@@ -1,28 +1,38 @@
 ## Purpose
 
-定义 Gateway 与 Workspace 配置的运行时所有权、独立 schema 与版本、旧合并布局迁移以及迁移后的配置读取边界。
+定义 Gateway 与 Workspace 配置的运行时所有权、独立 schema 与版本、显式父链及配置读取边界。
 ## Requirements
 ### Requirement: 配置按运行时所有权隔离
-Gateway SHALL 只读取 `${BOXTEAM_HOME}/config/gateway.jsonc`，Workspace Backend SHALL 读取 `${BOXTEAM_HOME}/config/workspace.jsonc` 并叠加当前显式工作区的 `.boxteam/workspace.jsonc`。Gateway MUST NOT 读取任何工作区级配置。
+
+Gateway 与 Workspace SHALL 各自从明确入口解析本域配置节点及其合法祖先。默认 Gateway 入口为 `${BOXTEAM_HOME}/config/gateway_local.jsonc`；默认 Workspace 入口为当前显式工作区的 `.boxteam/workspace.jsonc`，各默认父链由安装／初始化写明。用户可显式改入口或同域父链，不因固定文件名自动叠加其他来源。Gateway MUST NOT 读取任何工作区 `.boxteam/` 配置或代理解析 Workspace 业务配置；Backend 不读取 Gateway 配置作为默认父。
 
 #### Scenario: 同一 Gateway 管理多个工作区
 - **WHEN** Gateway 注册同一台电脑上的多个 Workspace Backend
-- **THEN** Gateway 只依据用户级 Gateway 配置和控制面状态路由，不读取任一工作区的 `.boxteam/workspace.jsonc`
+- **THEN** Gateway 只依据自己的配置图和控制面状态路由，不读取任一工作区的 `.boxteam/workspace.jsonc`
 
 #### Scenario: Workspace 应用本地覆盖
-- **WHEN** Workspace Backend 启动且显式工作区存在 `.boxteam/workspace.jsonc`
-- **THEN** 后端先加载用户级 Workspace 配置，再用该显式工作区配置覆盖同名项
+- **WHEN** 工作区入口明确继承用户级 Workspace 链并写入本地 settings
+- **THEN** Backend 按实际单父链计算结果，当前工作区覆盖生效，其他工作区不随之改变
+
+#### Scenario: 父链缺失而旧默认文件存在
+- **WHEN** 指定入口的父文件不存在，但目录中有原固定层级文件
+- **THEN** 启动明确失败，不按旧文件层级猜测替代父
 
 ### Requirement: 配置域使用独立 schema 和版本
-Gateway 与 Workspace 配置 SHALL 各自使用独立 schema 和 `config_version`，schema MUST 拒绝属于另一配置域的字段。
+
+Gateway 与 Workspace SHALL 各自使用独立 schema 和 config_version。根文档 SHALL 使用统一节点信封；settings 允许共享 network 命名空间和本域业务命名空间，Workspace 还允许 model_options 作为模型共同祖先选项，schema MUST 拒绝本地定义另一域的字段。内嵌节点版本由所属文档管理，不另建每 profile 或整棵树的版本账本。最终 schema 校验 MUST NOT 额外注入不可见默认链。
 
 #### Scenario: Workspace 配置包含 Gateway 字段
-- **WHEN** 用户级或工作区级 Workspace 配置包含 `gateway`
-- **THEN** Workspace 配置验证失败并报告文件路径与字段位置
+- **WHEN** Workspace 来源在 settings 中写入 gateway 或其根文档写入不允许的跨域字段
+- **THEN** 配置验证失败并报告来源 URI 与原文字段位置
 
 #### Scenario: Gateway 配置包含 Agent 字段
-- **WHEN** Gateway 配置包含 `agents`、`llm` 或其他 Workspace 业务字段
-- **THEN** Gateway 配置验证失败并报告文件路径与字段位置
+- **WHEN** Gateway 来源尝试写入 workspace.agents、llm 或其他 Workspace 业务字段
+- **THEN** Gateway 配置验证失败，不借通用继承放开业务所有权
+
+#### Scenario: 节点携带另一版本的父文档
+- **WHEN** 配置图引用的同域文档版本不是当前可读版本
+- **THEN** 明确拒绝并指向适用的原维护入口，不合并不同版本的字段或在普通读取中重写文件
 
 ### Requirement: 旧合并配置执行可恢复布局迁移
 Launcher SHALL 在服务启动前把旧用户级 `boxteam.jsonc` 拆分为新 Gateway 与 Workspace 配置，并把旧工作区级 `boxteam.jsonc` 迁移为 `workspace.jsonc`。迁移 MUST 验证全部候选，MUST 可在进程中断后幂等恢复，且 MUST NOT 静默覆盖冲突的新文件。
@@ -138,27 +148,31 @@ Gateway registry 中的每个目标 SHALL（必须）具有不可变身份、唯
 
 ### Requirement: Workspace 配置来源层必须分别物化并支持用户级 fan-out
 
-Workspace SHALL（必须）分别维护 `user`、`user_local`、`workspace` 和 runtime override 的 payload、`layer_revision`、`layer_digest`、来源路径和 CAS 基线，不得把 `workspace.jsonc` 与 `workspace_local.jsonc` 合并成一个来源层。有效配置仍按既有优先级合并；source layer 更新不等于 active snapshot 更新。用户级 `workspace.jsonc` 是一个共享 source，写入或 watcher 导入必须生成 `fanout_id`；显式 source writer 直接分配该关联键，直接人工编辑则由 watcher 按规范化 source path 与 post-write layer digest 派生。该键只用于 fan-out 关联/幂等，不得充当 commit revision、event cursor 或内容 digest。
+Workspace SHALL 分别维护实际依赖文件和已有 runtime override 的 payload、layer_revision、layer_digest、规范化来源身份、generation、presence 与 CAS 基线。user、user_local、workspace 不得物化成一个来源；自定义父文档按同规则登记。有效优先级只由真实父链决定，不再由来源类别名称决定。source 更新不等于 active 更新。
 
-用户来源的实际影响范围 SHALL 由实际读取这份文件的 Workspace 决定；默认同一原生目标机器、同一 BoxTeam Home 共享该来源，不按 Gateway 登记范围限定。存活 Workspace SHALL 自行监听用户级 `workspace.jsonc`、`workspace_local.jsonc` 及本工作区来源，独立校验并沿原 reload 链决定热应用、下一任务或重启生效。Gateway 重启或工作区登记在另一 Gateway 不改变来源归属，也不要求 Gateway 逐个驱动生效。
+共享来源写入或 watcher 导入 SHALL 沿原流程生成 fanout_id；显式 writer 分配关联键，人工编辑由 watcher 按规范化来源路径与写后 digest 派生。该键只用于 fan-out 关联／幂等，不充当 commit revision、event cursor 或内容 digest。实际影响范围 SHALL 由实际依赖该文件的 Workspace 决定，不由 Gateway 管理列表限定；不再依赖该文件的工作区不受本次 fan-out 影响。
 
-每个 Workspace 必须独立执行 layer/active CAS，并分别分配自己的 candidate_id、commit_revision 和配置事件。运行中的 Workspace 自行尝试导入，未运行的 Workspace 在下次启动时追赶同一 source generation；跨 Workspace 不得伪造一个 SQLite 全局事务。一个 Workspace 冲突不得回滚其他 Workspace 的成功导入，跨 Workspace 汇总结果可报告为 `fanout_partial`，但该名称只属于 fan-out 诊断汇总，不属于单 Workspace 配置事件的 `result` 枚举。汇总仅报告来源 owner 已观察到的消费者及各自结果，不以管理列表冒充完整影响范围，不新增成员登记或 Gateway 分发机制。被更高优先级层遮蔽的 source layer 仍更新自身 layer revision/digest，但 effective digest 不变并返回 `unchanged`。
+存活 Workspace SHALL 自行观察 active／候选图的明确文件依赖并沿原 reload 链独立校验、CAS 和应用。Gateway 重启或工作区登记在另一 Gateway 不改变来源归属，不要求 Gateway 逐个驱动。每个 Workspace 分别分配 candidate_id、commit_revision 和配置事件；未运行的 Workspace 下次启动读取最新父链和来源。不建立跨 Workspace SQLite 全局事务、成员登记或广播机制。
+
+一个 Workspace 冲突 MUST NOT 回滚其他 Workspace 的成功导入。跨 Workspace 诊断仍可汇总 fanout_partial，但它不是单 Workspace 配置事件 result；仅汇总已观察消费者，不承诺完整未知影响范围。被后代覆盖的来源仍更新自身 revision／digest；有效值未变沿原 unchanged 合同处理，来源链改变仍须可见。
+
+API/UI SHALL 明确选择单 Workspace 的原层物化／runtime override，或显式用户／工作区／合法父来源文件。runtime override 为图中可见的 scope 子节点，只写目标 SQLite，不回写父文件；来源文件编辑由原 writer 执行文件 CAS、原子保存和目标物化。其他 Workspace 自行观察；不得隐式改写其他层、父文件或多个 SQLite。文件已保存不代表 active 已生效。
 
 #### Scenario: 用户级 Workspace JSONC fan-out
-- **WHEN** 用户修改一次 `workspace.jsonc`，且多个 Workspace 中有的正在运行、有的已停止
-- **THEN** 每个 Workspace 按同一 `fanout_id` 独立导入并产生自己的结果；运行中的立即处理，停止的在启动时追赶，任何一个 Workspace 的 commit_revision 都不冒充其他 Workspace 的 revision
+- **WHEN** 用户修改一次被多个 Workspace 实际继承的 workspace.jsonc，其中有运行和停止的工作区
+- **THEN** 运行工作区以同一 fanout_id 独立导入，停止工作区启动时追赶；已自定义父链且不依赖此文件的工作区不受影响，各 commit_revision 互不冒充
 
 #### Scenario: fan-out 中单个 Workspace 冲突
-- **WHEN** 一个 Workspace 的 `user` layer 已被 API/UI 以更高 revision 修改，随后共享 `workspace.jsonc` 以旧基线到达
-- **THEN** 该 Workspace 进入 `conflict` 并保留自己的 active/pending，其他基于各自有效基线的 Workspace 可继续导入；汇总诊断报告 `fanout_partial` 和逐 Workspace 结果
+- **WHEN** 一个 Workspace 的 source 已被 API/UI 以更高 revision 修改，共享文件以旧基线到达
+- **THEN** 该工作区报告 conflict 并保留 active/pending，其他基线有效的工作区继续，汇总可报告 fanout_partial
 
 #### Scenario: API/UI 指定配置范围
-- **WHEN** API/UI 修改 Workspace 配置
-- **THEN** 请求必须明确是单 Workspace 的层物化／runtime override，或是用户级共享来源文件、本工作区来源文件；原单 Workspace 层物化／runtime override 请求只写目标 SQLite；显式来源文件编辑由原 source writer 先执行文件 CAS／原子保存，再沿原导入和候选链物化目标层；共享文件由各 Workspace 自行监听并应用，fan-out 只关联和汇总结果。入口不得隐式改写其它层或多个 SQLite，文件已保存不代表 active 已生效
+- **WHEN** 用户选择原单工作区 runtime override 或显式来源文件保存
+- **THEN** 前者只写目标 SQLite 且继承文件节点，后者沿原文件 CAS writer 保存并导入；不能把一次操作变为全图写回或跨工作区事务
 
 #### Scenario: 明确编辑单工作区来源文件
-- **WHEN** 用户选择指定 Gateway／workspace 的 workspace 来源文件，以文件及层／active 基线保存一个覆盖片段
-- **THEN** 原 source writer 验证合并后的最终配置并原子保存所选文件，再沿原导入／候选链更新该工作区；runtime override API 不回写文件，另一工作区不被修改
+- **WHEN** 用户绑定精确 Gateway／workspace 和来源文件，用原文件、来源和 active 基线保存局部覆盖
+- **THEN** 原 writer 验证实际父链的完整候选并原子保存所选文件，另一工作区不被修改，注释、其他本地定义和秘密引用保持
 
 ### Requirement: Gateway workspaces 配置元素必须使用稳定身份
 
@@ -209,19 +223,21 @@ Gateway 对配置候选 SHALL（必须）按消费者分别执行 prepare、appl
 
 ### Requirement: Active promotion 前必须重新校验全部 source layer 基线
 
-候选开始 apply 时保存的 source baseline 只用于准备阶段，不能作为最终 promotion 的充分条件。promotion 前，系统 MUST（必须）在同一事务中重新读取配置域全部 source layer 的 presence、layer revision、layer digest、source generation，以及该域当前 active/pending revision 和 Gateway registry revision（适用时），并对所有基线执行 CAS。任何一层发生变化都必须阻止 active promotion；不能只校验发生变化的路径或单一 source layer。
+候选开始 apply 时保存的基线只用于准备，不能作为最终 promotion 的充分条件。promotion 前系统 MUST 在原配置域事务中重新校验完整候选依赖及涉及的旧依赖记录，包括 presence、revision、digest、source generation、父边与环境策略代次，以及 active／pending 和适用的 Gateway registry revision。依赖集合不再是固定来源枚举；同一 writer 的并发修改仍受原锁与 CAS 约束。
+
+任一基线变化 MUST 阻止旧候选 promotion；不得只校验改动字段、单一叶子或新图而漏掉已移除父。外部文件读取和 watcher 导入沿原稳定读取／发布边界，不宣称任意外部文件编辑与 SQLite 是跨资源原子事务。最后检查后到达的外部改动 SHALL 按后继 source generation 导入，不反写已封存调用。
 
 #### Scenario: 外部副作用期间 source 发生变化
-- **WHEN** 候选 A 基于 source revision 1 开始 apply，候选 B 将任一 source layer 更新到 revision 2
-- **THEN** 候选 A 的最终 CAS 失败，A 不得 promotion active、递增 active revision 或发布 applied paths，系统保留 B 的 desired state 并安排重建/冲突处理
+- **WHEN** 候选 A apply 期间，B 改变任一父来源或将父引用指向另一个文件
+- **THEN** A 最终 CAS 失败，不递增 active revision 或发布 applied paths；保留 B desired state，沿原冲突／重建处理
 
 #### Scenario: 最终 CAS 失败前尚未产生副作用
-- **WHEN** promotion 前发现任一 source baseline、active revision 或 registry revision 不匹配，且外部资源尚未切换
-- **THEN** 系统只终止 A 的 apply claim 并标记 conflict/rebuild_required，不执行破坏性补偿，也不改变 active snapshot
+- **WHEN** promotion 发现依赖、active 或 registry 基线不匹配，外部资源尚未切换
+- **THEN** 只终止旧 apply claim 并报告 conflict/rebuild_required，不执行破坏性补偿，不改变 active
 
 #### Scenario: 最终 CAS 失败但已有外部副作用
-- **WHEN** source 在外部 apply 期间变化，且部分 tunnel、process 或消费者已经切换
-- **THEN** 系统按 apply journal 执行补偿；补偿不完整时进入 recovery_required，不能报告 A 已应用或静默覆盖 B
+- **WHEN** 父依赖变化时已有 tunnel、process 或消费者完成部分切换
+- **THEN** 按原 apply journal 补偿，失败进入 recovery_required，不报告已应用或静默覆盖新候选
 
 ### Requirement: Registry reconcile、manual CRUD 和 active promotion 必须使用同一 revision CAS
 
@@ -275,33 +291,37 @@ Gateway 配置 SHALL 提供 `logging.runtime.level` 与 `logging.runtime.pretty`
 
 ### Requirement: 来源正文编辑必须由配置 owner 提供
 
-Gateway 与 Workspace 配置 owner SHALL 公布各来源层的读取与写入能力，返回绑定明确目标和 source key 的脱敏正文、schema、来源 revision／digest、有效值及遮蔽关系。未提供 writer 的层必须只读；现有有限 runtime override PATCH 不扩展为任意 JSON 或路径写入，通用文件保存不替代配置提交。来源资源未登记 URI 时保持无 URI，消费者不得编造定位。
+Gateway 与 Workspace owner SHALL 公布明确目标、source key 和节点位置对应的读写能力，返回脱敏正文、schema、revision／digest、实际父链、有效值及遮蔽关系。未提供 writer 的来源保持只读；既有有限 runtime override PATCH 不扩展为任意文件／路径写入，通用文件保存不替代配置提交。来源 URI 只由原 owner 登记，不由消费者编造。
 
-可写来源 SHALL 提供无副作用预检及文件 CAS writer；预检按实际来源优先级合并后执行 schema／业务校验，不要求覆盖片段具有完整配置。删除覆盖只移除选中层的键，不能把下层默认值复制回该层。编辑与保存保留 JSONC 注释及格式，秘密仅在实际 owner 处理；正文中的脱敏占位不得被当作原值保存。
+可写来源 SHALL 提供无副作用预检及文件 CAS writer。预检必须按被修改节点及其实际祖先解析完整候选，包括父引用和被引用 profile 的基线，不要求本地 settings 片段独立满足完整业务 schema。删除覆盖只删除选中节点的定义；编辑／保存保留 JSONC 注释和格式。脱敏占位不得作为原值保存，秘密仍由实际 owner 处理。
 
 #### Scenario: 旧编辑基线与真实文件发生冲突
-- **WHEN** 两个编辑器读取相同来源，另一编辑器或原生文件操作已改动来源后，旧编辑器提交
-- **THEN** writer 明确拒绝旧文件／层／active 基线，不覆盖新内容，并允许重新读取原目标来源处理冲突
+- **WHEN** 同一来源的另一编辑器或外部文件操作已修改正文，旧草稿提交
+- **THEN** 原 writer 拒绝旧文件／source／active 基线，保留草稿并允许重读原目标，不自动重基或覆盖
 
 #### Scenario: 脱敏正文保存与删除覆盖
-- **WHEN** 用户读取含秘密及注释的来源，仅修改普通字段或删除其中一个覆盖键
-- **THEN** 原秘密及未修改注释保持，选定键删除后显示真实下层值，不保存遮罩为密码，不修改其它层
+- **WHEN** 来源含秘密引用和注释，用户只修改普通字段或删除本地覆盖
+- **THEN** 原秘密与未改注释保持，删除后显示真实父链结果，不保存遮罩为密码，不修改其他来源
 
 #### Scenario: 只读来源与无副作用预检
-- **WHEN** 用户预检可写来源的合法修改，或尝试保存未提供 writer 的来源层
-- **THEN** 预检不改变文件、SQLite、active 或运行资源；只读层保存明确拒绝，不使用通用文件 API 绕过
+- **WHEN** 预检合法草稿，或尝试保存无 writer 的来源
+- **THEN** 预检不改变文件、SQLite、active 或运行资源；只读保存明确拒绝，不使用通用文件 API 绕过
 
 #### Scenario: Gateway 来源编辑缺少新连接身份
-- **WHEN** 来源预检或保存遇到未填写 `connection_id` 的条目，且原连接身份 owner 无法明确匹配既有连接
-- **THEN** 返回 409 并指出需要补齐身份的位置，文件、SQLite 及运行状态不变；不按数组位置借用其它连接身份，不在预检中随机生成或持久化身份，原文件 loader 的旧配置迁移行为保持
+- **WHEN** 草稿连接未填写 connection_id 且原身份 owner 无法明确匹配
+- **THEN** 返回原409合同及位置，文件、SQLite 和运行状态保持，不按数组位置借身份或在预检随机创建身份
 
 #### Scenario: 来源保存需要先完成旧版本迁移
-- **WHEN** 提交的 v1 来源缺少连接 ID，原 loader 需要另外迁移并改写来源字节
-- **THEN** 预检和保存明确拒绝并提示沿原迁移入口处理或补齐 ID，不在文件保存后悄悄换成另一份正文；读取与原迁移入口行为保持
+- **WHEN** 提交版本需旧配置转换或连接身份补齐，普通 writer 无法按当前 schema 解释
+- **THEN** 拒绝并指向适用的原迁移入口，不在保存后悄悄重写成另一份正文，历史维护入口保持其支持合同
+
+#### Scenario: 修改父引用失败
+- **WHEN** 用户将父指向缺失、越权或有循环的节点
+- **THEN** 预检拒绝并定位来源链，原 JSONC 草稿可修正，文件和 active 均未改变
 
 ### Requirement: 受管服务配置必须分离目标登记与工作区业务输入
 
-Gateway SHALL 持有自有插件来源、安装／服务登记、实例范围、诊断设置及生命周期配置，Workspace SHALL 继续持有 MCP 参数、工作区使用关系、私有输入及业务配置。两域保持原来源优先级、独立 CAS 和 active／pending；Gateway MUST NOT 读取工作区 `.boxteam/`、复制秘密或直接改写工作区来源。
+Gateway SHALL 持有自有插件来源、安装／服务登记、实例范围、诊断设置及生命周期配置，Workspace SHALL 继续持有 MCP 参数、工作区使用关系、私有输入及业务配置。两域各按本域实际父链解析，并保持独立 CAS 和 active／pending；Gateway MUST NOT 读取工作区 `.boxteam/`、复制秘密或直接改写工作区来源。
 
 插件启用关系 SHALL 复用原配置 owner，记录 package_id／plugin_id、确切包版本、固定 Gateway／workspace 范围和 enabled；无包级／单项贡献第二 enabled，纯声明插件不伪造运行进程。manifest schema 仅描述合法字段，用户值仍属上述原来源域；Workbench 中的贡献注册是可释放展示投影，不形成第二份可生效配置或跨窗口业务账本。
 
@@ -325,7 +345,7 @@ Gateway SHALL 持有自有插件来源、安装／服务登记、实例范围、
 
 ### Requirement: 诊断热配置必须沿原 Gateway 配置域扩展
 
-日志 SHALL 继续使用 `logging.runtime`；新增本地遥测／统计 SHALL 分别归 `telemetry.runtime`、`statistics.runtime`，自有源归 `plugins.sources`，复用 Gateway JSONC 族、schema、原合并优先级与来源 writer，不增加插件配置副本。遥测／统计 enabled 默认 false，来源默认未配置；telemetry 的 sample_ratio 默认1且范围0–1，sample_buffer_limit 默认256且范围1–4096，statistics 的 collection_interval_ms 默认5000且范围1000–60000。schema SHALL 明确这些边界，允许原 Gateway 用户层合法覆盖，不接受 Workspace 覆盖。
+日志 SHALL 继续使用 `logging.runtime`；新增本地遥测／统计 SHALL 分别归 `telemetry.runtime`、`statistics.runtime`，自有源归 `plugins.sources`，复用 Gateway JSONC 族、schema、单父来源链与来源 writer，不增加插件配置副本。遥测／统计 enabled 默认 false，来源默认未配置；telemetry 的 sample_ratio 默认1且范围0–1，sample_buffer_limit 默认256且范围1–4096，statistics 的 collection_interval_ms 默认5000且范围1000–60000。schema SHALL 明确这些边界，允许原 Gateway 用户层合法覆盖，不接受 Workspace 覆盖。
 
 只有已登记为热应用的字段 SHALL 在运行时应用；实例范围、入口或版本变更须明确对应实例的重启／切换，不由客户端猜测或一律重启 Backend。未支持的诊断能力 SHALL 明确报告，不将保存成功当作实际生效。
 
@@ -337,7 +357,7 @@ Gateway SHALL 持有自有插件来源、安装／服务登记、实例范围、
 
 当前 Gateway 的插件 enabled SHALL 归 Gateway 配置 owner，当前工作区的 enabled 归精确 Workspace owner；各有固定插件范围和包版本，不通过共享用户 Workspace 层 fan-out 修改其他工作区。开关和重启须获运行管理准入；同一来源写入同时遵守原配置写权限，不建立第二启用账本。实际状态单独报告，配置已保存不等于运行成功。
 
-Gateway 新建工作区模板 SHALL 使用 plugins.workspace_defaults.entries，默认空数组，数组沿原整体替换语义；条目只有 package_id、plugin_id、确切 package_version 和 enabled，键组合唯一，只能引用已安装支持的 workspace 插件，不保存参数或秘密。沿原 Gateway inline／user／user_local 合法覆盖和 CAS 提交；不接受 workspace 层覆盖，模板编辑核原配置写权限，不产生进程副作用。模板和已冻结未结清创建 intent 的版本均为原安装 owner 的使用引用，更新清理及卸载不得删除；模板修改不解除旧 intent 引用，创建完成交接给工作区绑定，取消／失败明确结清才释放，不新建账本。安装不自动改模板；引用版本计入使用冲突，未解除引用不能卸载。
+Gateway 新建工作区模板 SHALL 使用 plugins.workspace_defaults.entries，默认空数组，数组沿原整体替换语义；条目只有 package_id、plugin_id、确切 package_version 和 enabled，键组合唯一，只能引用已安装支持的 workspace 插件，不保存参数或秘密。沿 Gateway 实际单父链合法覆盖和 CAS 提交；不接受 Workspace 来源覆盖，模板编辑核原配置写权限，不产生进程副作用。模板和已冻结未结清创建 intent 的版本均为原安装 owner 的使用引用，更新清理及卸载不得删除；模板修改不解除旧 intent 引用，创建完成交接给工作区绑定，取消／失败明确结清才释放，不新建账本。安装不自动改模板；引用版本计入使用冲突，未解除引用不能卸载。
 
 工作区创建 owner SHALL 在原创建 intent 冻结当时模板 revision 与条目，经原 Workspace writer 初始化该新工作区独立配置，再向 Gateway 交付已认证非秘密绑定；Gateway 不读写 .boxteam。原创建重试复用冻结输入，模板修改只影响之后新建工作区。已有工作区重新注册／挂接／启动不应用模板，不新增动态继承或第二创建账本。
 

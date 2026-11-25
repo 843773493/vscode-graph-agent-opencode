@@ -39,7 +39,7 @@ class RolloutExecutionRecoveryMixin:
         with self._storage._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
             self._storage.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
             with self._storage._connect(owner_thread_id, checkpoint_ns, session_id=session_id) as connection:
-                self._storage._require_v2_runtime(connection)
+                self._storage._require_current_rollout_format(connection)
                 require_resumable_turn(connection, session_id, owner_thread_id, turn_id)
                 row = connection.execute('SELECT status, accepted_ingress_id FROM turn_records WHERE session_id = ? AND thread_id = ? AND turn_id = ?', (session_id, owner_thread_id, turn_id)).fetchone()
                 if row is None:

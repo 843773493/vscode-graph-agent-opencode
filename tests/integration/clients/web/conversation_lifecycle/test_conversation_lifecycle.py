@@ -235,14 +235,15 @@ async def section8_product_nodes(
         config = commentjson.loads(config_path.read_text())
         # 保留协议资产的 Provider URL；精确回放 transport 隔离网络与个人凭据。
         clear_test_provider_api_keys(config)
-        config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
+        workspace_settings = config["settings"]["workspace"]
+        workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
         if node_context.workspace_root.name == "workspace" and node_context.workspace_root.parent.name in {"a", "c"}:
-            config["runtime"].setdefault("agent", {}).setdefault("run", {})["mode"] = "team"
+            workspace_settings["runtime"].setdefault("agent", {}).setdefault("run", {})["mode"] = "team"
         if node_context.workspace_root == context.workspace_root / "c/workspace":
-            config.setdefault("context", {}).setdefault("resource_activation", {}).setdefault("overrides", {}).update({
+            workspace_settings.setdefault("context", {}).setdefault("resource_activation", {}).setdefault("overrides", {}).update({
                 "team_state": "model_call", "mcp_tool_catalog": "model_call",
             })
-        config["mcp"] = {"servers": {}}
+        workspace_settings["mcp"] = {"servers": {}}
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
         return workspace
 
@@ -677,9 +678,9 @@ async def test_conversation_lifecycle_through_real_workbench(
                 assert displayed["turnId"] == turn["turn_id"] and displayed["rootOrdinal"] == turn["root_logical_item_ordinal"]
                 assert displayed["activity"] == turn["activity_stats"]
                 assert displayed["userMessages"] == [{"messageId": sent["accepted"]["message_id"], "content": sent["prompt"]}]
-                coordinates = [{"part_id": part["part_id"], "kind": part["kind"], **part["source"]} for part in turn["response_parts"]]
-                assert displayed["parts"] == [{key: part[key] for key in ("part_id", "kind", "item_id", "item_sequence", "logical_item_ordinal", "part_ordinal", "created_at", "elapsed_ms")} for part in coordinates]
-                ordering = [(part["logical_item_ordinal"], part["part_ordinal"]) for part in displayed["parts"]]
+                coordinates = [{"id": part["id"], "kind": part["kind"], **part["source"]} for part in turn["response_items"]]
+                assert displayed["parts"] == [{key: part[key] for key in ("id", "kind", "item_id", "item_sequence", "logical_item_ordinal", "created_at", "elapsed_ms")} for part in coordinates]
+                ordering = [part["logical_item_ordinal"] for part in displayed["parts"]]
                 assert ordering == sorted(ordering)
             assert child["queuedDom"] == [{
                 "stage": stage, "turnId": second["turnId"], "rootOrdinal": str(pending[1]["root_logical_item_ordinal"]),
@@ -757,7 +758,7 @@ async def test_conversation_lifecycle_through_real_workbench(
             for key in ("session_id", "thread_id", "execution_id", "job_id"):
                 assert internal[key] == admission[key]
             assert internal["status"] == "completed"
-            assert [part["text"] for part in internal["response_parts"] if part["kind"] in {"text", "final_text"}] == ["初始化报告的私有正文。"]
+            assert [part["text"] for part in internal["response_items"] if part["kind"] in {"text", "final_text"}] == ["初始化报告的私有正文。"]
             (parent,) = recovery["parentTurn"]
             assert parent["thread_id"] != intent["thread_id"] and parent["session_id"] == intent["session_id"]
             terminal = recovery["parentTerminal"]
@@ -779,7 +780,7 @@ async def test_conversation_lifecycle_through_real_workbench(
             internal = generated["internal"]
             assert internal["execution_id"] == admission["execution_id"] and internal["job_id"] == admission["job_id"]
             assert internal["session_id"] == admission["session_id"] and internal["thread_id"] == admission["thread_id"]
-            (display,) = internal["display_parts"]
+            (display,) = internal["display_items"]
             assert display["item_id"] == notice["item_id"] and display["text"] == notice["payload"]["display_part"]["text"]
             assert display["kind"] == "generated_session_result" and display["provenance"]["source_session_id"] == generated["generated"]
             assert len(generated["membership"]) > 256 and len(generated["pages"]) > 1
@@ -788,12 +789,12 @@ async def test_conversation_lifecycle_through_real_workbench(
                 assert page["items"] == []
                 (entry,) = page["internal_executions"]
                 assert entry["execution_id"] == admission["execution_id"] and entry["status"] == "completed"
-                records = {part["item_id"] for part in entry["display_parts"]}
-                records.update(part["source"]["item_id"] for part in entry["response_parts"])
+                records = {part["item_id"] for part in entry["display_items"]}
+                records.update(part["source"]["item_id"] for part in entry["response_items"])
                 assert len(records) <= 256
-                paged_parts.extend(entry["response_parts"])
-            assert len({part["part_id"] for part in paged_parts}) == len(paged_parts)
-            assert sorted(paged_parts, key=lambda part: part["part_id"]) == sorted(internal["response_parts"], key=lambda part: part["part_id"])
+                paged_parts.extend(entry["response_items"])
+            assert len({part["id"] for part in paged_parts}) == len(paged_parts)
+            assert sorted(paged_parts, key=lambda part: part["id"]) == sorted(internal["response_items"], key=lambda part: part["id"])
             assert generated["snapshot"]["stale"]["status"] == 409
             assert generated["snapshot"]["stale"]["body"]["detail"]["code"] == "stale_turn_cursor"
             assert generated["crossOwner"]["status"] == 400

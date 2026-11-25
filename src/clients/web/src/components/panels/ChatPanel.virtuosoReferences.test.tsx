@@ -3,7 +3,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, test } from "bun:test";
 import { Virtuoso, VirtuosoMockContext } from "react-virtuoso";
 import ChatPanel from "./ChatPanel";
-import type { InternalDisplayProvenance, InternalExecutionDisplayPart } from "../../types/backend";
+import type { InternalDisplayProvenance, InternalExecutionDisplayItem } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
 import { TranscriptTestView } from "../../tests/fixtures/transcriptView";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
@@ -167,9 +167,9 @@ describe("ChatPanel Virtuoso 渲染引用", () => {
   test("无 Turn 执行按原终态提交收起，不按关联 Job 或 unknown outcome 猜测", () => {
     installVirtuosoEnvironment();
     const execution = {execution_id:"execution",job_id:"job",session_id:"session-1",thread_id:"thread-main",status:"unknown" as const,
-      created_at:"2026-11-23T00:00:00Z",updated_at:"2026-11-23T00:00:00Z",display_parts:[],
-      response_parts:[{part_id:"part",kind:"reasoning" as const,projection:"detail" as const,text:"内部执行正文",
-        source:{message_sequence:1,item_id:"item",item_sequence:1,logical_item_ordinal:0,part_ordinal:0}}]};
+      created_at:"2026-11-23T00:00:00Z",updated_at:"2026-11-23T00:00:00Z",display_items:[],
+      response_items:[{id:"part",kind:"reasoning" as const,projection:"detail" as const,text:"内部执行正文",
+        source:{message_sequence:1,item_id:"item",item_sequence:1,logical_item_ordinal:0,}}]};
     let renderer!: ReactTestRenderer, item!: ReactTestRenderer;
     const panel = (terminal?:number) => withVirtuosoMock(<ChatPanel {...panelProps([])} internalExecutions={[{...execution,terminal_commit_id:terminal}]} />);
     act(()=>{renderer=create(panel(),{createNodeMock:createVirtuosoHostNode});});
@@ -307,7 +307,7 @@ describe("ChatPanel Virtuoso 渲染引用", () => {
     const source: InternalDisplayProvenance = {
       source_session_id: "session-1", source_thread_id: "child-private", source_execution_id: "execution-private",
     };
-    const display: InternalExecutionDisplayPart = {
+    const display: InternalExecutionDisplayItem = {
       kind: "generated_session_result", text: "子线程已提交报告。", item_id: "notice-private", item_sequence: 1,
       logical_item_ordinal: 0, created_at: "2026-10-22T00:00:00Z", provenance: source,
     };
@@ -316,7 +316,7 @@ describe("ChatPanel Virtuoso 渲染引用", () => {
     act(() => { renderer = create(withVirtuosoMock(<ChatPanel {...panelProps([])}
       internalExecutions={[{ execution_id: "target-execution", job_id: "job-report", session_id: "session-1",
         thread_id: "thread-main", status: "completed", created_at: display.created_at, updated_at: display.created_at,
-        display_parts: [display], response_parts: [] }]}
+        display_items: [display], response_items: [] }]}
       onOpenChildReport={(target) => opened.push(target)} />), { createNodeMock: createVirtuosoHostNode }); });
     const props = renderer.root.findByType(Virtuoso).props;
     const renderItem = (provenance: InternalDisplayProvenance) => props.itemContent(0, {

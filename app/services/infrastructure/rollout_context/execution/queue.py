@@ -162,7 +162,7 @@ class RolloutExecutionQueueMixin:
                 "WHERE commit_kind='execution_admission' AND subject_id=? AND idempotency_key=?",
                 (admission.execution_id, f"internal-admission:{admission.admission_idempotency_key}"),
             ).fetchone()
-            if kind == ("compaction_reference",):
+            if kind == ("derived_reference",):
                 raise ValueError("摘要派生 execution 不得进入普通 Agent Job 队列")
 
     def _execution_queue_record(
@@ -190,30 +190,30 @@ class RolloutExecutionQueueMixin:
             raise RuntimeError("执行队列与 admission Job identity 不一致")
         return ExecutionQueueRecord(cursor, queue_input, row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11])
 
-    def validate_execution_queue(self, session_id: str, thread_id: str) -> None:
-        """正常调度拒绝缺失冻结输入；历史和迁移可独立读取尚未导入的投影。"""
-        try:
-            with self._storage.read_connection(session_id, thread_id) as connection:
-                # 旧版 active 已从 v5 pending 移出；缺冻结调度输入时不能伪装空队列。
-                missing = connection.execute(
-                    "SELECT execution.job_id FROM executions execution LEFT JOIN execution_queue queued "
-                    "ON queued.execution_id=execution.execution_id AND queued.checkpoint_ns=? "
-                    "WHERE execution.session_id=? AND execution.thread_id=? AND execution.outcome='unknown' "
-                    "AND queued.execution_id IS NULL LIMIT 1", ("", session_id, thread_id),
-                ).fetchone()
-                if missing is not None:
-                    raise RuntimeError(
-                        "执行缺少冻结队列输入；旧 active 须在旧 runtime 结算后再升级，不能从 Trace 猜测重建: "
-                        f"session_id={session_id}, thread_id={thread_id}, job_id={missing[0]}"
-                    )
-        except RolloutNotMaterializedError:
-            return
-
     def execution_queue_snapshot(
-        self, session_id: str, thread_id: str, *, checkpoint_ns: str = "",
+        self, session_id: str, thread_id: str, *, checkpoint_ns: str = "", validate_inputs: bool = False,
     ) -> ExecutionQueueSnapshot:
+        """运行编排在同一快照校验冻结输入；历史和迁移可独立读取未导入投影。"""
         try:
             with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+                if validate_inputs:
+                    # 派生执行由后台任务调度，不属于普通队列；通知和 seed 执行仍须有冻结输入。
+                    missing = connection.execute(
+                        "SELECT execution.job_id FROM executions execution LEFT JOIN execution_queue queued "
+                        "ON queued.execution_id=execution.execution_id AND queued.checkpoint_ns=? "
+                        "WHERE execution.session_id=? AND execution.thread_id=? AND execution.outcome='unknown' "
+                        "AND queued.execution_id IS NULL AND NOT EXISTS ("
+                        "SELECT 1 FROM storage_commits admission WHERE execution.execution_origin='internal' "
+                        "AND admission.commit_kind='execution_admission' AND admission.subject_id=execution.execution_id "
+                        "AND admission.idempotency_key='internal-admission:'||execution.admission_idempotency_key "
+                        "AND json_extract(admission.metadata_json,'$.request_input.kind')='derived_reference') LIMIT 1",
+                        (checkpoint_ns, session_id, thread_id),
+                    ).fetchone()
+                    if missing is not None:
+                        raise RuntimeError(
+                            "执行缺少冻结队列输入；旧 active 须在旧 runtime 结算后再升级，不能从 Trace 猜测重建: "
+                            f"session_id={session_id}, thread_id={thread_id}, job_id={missing[0]}"
+                        )
                 revision = connection.execute("SELECT revision FROM execution_queue_revision WHERE singleton_id=1").fetchone()
                 if revision is None:
                     raise RuntimeError("执行队列 revision 缺失")

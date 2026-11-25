@@ -94,14 +94,15 @@ async def provider_case(
     _save(definitions, {"probe": _SCHEMA})
     config_path = Path(integration_workspace_config_path)
     config = cast(dict, read_jsonc_object(config_path))
-    provider = config["llm"]["providers"]["backup_3"]
-    config["llm"]["providers"] = {"backup_3": provider}
-    for agent in config["agents"].values():
+    workspace_settings = config["settings"]["workspace"]
+    provider = workspace_settings["llm"]["providers"]["backup_3"]
+    workspace_settings["llm"]["providers"] = {"backup_3": provider}
+    for agent in workspace_settings["agents"].values():
         agent["model"] = {"primary": {"provider_id": "backup_3", "model_id": "default"}, "fallbacks": []}
     # 保留既有 Provider 请求设置；测试不增加采样、reasoning 或输出限制。
-    config["agents"]["default"]["tools"]["custom"] = [{"tool_id": "connections.manage"}]
-    config["agents"]["default"]["tools"]["confirmation_required"] = []
-    config["mcp"] = {"servers": {}}
+    workspace_settings["agents"]["default"]["tools"]["custom"] = [{"tool_id": "connections.manage"}]
+    workspace_settings["agents"]["default"]["tools"]["confirmation_required"] = []
+    workspace_settings["mcp"] = {"servers": {}}
     _save(config_path, config)
     gateway_port = integration_service_ports.port(1)
     package = _package(artifacts / "mcp-bridge.zip", prepared_mcp_stdio_package)

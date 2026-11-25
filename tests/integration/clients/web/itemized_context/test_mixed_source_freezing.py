@@ -27,7 +27,7 @@ from tests.support.model_stream.config import ModelStreamReplay
 def integration_workspace_config_path(integration_workspace_config_path: str) -> str:
     path = Path(integration_workspace_config_path)
     config = commentjson.loads(path.read_text(encoding="utf-8"))
-    config["context"] = {"resource_activation": {
+    config["settings"]["workspace"]["context"] = {"resource_activation": {
         "default_boundary": "turn", "overrides": {"skill": "model_call"},
     }}
     path.write_text(commentjson.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

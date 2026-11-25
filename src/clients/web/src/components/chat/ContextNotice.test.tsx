@@ -6,22 +6,22 @@ import OriginalContextNotice from "./ContextNotice";
 import { ChatItemMenuContext, ChatItemOwnerContext,
   ContextNoticeContinuationContext,
   type ChatItemMenuRequest } from "./itemContextMenu";
-import type { TurnResponsePart } from "../../types/backend";
-import { responsePartsToTimelineItems } from "../../state/timeline/responseParts";
+import type { TurnResponseItem } from "../../types/backend";
+import { responseItemsToTimelineItems } from "../../state/timeline/responseItems";
 
-const notice = { kind: "context_notice", part_id: "notice:context", projection: "summary",
+const notice = { kind: "context_notice", id: "notice:context", projection: "summary",
   source: { message_sequence: 0, item_id: "notice", logical_item_ordinal: 4 },
   context_kind: "checkpoint_reminder", context_model_call_id: "call-2", context_before_item_id: "answer-2",
   context_content_ref: { kind: "item", item_id: "notice" }, context_content_length: 512,
-  context_anchor: "before_model_call", context_anchor_ordinal: 4 } satisfies TurnResponsePart;
+  context_anchor: "before_model_call", context_anchor_ordinal: 4 } satisfies TurnResponseItem;
 
 test("展开来源、键盘菜单及取消只消费元数据，不读取正文", async () => {
   let request: ChatItemMenuRequest | undefined;
   let renderer!: ReactTestRenderer;
-  const second = { ...notice, part_id: "second:context", context_content_ref: {
+  const second = { ...notice, id: "second:context", context_content_ref: {
     kind: "sealed_contribution", session_id: "original-session", thread_id: "original-thread",
     assembly_id: "assembly", contribution_id: "prompt",
-  } } satisfies TurnResponsePart;
+  } } satisfies TurnResponseItem;
   await act(async () => { renderer = create(<>
     <ChatItemOwnerContext.Provider value={{ sessionId: "session", threadId: "thread" }}>
       <ChatItemMenuContext.Provider value={value => { request = value; }}>
@@ -50,8 +50,8 @@ test("来源列表只显示可读名称，不暴露版本指纹、内部 ID 或�
     "filesystem-rules", "compact-tool-usage", "skill_catalog_metadata", "mcp_tool_catalog"];
   const names = ["上下文来源规则", "Agent 指令", "运行身份", "任务列表规则",
     "文件操作规则", "上下文压缩规则", "Skill 目录", "扩展工具目录"];
-  const notices: TurnResponsePart[] = kinds.map((kind, index) => ({ ...notice,
-    part_id: `context:${index}`, context_kind: kind, context_source_id: `instruction:${kind}`,
+  const notices: TurnResponseItem[] = kinds.map((kind, index) => ({ ...notice,
+    id: `context:${index}`, context_kind: kind, context_source_id: `instruction:${kind}`,
     context_source_revision: `sha256:jcs:v1:${"a".repeat(64)}`, context_content_length: 2693,
   }));
   let renderer!: ReactTestRenderer;
@@ -68,17 +68,17 @@ test("来源列表只显示可读名称，不暴露版本指纹、内部 ID 或�
 });
 
 test("同请求同锚点合成一条标记，在历史和实时模型输出前展示", () => {
-  const earlier: TurnResponsePart = { kind: "text", part_id: "answer-1", projection: "detail", text: "之前",
+  const earlier: TurnResponseItem = { kind: "text", id: "answer-1", projection: "detail", text: "之前",
     source: { message_sequence: 1, item_id: "answer-1", logical_item_ordinal: 1, model_call_id: "call-1" } };
   for (const projection of ["detail", "streaming"] as const) {
-    const answer: TurnResponsePart = { kind: "text", part_id: "answer-2", projection, text: "之后",
+    const answer: TurnResponseItem = { kind: "text", id: "answer-2", projection, text: "之后",
       source: { message_sequence: 2, ...(projection === "detail" ? { item_id: "answer-2" } : {}), model_call_id: "call-2" } };
-    const items = responsePartsToTimelineItems([earlier, answer, notice, { ...notice, part_id: "second:context" }]);
+    const items = responseItemsToTimelineItems([earlier, answer, notice, { ...notice, id: "second:context" }]);
     expect(items.map(item => item.kind)).toEqual(["aggregated_text", "context_event", "aggregated_text"]);
   }
-  const failed = responsePartsToTimelineItems([earlier, { ...notice, context_before_item_id: undefined, context_anchor_ordinal: 2 }]);
+  const failed = responseItemsToTimelineItems([earlier, { ...notice, context_before_item_id: undefined, context_anchor_ordinal: 2 }]);
   expect(failed.map(item => item.kind)).toEqual(["aggregated_text", "context_event"]);
-  const beforeUser = responsePartsToTimelineItems([earlier, { ...notice, context_anchor: "before_user_message" }]);
+  const beforeUser = responseItemsToTimelineItems([earlier, { ...notice, context_anchor: "before_user_message" }]);
   expect(beforeUser.map(item => item.kind)).toEqual(["aggregated_text"]);
 });
 

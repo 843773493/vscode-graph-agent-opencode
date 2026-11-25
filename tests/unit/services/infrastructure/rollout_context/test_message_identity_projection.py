@@ -11,9 +11,6 @@ from langchain_core.messages import (
     message_to_dict,
 )
 
-from app.agents.execution_checkpoint import (
-    _append_final_assistant_replacement,
-)
 from app.domain.itemized.hashing import content_hash
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
@@ -38,36 +35,6 @@ def test_job_metadata_cannot_replace_explicit_turn_identity() -> None:
         response_metadata={"message_metadata": {"job_id": "job-real"}},
     )
     assert LangChainMessageCodec().turn_id(message, "turn-real", "message-1") == "turn-real"
-
-
-def test_assistant_rebinding_does_not_inherit_or_forge_job_identity() -> None:
-    messages = [
-        AIMessage(
-            content="old",
-            response_metadata={
-                "message_metadata": {
-                    "internal": True,
-                    "turn_id": "old-turn",
-                    "job_id": "old-job",
-                },
-            },
-        )
-    ]
-    rewritten = _append_final_assistant_replacement(
-        messages,
-        content_blocks=({"type": "text", "text": "final"},),
-        final_text="final",
-        message_id="message-final",
-        message_created_at=datetime(2026, 10, 4, tzinfo=UTC),
-        token_usage=None,
-        turn_id="turn-real",
-        preserve_content_part_refs=False,
-    )
-    assert rewritten is not None
-    metadata = rewritten.response_metadata["message_metadata"]
-    assert metadata["turn_id"] == "turn-real"
-    assert "job_id" not in metadata
-    assert "internal" not in metadata
 
 
 @pytest.fixture
@@ -355,10 +322,15 @@ def stream_tool_projection_item(request, stream_projection_item):
     )
 
 
+@pytest.mark.parametrize("with_invalid", [False, True])
 def test_stream_tool_projection_preserves_exact_payload_hash_and_lifecycle(
-    projection_codec, stream_tool_projection_item,
+    projection_codec, stream_tool_projection_item, with_invalid,
 ):
     item = stream_tool_projection_item
+    if with_invalid:
+        payload = {**item.payload, "invalid_tool_calls": [{"id": "bad-call", "name": "read_file",
+            "args": "{", "error": "invalid JSON", "type": "invalid_tool_call"}]}
+        item = replace(item, payload=payload, content_hash=content_hash(item.payload_kind, payload))
     projected = projection_codec.project_message((item,))
     assert projected["data"]["tool_calls"][0]["id"] == "provider-call-1"
     binding = projected["data"]["response_metadata"][CANONICAL_GROUP_FIELD][0][TOOL_BINDING_FIELD]

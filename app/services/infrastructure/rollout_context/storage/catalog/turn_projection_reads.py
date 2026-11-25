@@ -4,24 +4,25 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from app.core.sqlite_state import load_sql
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
-from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.services.infrastructure.rollout_context.execution.terminal_helpers import (
     read_terminal_result,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
 )
-from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
-    read_response_outline,
+from app.services.infrastructure.rollout_context.storage.catalog.tool_result_identity import (
+    read_tool_result_summaries,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.turn_activity_merge import (
     _finalize_projections,
     _merge_activity_items,
-    _merge_final_reasoning,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_helpers import (
+    _required_datetime,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -38,6 +39,16 @@ if TYPE_CHECKING:
 
 _ACTIVITY_COORDINATES_SQL = load_sql(
     "app.services.infrastructure.rollout_context.storage", "migrations/history/turn_activity_coordinates.sql",
+).format(
+    replacements=load_sql(
+        "app.services.infrastructure.rollout_context.storage", "migrations/history/content_carrier_replacements.sql",
+    ),
+    survivor=load_sql(
+        "app.services.infrastructure.rollout_context.storage", "migrations/history/survivor.sql",
+    ),
+)
+_TOOL_COORDINATES_SQL = load_sql(
+    "app.services.infrastructure.rollout_context.storage", "migrations/history/tool_call_coordinates.sql",
 )
 
 
@@ -73,7 +84,7 @@ class TurnProjectionReadMixin:
 
     def read_turn_projections(
         self, snapshot: RolloutReadSnapshot, view_id: str, turn_ids: Iterable[str], *,
-        activity_before: tuple[int, int] | None = None,
+        activity_before: int | None = None,
         activity_limit: int | None = None, item_ids: tuple[str, ...] | None = None,
         outline: bool = False, include: frozenset[str] | None = None,
     ) -> dict[str, dict[str, object]]:
@@ -100,69 +111,64 @@ class TurnProjectionReadMixin:
         v2_turns = connection.execute(
             "SELECT tr.turn_id, tr.status, tr.final_item_id, tr.session_id, "
             "tr.thread_id, tr.last_execution_id, e.execution_id, e.session_id, "
-            "e.thread_id, e.turn_id, e.job_id FROM turn_records AS tr "
+            "e.thread_id, e.turn_id, e.job_id, tr.created_at, tr.updated_at FROM turn_records AS tr "
             "LEFT JOIN executions AS e ON e.execution_id = tr.last_execution_id "
             f"WHERE tr.turn_id IN ({placeholders})",
             ids,
-        ).fetchall()
-        tool_rows = connection.execute(
-            "SELECT m.turn_id, ic.item_id, tc.tool_call_id, tc.tool_name, tc.status, "
-            "tc.result_message_sequence, tc.assistant_message_sequence, tc.call_index, "
-            # 从本页 Turn 的消息定位工具，不能先扫描整个 view 再筛 Turn。
-            "ic.projection_manifest_json FROM messages m "
-            "CROSS JOIN tool_calls tc ON tc.assistant_message_sequence = m.message_sequence "
-            "CROSS JOIN item_catalog ic ON ic.jsonl_offset = m.jsonl_offset "
-            "AND ic.jsonl_length = m.jsonl_length "
-            "CROSS JOIN context_view_items membership ON membership.item_id = ic.item_id "
-            "AND membership.view_id = ? AND membership.visible = 1 "
-            "AND membership.source_kind = 'canonical' "
-            f"WHERE m.turn_id IN ({placeholders}) "
-            "ORDER BY tc.assistant_message_sequence, tc.call_index",
-            (view_id, *ids),
         ).fetchall()
         final_rows = connection.execute(
             # 先按本页 final 定位成员，再做 LEFT JOIN；直接连接多表 view
             # 会物化整个父 view，连没有 final 的进行中 Turn 也会扫描旧历史。
             "WITH final_membership AS MATERIALIZED ("
             "SELECT member.item_id,member.logical_item_ordinal,member.visible,member.source_kind "
-            "FROM turns t CROSS JOIN messages m ON m.message_sequence=t.final_message_sequence "
-            "CROSS JOIN item_catalog item ON item.jsonl_offset=m.jsonl_offset "
-            "AND item.jsonl_length=m.jsonl_length "
+            "FROM turns t JOIN turn_records record ON record.turn_id=t.turn_id "
+            "CROSS JOIN item_catalog item ON item.item_id=record.final_item_id "
             "CROSS JOIN context_view_items member ON member.item_id=item.item_id "
             f"WHERE t.turn_id IN ({placeholders}) AND member.view_id=?) "
-            "SELECT t.turn_id, t.final_message_sequence, mp.visible_text, "
-            "mp.visible_text_truncated, m.message_id, m.turn_id, "
+            "SELECT t.turn_id, t.final_message_sequence, m.message_id, m.turn_id, "
             "item.item_id, item.turn_id, item.semantic_kind, item.status, "
-            "item.item_sequence, item.created_at, membership.logical_item_ordinal, "
             "membership.visible, membership.source_kind, "
             "selected_turn.turn_id, selected_turn.final_message_sequence, "
             "EXISTS(SELECT 1 FROM message_projections canonical_projection "
-            "WHERE canonical_projection.message_sequence = t.final_message_sequence), "
-            "item.projection_manifest_json "
+            "WHERE canonical_projection.message_sequence = t.final_message_sequence) "
             "FROM turns t "
+            "LEFT JOIN turn_records record ON record.turn_id=t.turn_id "
             "LEFT JOIN messages m ON m.message_sequence = t.final_message_sequence "
-            "LEFT JOIN item_catalog item ON item.jsonl_offset = m.jsonl_offset "
-            "AND item.jsonl_length = m.jsonl_length "
+            "LEFT JOIN item_catalog item ON item.item_id=record.final_item_id "
             "LEFT JOIN context_view_turns selected_turn ON selected_turn.turn_id = t.turn_id "
             "AND selected_turn.view_id = ? "
             "LEFT JOIN final_membership AS membership ON membership.item_id = item.item_id "
-            "LEFT JOIN message_projections mp ON mp.message_sequence = t.final_message_sequence "
-            "AND selected_turn.final_message_sequence = t.final_message_sequence "
-            "AND membership.visible = 1 AND membership.source_kind = 'canonical' "
             f"WHERE t.turn_id IN ({placeholders})",
             (*ids, view_id, view_id, *ids),
         ).fetchall()
-        # 在整个选中过程的轻索引中择一，再截页；正文只读取本页真正存活的 Item。
-        coordinates = connection.execute(_ACTIVITY_COORDINATES_SQL, {
+        # 相同轻索引一次产生整轮统计与本页坐标；分页及正文 include 不重算标题计数。
+        activity_stats: dict[str, dict[str, object]] = {}
+        coordinates = []
+        page_limit = min(activity_limit if activity_limit is not None else 256, 256)
+        for row in connection.execute(_ACTIVITY_COORDINATES_SQL, {
             "view_id": view_id, "turn_ids": json.dumps(ids),
             "item_ids": json.dumps(item_ids) if item_ids is not None else None,
-            "before_item": activity_before[0] if activity_before else None,
-            "before_part": activity_before[1] if activity_before else None,
-            "part_limit": activity_limit + 1 if activity_limit is not None else -1,
-        }).fetchall()
-        has_more = activity_limit is not None and len(coordinates) > activity_limit
-        coordinates = coordinates[:activity_limit] if activity_limit is not None else coordinates
+            "before_item": activity_before,
+            "item_limit": page_limit + 1,
+            "include_final": include is None or bool(include & {"final_response", "assistant", "activity_outline"}),
+        }):
+            if row[0] is None:
+                activity_stats[row[5]] = {
+                    "duration_ms": None,
+                    "item_count": strict_non_negative_int(row[6], field="activity_stats.item_count"),
+                    "first_item_sequence": strict_optional_non_negative_int(row[7], field="activity_stats.first_item_sequence"),
+                    "last_item_sequence": strict_optional_non_negative_int(row[8], field="activity_stats.last_item_sequence"),
+                }
+            else:
+                coordinates.append((*row[:6], row[9]))
+        has_more = len(coordinates) > page_limit
+        coordinates = coordinates[:page_limit]
         selected_ids = tuple(dict.fromkeys(row[0] for row in coordinates))
+        # 从本页真实调用身份定点关联，组尾是否在页内不影响其它成员；
+        # 配对坐标不得携带当前view已排除的回执。
+        tool_rows = connection.execute(_TOOL_COORDINATES_SQL, {
+            "view_id": view_id, "item_ids": json.dumps(selected_ids),
+        }).fetchall() if selected_ids else ()
         activity_filter = " AND ic.item_id IN (" + ",".join("?" for _ in selected_ids) + ")" if selected_ids else " AND 0"
         activity_parameters = selected_ids
         activity_tail = " ORDER BY ic.turn_id, membership.logical_item_ordinal"
@@ -174,52 +180,35 @@ class TurnProjectionReadMixin:
             content_kinds.update({"reasoning", "compaction_summary"})
         read_reasoning = not outline and (include is None or bool(include & {"thinking", "reasoning_detail"}))
         read_summary = not outline and (include is None or bool(include & {"thinking", "reasoning_detail", "reasoning_summary"}))
-        content_sql = "CASE " + ("WHEN ic.semantic_kind='reasoning' AND ic.payload_kind!='summary' THEN '' " if not read_reasoning else "") + "WHEN ic.semantic_kind IN (" + ",".join("'" + kind + "'" for kind in sorted(content_kinds)) + ") THEN ip.content ELSE '' END, "
+        reasoning_content = "COALESCE(rb.reasoning_text,rb.summary_text,'')" if read_reasoning else (
+            "COALESCE(rb.summary_text,'')" if read_summary else "''"
+        )
+        reasoning_truncated = "CASE WHEN rb.reasoning_text IS NOT NULL THEN rb.reasoning_truncated ELSE rb.summary_truncated END" if read_reasoning else (
+            "rb.summary_truncated" if read_summary else "0"
+        )
+        content_sql = "CASE WHEN ic.semantic_kind='reasoning' THEN " + reasoning_content + " WHEN ic.semantic_kind IN (" + ",".join("'" + kind + "'" for kind in sorted(content_kinds)) + ") THEN ip.content ELSE '' END, "
         activity_rows = connection.execute(
             "SELECT ic.turn_id, ic.item_sequence, ic.item_id, ic.semantic_kind, "
             "ic.payload_kind, ic.status, ic.created_at, ic.producer_ref_json, "
             "ic.projection_manifest_json, "
             + content_sql +
-            "ip.content_truncated, ic.tool_call_id, "
-            "membership.logical_item_ordinal "
+            "CASE WHEN ic.semantic_kind='reasoning' THEN " + reasoning_truncated + " ELSE ip.content_truncated END, ic.tool_call_id, "
+            "membership.logical_item_ordinal, ic.message_group_id, item_message.message_sequence, rb.kind "
             # 先按本页 Turn 定位 activity，再查可见成员，避免每次翻页扫描整个 view。
             "FROM item_catalog AS ic CROSS JOIN item_projections AS ip "
             "ON ip.item_id = ic.item_id AND ip.item_sequence = ic.item_sequence "
             "CROSS JOIN context_view_items AS membership ON membership.item_id = ic.item_id "
             "AND membership.view_id = ? AND membership.visible = 1 "
             "AND membership.source_kind = 'canonical' "
-            "LEFT JOIN turn_records AS tr ON tr.turn_id = ic.turn_id "
-            f"WHERE ic.turn_id IN ({placeholders}) AND (ic.semantic_kind IN "
-            "('reasoning','tool_call','tool_result','compaction_summary') "
-            "OR (ic.semantic_kind = 'assistant_output' AND ic.item_id IS NOT tr.final_item_id)) "
+            "LEFT JOIN messages item_message ON item_message.jsonl_offset=ic.jsonl_offset "
+            "AND item_message.jsonl_length=ic.jsonl_length "
+            "LEFT JOIN reasoning_blocks rb ON rb.item_id=ic.item_id "
+            f"WHERE ic.turn_id IN ({placeholders}) AND ic.semantic_kind IN "
+            "('reasoning','tool_call','tool_result','compaction_summary','assistant_output') "
             + activity_filter + activity_tail,
             (view_id, *ids, *activity_parameters),
         )
-        activity_rows = sorted(activity_rows, key=lambda row: (row[0], row[1]))
-        final_reasoning_rows = connection.execute(
-            "SELECT t.turn_id, rb.message_sequence, rb.content_block_index, "
-            "rb.item_index, rb.carrier_type, "
-            + ("CASE WHEN json_extract(part.value,'$.kind')='reasoning' THEN rb.reasoning_text END, " if read_reasoning else
-               "CASE WHEN json_extract(part.value,'$.kind')='reasoning' THEN '' END, ")
-            + ("CASE WHEN json_extract(part.value,'$.kind')='reasoning_summary' THEN rb.summary_text END, " if read_summary else
-               "CASE WHEN json_extract(part.value,'$.kind')='reasoning_summary' THEN '' END, ") +
-            "rb.signature_present, CASE WHEN json_extract(part.value,'$.kind')='reasoning_encrypted' THEN rb.encrypted_length END, "
-            "rb.item_id, ic.item_id, ic.item_sequence, ic.created_at, membership.logical_item_ordinal, "
-            "json_extract(part.value,'$.part_ordinal') "
-            "FROM turns t JOIN turn_records tr ON tr.turn_id=t.turn_id "
-            "JOIN item_catalog ic ON ic.item_id=tr.final_item_id "
-            "JOIN context_view_items membership ON membership.item_id=ic.item_id AND membership.view_id=? "
-            "AND membership.visible=1 AND membership.source_kind='canonical' "
-            "JOIN message_projections mp ON mp.message_sequence=t.final_message_sequence "
-            "JOIN json_each((SELECT value FROM json_each(mp.response_outline_json) WHERE key=ic.item_id)) part "
-            "JOIN reasoning_blocks rb ON rb.message_sequence=t.final_message_sequence "
-            "AND rb.content_block_index=json_extract(part.value,'$.content_block_index') "
-            "AND rb.item_index=json_extract(part.value,'$.item_index') "
-            f"WHERE t.turn_id IN ({placeholders}) AND json_extract(part.value,'$.kind') IN "
-            "('reasoning','reasoning_summary','reasoning_encrypted') " + activity_filter +
-            " ORDER BY t.turn_id,membership.logical_item_ordinal,json_extract(part.value,'$.part_ordinal')",
-            (view_id, *ids, *selected_ids),
-        ).fetchall()
+        activity_rows = list(activity_rows)
         result: dict[str, dict[str, object]] = {}
         for row in turns:
             if len(row) != 9:
@@ -257,6 +246,7 @@ class TurnProjectionReadMixin:
                 "final_source": "turn_finalize" if final_sequence is not None else None,
                 "final_response_text": "",
                 "final_response_text_truncated": False,
+                "final_items": [],
                 "thinking_blocks": [],
                 "assistant_text_sequences": [],
                 "has_encrypted_reasoning": False,
@@ -265,12 +255,12 @@ class TurnProjectionReadMixin:
                 "created_at": created_at,
                 "user_created_at": user_created_at,
                 "updated_at": updated_at,
-                "activity_stats": {
+                "activity_stats": activity_stats.get(turn_id, {
                     "duration_ms": None,
                     "item_count": 0,
                     "first_item_sequence": None,
                     "last_item_sequence": None,
-                },
+                }),
             }
         # TurnRecord 是 v2 的生命周期事实源；旧 turns 行仅保留 message
         # sequence projection，不能覆盖失败、取消或执行丢失等 v2 状态。
@@ -281,7 +271,7 @@ class TurnProjectionReadMixin:
         for (
             turn_id, status, final_item_id, historical_session_id, historical_thread_id,
             last_execution_id, execution_id, execution_session_id,
-            execution_thread_id, execution_turn_id, job_id,
+            execution_thread_id, execution_turn_id, job_id, accepted_at, changed_at,
         ) in v2_turns:
             turn_id = strict_text(turn_id, field="turn_records.turn_id")
             historical_owner = (
@@ -331,6 +321,14 @@ class TurnProjectionReadMixin:
                 projection["failure"] = terminal.failure
             projection["job_id"] = job_id
             projection["status"] = _V2_TO_HISTORY_STATUS[status]
+            # 消息时钟不代表 Turn 生命周期；未终结时不生成完成耗时。
+            accepted = _required_datetime(accepted_at, field="turn_records.created_at")
+            changed = _required_datetime(changed_at, field="turn_records.updated_at")
+            if changed < accepted:
+                raise RuntimeError(f"Turn 生命周期时间倒退: {turn_id}")
+            projection["activity_stats"]["duration_ms"] = (
+                None if status in {"open", "active"} else (changed - accepted) // timedelta(milliseconds=1)
+            )
             projected_turn_ids.add(turn_id)
             if final_item_id is not None:
                 projection["final_item_id"] = final_item_id
@@ -338,14 +336,11 @@ class TurnProjectionReadMixin:
             raise RuntimeError(
                 f"turns projection 缺少 canonical TurnRecord: {set(result) - projected_turn_ids}"
             )
-        final_manifests: dict[str, object] = {}
         for (
-            turn_id, final_sequence, text, truncated, message_id, message_turn_id,
+            turn_id, final_sequence, message_id, message_turn_id,
             item_id, item_turn_id, semantic_kind, item_status,
-            final_item_sequence, final_item_created_at,
-            final_logical_item_ordinal, final_visible, final_source_kind,
+            final_visible, final_source_kind,
             selected_turn_id, selected_final_sequence, has_canonical_projection,
-            final_item_projection_manifest_json,
         ) in final_rows:
             turn_id = strict_text(turn_id, field="turns.turn_id")
             final_sequence = strict_optional_non_negative_int(
@@ -387,76 +382,42 @@ class TurnProjectionReadMixin:
                 raise RuntimeError(f"所选 view final 指针与 canonical Turn 不一致: {view_id}/{turn_id}")
             if final_visible != 1 or final_source_kind != "canonical":
                 raise RuntimeError(f"canonical final item 缺少可见 view membership: {view_id}/{item_id}")
-            if text is None or truncated is None:
-                raise RuntimeError(f"final message projection 字段不完整: {turn_id}")
-            text = strict_optional_text(
-                text, field=f"message_projections.visible_text:{turn_id}"
-            )
-            truncated_value = strict_non_negative_int(
-                truncated, field=f"message_projections.visible_text_truncated:{turn_id}"
-            )
-            if truncated_value not in {0, 1}:
-                raise RuntimeError(f"message projection truncated 标记非法: {turn_id}")
-            if turn_id not in result:
-                raise TypeError(
-                    f"final message projection 缺少 turns row: {turn_id}"
-                )
-            result[turn_id]["final_response_text"] = text or ""
-            result[turn_id]["final_response_text_truncated"] = truncated_value == 1
-            result[turn_id]["final_item_sequence"] = strict_non_negative_int(
-                final_item_sequence,
-                field=f"item_catalog.item_sequence:{turn_id}",
-            )
-            result[turn_id]["final_item_created_at"] = strict_text(
-                final_item_created_at,
-                field=f"item_catalog.created_at:{turn_id}",
-            )
-            result[turn_id]["final_logical_item_ordinal"] = strict_non_negative_int(
-                final_logical_item_ordinal,
-                field=f"context_view_items.logical_item_ordinal:{view_id}/{item_id}",
-            )
-            final_manifests[turn_id] = final_item_projection_manifest_json
-        # 结构化文本使用写入时冻结的真实 Part 坐标，不把多个块压成伪造的 part:0。
-        text_parts = {}
-        for row in activity_rows:
-            if row[3:5] != ("assistant_output", "structured_content"):
-                continue
-            text_parts[row[2]] = read_response_outline(connection, row[2])
-            message = connection.execute(
-                "SELECT message.message_sequence FROM item_catalog item JOIN messages message "
-                "ON message.jsonl_offset=item.jsonl_offset AND message.jsonl_length=item.jsonl_length "
-                "WHERE item.item_id=?", (row[2],),
-            ).fetchone()
-            for part in text_parts[row[2]]:
-                part["message_sequence"] = message[0] if message is not None else 0
-        _merge_activity_items(result, tool_rows, activity_rows, text_parts)
-        _merge_final_reasoning(
-            result, final_reasoning_rows, final_manifests
-        )
+        _merge_activity_items(result, tool_rows, activity_rows)
+        tool_results = read_tool_result_summaries(connection, view_id, selected_ids)
         # 坐标来自相同轻索引，正文补读和任意分页均不重新猜组首或从页首计时。
         for turn_id, projection in result.items():
-            selected = [row for row in coordinates if row[10] == turn_id]
+            selected = {row[0]: row for row in coordinates if row[5] == turn_id}
             members = []
             for member in projection["activity_items"]:
-                identity = ItemProjectionIdentity(model_call_id=member.get("model_call_id"))
-                matches = [row for row in selected if row[0] == member["item_id"] and row[2] == member["kind"]
-                    and (row[3] is None or row[3] == member.get("content_block_index", member.get("block_ordinal")))
-                    and (row[4] is None or row[4] == member.get("item_index"))
-                    and (provider_tool_call_id(identity, row[11]) == provider_tool_call_id(identity, member.get("tool_call_id", ""))
-                        if row[11] is not None else row[5] is None or row[5] == member.get("call_index"))]
-                if len(matches) != 1:
-                    if not matches:
-                        continue
-                    raise RuntimeError(f"活动部位坐标不唯一: {member['item_id']}/{member['kind']}")
-                coordinate = matches[0]
-                member.update(part_ordinal=coordinate[1], previous_created_at=coordinate[7] or projection["created_at"])
+                coordinate = selected[member["item_id"]]
+                if coordinate[6]:
+                    if member["status"] != "completed":
+                        raise RuntimeError(f"final输出成员不是completed: {member['item_id']}")
+                    # final 与过程共用同一选集和续点；只保留本页有界派生文本。
+                    remaining = max(0, 65536 - len(projection["final_response_text"]))
+                    clipped = len(member["text"]) > remaining
+                    member["text"] = member["text"][:remaining]
+                    member["truncated"] |= clipped
+                    member["elapsed_ms"] = 0
+                    projection["final_items"].append(member)
+                    projection["final_response_text"] += member["text"]
+                    projection["final_response_text_truncated"] |= member["truncated"]
+                    continue
+                member["previous_created_at"] = coordinate[3] or projection["created_at"]
                 if member["kind"] in {"reasoning", "reasoning_summary", "reasoning_encrypted", "tool_call", "tool_result"}:
-                    member.update(activity_group_item_id=coordinate[8], activity_group_part_ordinal=coordinate[9])
+                    member["activity_group_item_id"] = coordinate[4]
+                # 摘要与正文是同一 Item 的两种安全视图，不再生成第二个内容身份。
+                if read_summary and not read_reasoning and member["kind"] == "reasoning" and member["text"]:
+                    member["kind"] = "reasoning_summary"
+                tool_result = tool_results.get(member["item_id"])
+                if tool_result is not None:
+                    member["tool_outcome"] = tool_result.tool_outcome
+                    if tool_result.tool_execution is not None:
+                        member["tool_execution"] = tool_result.tool_execution.to_dict()
                 members.append(member)
             projection["activity_items"] = members
-            if activity_limit is not None:
-                projection["activity_has_more"] = has_more
-                if has_more and selected:
-                    projection["activity_continuation"] = min((row[6], row[1]) for row in selected)
+            projection["activity_has_more"] = has_more
+            if has_more and selected:
+                projection["activity_continuation"] = min(row[2] for row in selected.values())
         _finalize_projections(result)
         return result

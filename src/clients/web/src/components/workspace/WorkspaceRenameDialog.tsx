@@ -1,11 +1,10 @@
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../../../../shared/core/i18n/index.js";
 import { OverlayRootContext } from "../overlays/OverlayRootContext";
 import type { GatewayWorkspace } from "../../types/backend";
-import { errorMessage } from "../../utils/errorMessage";
-import { HttpRequestError } from "../../api/http";
+import { errorSummary } from "../../utils/errorMessage";
 
 interface WorkspaceRenameDialogProps {
   workspace: GatewayWorkspace | null;
@@ -21,8 +20,10 @@ export default function WorkspaceRenameDialog({
   const overlayRoot = useContext(OverlayRootContext);
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const workspaceId = nullableGatewayWorkspaceKey(workspace);
+  const currentTarget = useRef({ key: workspaceId });
+  if (currentTarget.current.key !== workspaceId) currentTarget.current = { key: workspaceId };
   const workspaceName = workspace?.name ?? null;
 
   useEffect(() => {
@@ -39,6 +40,7 @@ export default function WorkspaceRenameDialog({
   }
 
   const handleSubmit = async () => {
+    const snapshot = currentTarget.current;
     const normalizedName = name.trim();
     if (!normalizedName) {
       setError(t("gateway.workspaceRename.nameRequired"));
@@ -48,13 +50,11 @@ export default function WorkspaceRenameDialog({
     setError(null);
     try {
       await onSubmit(gatewayWorkspaceKey(workspace), normalizedName);
-      onClose();
+      if (currentTarget.current === snapshot) onClose();
     } catch (submitError) {
-      const message = submitError instanceof HttpRequestError && submitError.requestId
-        ? `${errorMessage(submitError)} · request_id=${submitError.requestId}` : errorMessage(submitError);
-      setError(t("gateway.workspaceDetails.actionFailed", workspace.gateway_id, workspace.workspace_id, message));
+      if (currentTarget.current === snapshot) setError(submitError);
     } finally {
-      setSubmitting(false);
+      if (currentTarget.current === snapshot) setSubmitting(false);
     }
   };
 
@@ -97,8 +97,8 @@ export default function WorkspaceRenameDialog({
           </label>
         </div>
         {error ? (
-          <div className="workspace-dialog-error" role="alert">
-            {error}
+          <div className="workspace-dialog-error failure-summary" role="alert">
+            {errorSummary(error)}
           </div>
         ) : null}
         <footer className="workspace-dialog-actions">

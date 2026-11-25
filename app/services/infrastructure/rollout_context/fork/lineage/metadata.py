@@ -121,7 +121,7 @@ class ForkMetadataMixin:
             self._storage._lock(source_owner_thread_id, checkpoint_ns, session_id=source_session_id),
             self._storage._connect(source_owner_thread_id, checkpoint_ns, session_id=source_session_id) as connection,
         ):
-            self._storage._require_v2_runtime(connection)
+            self._storage._require_current_rollout_format(connection)
             existing = connection.execute(
                 "SELECT owner_session_id, status, target_view_id FROM retention_refs WHERE reference_kind = 'fork' AND reference_id = ?",
                 (fork_id,),
@@ -181,7 +181,7 @@ class ForkMetadataMixin:
             return ()
         try:
             with self._storage.read_connection(source_session_id, source_owner_thread_id, checkpoint_ns) as connection:
-                self._storage._require_v2_runtime(connection)
+                self._storage._require_current_rollout_format(connection)
                 rows = connection.execute(
                     "SELECT DISTINCT owner_session_id FROM retention_refs WHERE reference_kind = 'fork' AND status = 'active' AND owner_session_id IS NOT NULL ORDER BY owner_session_id"
                 ).fetchall()

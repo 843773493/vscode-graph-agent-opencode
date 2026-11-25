@@ -62,7 +62,7 @@ async def test_compacted_prefix_keeps_effective_and_display_orders(
         *(f"compact-prefix-{kind}-{index}" for index in range(history_count) for kind in ("question", "answer")),
         "compact-prefix-current-question", "compact-prefix-final-answer", summary_text,
     ) if marker in _wire_text(item.payload)}
-    # 同一次响应的block与message投影有不同item；可见资格由view决定，不能按正文猜身份。
+    # 标记只校验样本覆盖；前缀成员资格和顺序由 view 决定，不能按正文猜身份。
     assert len(set(markers.values())) == 2 * history_count + 3
     final_id, = case.sql(session, thread,
         "SELECT turn.final_item_id FROM turn_acceptances acceptance JOIN turn_records turn USING(turn_id) "

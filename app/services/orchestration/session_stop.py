@@ -9,9 +9,12 @@ from typing import Literal, TypeVar
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.session_lifecycle_gate import OperationHolderGate
-from app.domain.session_stop import DELETE_SESSION_POLICY, SessionStopPolicy
 from app.domain.itemized.execution_queue import ExecutionQueuePause
-from app.schemas.internal_v2.execution_control import ThreadExecutionControlDTO, ThreadExecutionControlRequest
+from app.domain.session_stop import DELETE_SESSION_POLICY, SessionStopPolicy
+from app.schemas.internal_v2.execution_control import (
+    ThreadExecutionControlDTO,
+    ThreadExecutionControlRequest,
+)
 from app.schemas.internal_v2.session import (
     SessionControlResultDTO,
     SessionInterruptResultDTO,
@@ -99,6 +102,9 @@ class SessionStopService:
             result = await self._interrupt.interrupt(
                 session_id, thread_id=thread_id,
             )
+            # 自然完成已经赢得终态裁决；不能再取消尚在发布完成镜像的原 Job。
+            if result.status == "completed":
+                return result
             target_thread = result.thread_id if policy.scope == "thread" else None
             if policy.goal == "pause":
                 await self._pause_goal(session_id, target_thread)
@@ -175,11 +181,10 @@ class SessionStopService:
     ) -> None:
         if not self._has_resources(policy):
             return
-        # 原 holder 先退出，旧操作才有机会取得 Session gate 完成结算。
+        # Job owner 已关闭新准入；排空等待必须让原操作取得自己的发布/结算 gate。
         async with AsyncExitStack() as scope:
             for holder in self._holders:
                 await scope.enter_async_context(holder.lock_for(session_id))
-            await scope.enter_async_context(self._sessions.session_write_admission(session_id))
             await self._drain_resources(session_id, policy, thread_id)
 
     async def _drain_resources(

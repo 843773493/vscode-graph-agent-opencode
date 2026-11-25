@@ -59,6 +59,8 @@ async def test_models_are_discovered_and_tested_in_original_settings(
     workspace = Path(integration_workspace_root_path)
     source = Path(integration_workspace_config_path)
     config = commentjson.loads(source.read_text(encoding="utf-8"))
+    # 本场景要验证共享来源更新，入口必须显式依赖安装器的用户来源链。
+    config["extends"] = "user:workspace_local"
     primary = config["profiles"]["provider.primary"]["settings"]["model_options"]
     primary.update({"endpoint": catalog.endpoint, "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
         "request_options": {}})

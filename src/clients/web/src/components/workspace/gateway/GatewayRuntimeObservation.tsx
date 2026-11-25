@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import type { GatewayDiagnostics } from "../../../types/backend";
 import { formatByteSize } from "../../../utils/format";
@@ -22,9 +23,9 @@ export default function GatewayRuntimeObservation({ observation }: { observation
       <p>{process.service} · PID {process.pid} · {t("gateway.observation.resources",
         process.rss_bytes == null ? t("gateway.observation.unknown") : formatByteSize(process.rss_bytes),
         process.cpu_seconds == null ? t("gateway.observation.unknown") : process.cpu_seconds)}</p>
-      {process.error ? <p role="alert">{process.error}</p> : null}
+      {process.error ? <p className="failure-summary" role="alert">{failureSummary(process.error)}</p> : null}
     </div>)}
-    {observation.collection_error ? <p role="alert">{observation.collection_error}</p> : null}
+    {observation.collection_error ? <p className="failure-summary" role="alert">{failureSummary(observation.collection_error)}</p> : null}
     {observation.unsupported_metrics.length ? <p>{t("gateway.observation.unsupported", observation.unsupported_metrics.join(", "))}</p> : null}
   </div>;
 }

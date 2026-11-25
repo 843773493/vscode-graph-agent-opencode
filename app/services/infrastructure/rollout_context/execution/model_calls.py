@@ -45,7 +45,7 @@ class RolloutModelCallsMixin:
         if not carrier_items:
             return None
         with self._storage.read_connection(admission.session_id, admission.thread_id, "") as connection:
-            self._storage._require_v2_runtime(connection)
+            self._storage._require_current_rollout_format(connection)
             row = connection.execute(
                 "SELECT e.outcome,e.last_model_call_id,m.attempt,m.provider,m.outcome,"
                 "m.assembly_id,a.status,a.execution_id,a.model_call_id,m.dispatch_state,"

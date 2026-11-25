@@ -1,385 +1,50 @@
+"""历史原文工具只读取自身 Thread 的 canonical owner，不公开归档路径。"""
+
 from __future__ import annotations
 
-import errno
-import logging
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
-from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import Mock
 
 import pytest
-from deepagents.backends import CompositeBackend
-from langchain.agents.middleware import ModelRequest, ModelResponse
-from langchain.agents.middleware.types import ExtendedModelResponse
 from langchain.tools import ToolRuntime
-from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
-from langchain_core.runnables.config import var_child_runnable_config
 from langchain_core.tools import ToolException
-from langgraph.runtime import ExecutionInfo, Runtime
 
-from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
-from app.agents.summarization.tool_middleware import (
-    CachePreservingSummarizationToolMiddleware,
-)
-from app.agents.workspace_backend import build_workspace_backend
-from app.core.path_utils import workspace_context
-from app.core.session_thread_context import session_thread_owner_scope
+from app.agents.summarization.tool_middleware import CompactionToolsMiddleware
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.services.orchestration.message_stream.activities import (
-    ActivityHandlerRegistry,
-    ActivityRuntime,
-)
-from tests.support.catalog_session_bundle import seed_catalog_session_bundle
-
-
-class _ArchivePreflight:
-    """本用例只核归档 owner；消息均为闭合的纯文本轮次。"""
-
-    def safe_compaction_prefix_cutoffs(
-        self,
-        session_id: str,
-        thread_id: str,
-        *,
-        checkpoint_ns: str,
-        state_messages: Sequence[object],
-        cutoff_indexes: Sequence[int],
-    ) -> frozenset[int]:
-        return frozenset(cutoff_indexes)
-
-
-@dataclass(frozen=True)
-class _HistoryArchiveCase:
-    backend: CompositeBackend
-    session_dir: Path
-    workspace_root: Path
-    workspace_id: str
-    owners: tuple[MutationIntentOwner, MutationIntentOwner]
 
 
 @pytest.fixture
-def archive_case(empty_workspace_scope: tuple[str, Path]) -> _HistoryArchiveCase:
-    workspace_id, workspace_root = empty_workspace_scope
-    session_id = "ses_019c58e6e9f5713785f99a3f3e5768d8"
-    main_thread_id = "thr_019c58e6e9f5713785f99a3f3e5768d8"
-    child_thread_id = "thr_019c58e6e9f5713785f99a3f3e5768d9"
-    bundle = seed_catalog_session_bundle(
-        workspace_root / ".boxteam" / "sessions",
-        session_id,
-        workspace_id=workspace_id,
-        main_thread_id=main_thread_id,
-    )
-    return _HistoryArchiveCase(
-        build_workspace_backend(workspace_root),
-        bundle.directory,
-        workspace_root,
-        bundle.node.workspace_id,
-        (
-            MutationIntentOwner(session_id, main_thread_id),
-            MutationIntentOwner(session_id, child_thread_id),
-        ),
-    )
-
-
-@pytest.fixture
-def archive_scope(archive_case: _HistoryArchiveCase) -> Callable[[MutationIntentOwner], AbstractContextManager[None]]:
-    @contextmanager
-    def bind(owner: MutationIntentOwner) -> Iterator[None]:
-        token = var_child_runnable_config.set(
-            {"configurable": {"thread_id": owner.thread_id}}
-        )
-        try:
-            with (
-                workspace_context(archive_case.workspace_id, archive_case.workspace_root),
-                session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
-            ):
-                yield
-        finally:
-            var_child_runnable_config.reset(token)
-
-    return bind
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
-async def test_compaction_archives_and_appends_by_session_thread_owner(
-    archive_case: _HistoryArchiveCase,
-    archive_scope: Callable[[MutationIntentOwner], AbstractContextManager[None]],
-    use_async: bool,
-) -> None:
-    middleware = CachePreservingSummarizationMiddleware(
-        model=FakeListChatModel(responses=["unused"]),
-        backend=archive_case.backend,
-        trigger=("messages", 4),
-        keep=("messages", 2),
-        token_counter=lambda messages, tools=None: sum(len(message.text) for message in messages),
-        compaction_preflight=_ArchivePreflight(),
-    )
-    history_tool = next(tool for tool in CachePreservingSummarizationToolMiddleware(middleware).tools
-                        if tool.name == "read_compaction_history")
-    observed_requests: list[ModelRequest] = []
-
-    def handler(request: ModelRequest) -> ModelResponse:
-        observed_requests.append(request)
-        return ModelResponse(result=[AIMessage(content="归档后的摘要")])
-
-    async def async_handler(request: ModelRequest) -> ModelResponse:
-        return handler(request)
-
-    for owner_index, owner in enumerate(archive_case.owners):
-        own_marker = f"owner-{owner_index}"
-        for round_index in range(2):
-            messages: list[AnyMessage] = []
-            for pair_index in range(5):
-                messages.extend([
-                    HumanMessage(content=f"{own_marker}-round-{round_index}-pair-{pair_index} " * 60),
-                    AIMessage(content="需要保留原文的回答 " * 60),
-                ])
-            request = ModelRequest(
-                model=None,
-                messages=messages,
-                state={},
-                runtime=SimpleNamespace(
-                    execution_info=SimpleNamespace(
-                        thread_id=owner.thread_id, checkpoint_ns="",
-                        checkpoint_id=f"archive-checkpoint-{owner_index}-{round_index}",
-                        task_id=f"archive-task-{owner_index}-{round_index}", node_attempt=1,
-                    )
-                ),
-            )
-            observed_requests.clear()
-            with archive_scope(owner):
-                if use_async:
-                    result = await middleware._awrap_model_call_impl(request, async_handler)
-                else:
-                    result = middleware.wrap_model_call(request, handler)
-                history_args = {"runtime": ToolRuntime(state={}, context=None, config={},
-                    stream_writer=lambda _: None, tool_call_id="read-after-compaction", store=None),
-                    "line_offset": 1, "limit": 2000}
-                archive_text = await history_tool.ainvoke(history_args) if use_async else history_tool.invoke(history_args)
-                assert f"{own_marker}-round-{round_index}" in archive_text
-                assert f"owner-{1 - owner_index}" not in archive_text
-
-            assert isinstance(result, ExtendedModelResponse)
-            event = result.command.update["_summarization_event"]
-            assert "file_path" not in event
-            assert "read_compaction_history(line_offset=1, limit=200)" in event["summary_message"].text
-            assert "session-artifacts/" not in event["summary_message"].text
-            assert "history.md" not in event["summary_message"].text
-            assert result.model_response.result == [] and len(observed_requests) == 1
-            assert middleware.after_model(result.command.update, request.runtime) == {
-                "_compaction_continuation": False, "jump_to": "model",
-            }
-            archive = archive_case.session_dir / "context" / owner.thread_id / "history.md"
-            content = archive.read_text(encoding="utf-8")
-            assert content.count("## Summarized at") == round_index + 1
-            assert f"{own_marker}-round-0" in content
-            assert f"{own_marker}-round-{round_index}" in content
-            assert f"owner-{1 - owner_index}" not in content
-            assert not (archive_case.session_dir / "context" / "history.md").exists()
-            assert not (archive_case.workspace_root / "session-artifacts").exists()
-
-
-@pytest.mark.parametrize(
-    ("owner_state", "expected_error"),
-    [
-        ("missing_owner", "缺少显式 SessionThread owner"),
-        ("mismatched_thread", "与 LangGraph callback thread_id 冲突"),
-        ("missing_thread", "压缩历史归档缺少 LangGraph thread_id"),
-    ],
-)
-def test_archive_path_rejects_missing_or_conflicting_owner(
-    archive_case: _HistoryArchiveCase,
-    owner_state: str,
-    expected_error: str,
-) -> None:
-    main, child = archive_case.owners
-    config_thread = child.thread_id if owner_state == "mismatched_thread" else main.thread_id
-    config = {"configurable": {} if owner_state == "missing_thread" else {"thread_id": config_thread}}
-    token = var_child_runnable_config.set(config)
-    middleware = object.__new__(CachePreservingSummarizationMiddleware)
-    try:
-        with pytest.raises(RuntimeError, match=expected_error):
-            if owner_state == "missing_owner":
-                middleware._get_history_path()
-            else:
-                with session_thread_owner_scope(main, langgraph_thread_id=main.thread_id):
-                    middleware._get_history_path()
-    finally:
-        var_child_runnable_config.reset(token)
-    assert not (archive_case.session_dir / "context").exists()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
-async def test_history_tool_reads_original_archive_in_bound_thread_with_line_paging(
-    archive_case: _HistoryArchiveCase,
-    archive_scope: Callable[[MutationIntentOwner], AbstractContextManager[None]],
-    use_async: bool,
-) -> None:
-    middleware = CachePreservingSummarizationMiddleware(
-        model=FakeListChatModel(responses=["unused"]),
-        backend=archive_case.backend,
-        compaction_preflight=_ArchivePreflight(),
-    )
-    tools = CachePreservingSummarizationToolMiddleware(middleware).tools
-    tool = next(tool for tool in tools if tool.name == "read_compaction_history")
-    assert set(tool.tool_call_schema.model_json_schema()["properties"]) == {"line_offset", "limit"}
-    runtime = ToolRuntime(state={}, context=None, config={}, stream_writer=lambda _: None, tool_call_id="history-read", store=None)
-    for index, owner in enumerate(archive_case.owners):
-        with archive_scope(owner):
-            path = middleware._get_history_path()
-            result = archive_case.backend.write(path, f"user-{index}\nassistant-{index}\n第三行\n")
-            assert result.error is None
-            first = {"runtime": runtime, "line_offset": 1, "limit": 1}
-            rest = {"runtime": runtime, "line_offset": 2, "limit": 2}
-            first_text = await tool.ainvoke(first) if use_async else tool.invoke(first)
-            rest_text = await tool.ainvoke(rest) if use_async else tool.invoke(rest)
-        assert f"user-{index}" in first_text and "assistant-" not in first_text
-        assert f"assistant-{index}" in rest_text and "第三行" in rest_text
-        assert f"user-{1-index}" not in first_text + rest_text
-        assert "session-artifacts/" not in first_text + rest_text
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("log_fails", [False, True], ids=["log-ok", "log-failed"])
-async def test_thread_without_archive_fails_without_reading_source_or_leaking_its_location(
-    archive_case: _HistoryArchiveCase,
-    archive_scope: Callable[[MutationIntentOwner], AbstractContextManager[None]],
-    caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    use_async: bool,
-    log_fails: bool,
-) -> None:
-    middleware = CachePreservingSummarizationMiddleware(
-        model=FakeListChatModel(responses=["unused"]), backend=archive_case.backend,
-        compaction_preflight=_ArchivePreflight(),
-    )
-    tool = next(tool for tool in CachePreservingSummarizationToolMiddleware(middleware).tools
-                if tool.name == "read_compaction_history")
-    main, child = archive_case.owners
-    with archive_scope(main):
-        assert archive_case.backend.write(middleware._get_history_path(), "来源线程的私有归档").error is None
-    failures: list[OSError] = []
-    if log_fails:
-        blocker = tmp_path / "archive-log-secret"
-        blocker.write_text("普通文件不能承载日志子文件", encoding="utf-8")
-        destination = blocker / "service.log"
-        capture = caplog.handler.emit
-
-        def emit(record: logging.LogRecord) -> None:
-            capture(record)
-            if record.name not in {"app.agents.summarization.tool_middleware", "app.core.failures"}:
-                return
-            try:
-                destination.write_text(record.getMessage(), encoding="utf-8")
-            except OSError as error:
-                failures.append(error)
-                raise
-
-        monkeypatch.setattr(caplog.handler, "emit", emit)
+def history_tool_case():
+    owner = MutationIntentOwner("history-session", "history-thread")
+    read = Mock(return_value="41: 历史原文")
+    middleware = CompactionToolsMiddleware(compactor=SimpleNamespace(read_history=read), owner=owner, agent_id="default")
+    tool = next(tool for tool in middleware.tools if tool.name == "read_compaction_history")
     runtime = ToolRuntime(state={}, context=None, config={}, stream_writer=lambda _: None,
-                          tool_call_id="missing-archive", store=None)
-    with archive_scope(child):
-        result = await tool.ainvoke({"runtime": runtime}) if use_async else tool.invoke({"runtime": runtime})
-    assert "detail-unavailable" in result
-    assert "来源线程的私有归档" not in result
-    assert "session-artifacts" not in result and "history.md" not in result
-    assert str(archive_case.session_dir) not in result
-    assert "archive-log-secret" not in result
-    assert "backend 读取失败" in caplog.text and "history.md" in caplog.text
-    # 关闭框架的公开错误转换，直接核对原失败与日志次错的诊断链。
-    tool.handle_tool_error = False
-    with archive_scope(child), pytest.raises(ToolException, match="detail-unavailable") as caught:
-        if use_async:
-            await tool.ainvoke({"runtime": runtime})
-        else:
-            tool.invoke({"runtime": runtime})
-    assert str(caught.value) == result
-    cause = caught.value.__cause__
-    assert isinstance(cause, RuntimeError) and "history.md" in str(cause)
-    assert any(record.exc_info and record.exc_info[1] is cause for record in caplog.records)
-    notes = getattr(cause, "__notes__", [])
-    if log_fails:
-        assert len(failures) == 2 and all(error.errno == errno.ENOTDIR for error in failures)
-        assert any(str(failures[-1]) in note for note in notes)
-    else:
-        assert not notes
+                          tool_call_id="history-read", store=None, tools=middleware.tools)
+    return owner, read, tool, runtime
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("log_fails", [False, True], ids=["log-ok", "log-failed"])
-async def test_archive_write_failure_settles_compaction_activity_despite_log_failure(
-    archive_case: _HistoryArchiveCase,
-    archive_scope: Callable[[MutationIntentOwner], AbstractContextManager[None]],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    tmp_path: Path,
-    log_fails: bool,
-) -> None:
-    model = FakeListChatModel(responses=["归档失败前不得调用模型"])
-    middleware = CachePreservingSummarizationMiddleware(
-        model=model, backend=archive_case.backend, trigger=("messages", 4), keep=("messages", 2),
-        compaction_preflight=_ArchivePreflight(),
-    )
-    owner = archive_case.owners[0]
-    # 普通文件阻止真实 backend 创建归档，不替换被测压缩或活动结算。
-    blocker = archive_case.session_dir / "context"
-    blocker.write_text("保留无法作为目录的原件", encoding="utf-8")
-    writer = AsyncMock()
-    writer.turn_stream_id = "compaction-failure-stream"
-    writer.commit.side_effect = lambda kind, payload: {"type": kind, "payload": payload}
-    activity = ActivityRuntime(writer, ActivityHandlerRegistry())
-    monkeypatch.setattr("app.agents.summarization.middleware.current_activity_runtime", lambda: activity)
-    messages: list[AnyMessage] = []
-    for index in range(5):
-        messages.extend([HumanMessage(content=f"原始输入{index}"), AIMessage(content="原始回答" * 60)])
-    request = ModelRequest(
-        model=model, messages=messages, state={"messages": messages},
-        runtime=Runtime(execution_info=ExecutionInfo(
-            checkpoint_id="archive-failure-checkpoint", checkpoint_ns="", task_id="archive-failure-task",
-            thread_id=owner.thread_id,
-        )),
-    )
-    sink_blocker = tmp_path / "compaction-log-secret"
-    sink_blocker.write_text("保留日志冲突原件", encoding="utf-8")
-    destination = sink_blocker / "service.log"
-    capture = caplog.handler.emit
-    failures: list[OSError] = []
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_history_tool_uses_exact_bound_owner_and_requested_range(history_tool_case, asynchronous):
+    owner, read, tool, runtime = history_tool_case
+    result = await tool.coroutine(runtime, 41, 7) if asynchronous else tool.func(runtime, 41, 7)
+    assert result == "41: 历史原文"
+    read.assert_called_once_with(owner, line_offset=41, limit=7)
+    properties = tool.tool_call_schema.model_json_schema()["properties"]
+    assert set(properties) == {"line_offset", "limit"}
+    assert properties["line_offset"]["minimum"] == 1
+    assert properties["limit"]["minimum"] == 1 and properties["limit"]["maximum"] == 2000
+    assert properties["limit"]["default"] == 200
 
-    def emit(record: logging.LogRecord) -> None:
-        capture(record)
-        if log_fails and record.name in {"app.agents.summarization.middleware", "app.core.failures"}:
-            try:
-                destination.write_text(record.getMessage(), encoding="utf-8")
-            except OSError as error:
-                failures.append(error)
-                raise
 
-    monkeypatch.setattr(caplog.handler, "emit", emit)
-
-    async def handler(_request: ModelRequest) -> ModelResponse:
-        pytest.fail("归档没有保存成功时不得调用摘要模型")
-
-    with archive_scope(owner), pytest.raises(RuntimeError, match="缓存优先压缩无法保存") as caught:
-        await middleware.awrap_model_call(request, handler)
-    started, failed = writer.commit.await_args_list
-    assert started.args[0] == "activity.started" and failed.args[0] == "activity.failed"
-    initial, final = started.args[1], failed.args[1]
-    assert initial["activity_id"] == final["activity_id"] and final["kind"] == "context.compaction"
-    assert final["status"] == "failed" and final["outcome"] == "outcome_unknown"
-    assert final["summary"] == "活动处理失败: phase=context.compaction, error=RuntimeError"
-    assert final["detail"] == {"phase": "failed"}
-    assert any(record.exc_info and record.exc_info[1] is caught.value for record in caplog.records)
-    if log_fails:
-        assert len(failures) == 1 and failures[0].errno == errno.ENOTDIR
-        assert any(str(failures[0]) in note for note in caught.value.__notes__)
-    else:
-        assert not failures and not getattr(caught.value, "__notes__", [])
-    assert "compaction-log-secret" not in str(caught.value)
-    assert str(archive_case.session_dir) not in str(final)
-    assert blocker.read_text(encoding="utf-8") == "保留无法作为目录的原件"
+async def test_history_owner_failure_retains_tool_error_and_cause(history_tool_case):
+    _, read, tool, runtime = history_tool_case
+    failure = ValueError("compaction-history-unavailable: 当前 Thread 没有已采用候选")
+    read.side_effect = failure
+    with pytest.raises(ToolException) as raised:
+        await tool.coroutine(runtime)
+    assert raised.value.__cause__ is failure
+    assert "当前 Thread" in str(raised.value)
+    read.side_effect = OSError("canonical reader failed")
+    with pytest.raises(OSError, match="canonical reader failed"):
+        await tool.coroutine(runtime)

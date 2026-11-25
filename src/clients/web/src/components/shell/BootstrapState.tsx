@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { t, formatNumber } from '../../../../shared/core/i18n/index.js';
 import { useEffect, useState } from "react";
 import { errorMessage } from "../../utils/errorMessage";
@@ -54,7 +55,7 @@ export default function BootstrapState({ onRetry }: BootstrapStateProps): React.
           <button type="button" onClick={() => void handleRetry()} disabled={retrying}>
             {retrying ? t('shell.bootstrap.retrying') : t('shell.bootstrap.retry')}
           </button>
-          {retryError ? <div className="bootstrap-retry-error" role="alert">{retryError}</div> : null}
+          {retryError ? <div className="bootstrap-retry-error failure-summary" role="alert">{failureSummary(retryError)}</div> : null}
         </div>
       ) : null}
     </div>

@@ -1,4 +1,4 @@
-"""v2 catalog 的 Turn activity 与 final reasoning 归并（由 turn_projection_reads 复用）。
+"""catalog 的逐 Item Turn activity 归并（由 turn_projection_reads 复用）。
 
 纯函数：只接收已 fetch 的行与中间结构，不持有连接、不触碰 self。
 """
@@ -6,8 +6,8 @@
 from __future__ import annotations
 
 from app.domain.itemized.identity.item_projection import ItemProjectionManifest
+from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_helpers import (
-    _authoritative_tool_coordinates,
     _finalize_activity_projection,
     _json_object,
 )
@@ -22,455 +22,105 @@ def _merge_activity_items(
     result: dict[str, dict[str, object]],
     tool_rows: object,
     activity_rows: object,
-    text_parts: dict[str, list[dict[str, object]]],
 ) -> None:
-    """物化已由查询择一的 canonical activity；此处不再次决定成员身份。"""
-
-    tool_by_item: dict[
-        tuple[str, str], tuple[ItemProjectionManifest, list[dict[str, object]]]
-    ] = {}
-    tool_by_call_id: dict[tuple[str, str | None, str], dict[str, object]] = {}
-    tool_by_model_call_index: dict[tuple[str, str, int], dict[str, object]] = {}
-    canonical_tools_by_model_call: dict[
-        tuple[str, str], list[dict[str, object]]
-    ] = {}
+    """每个工具 Item 只投影自身调用，坐标沿精确 ModelCall／调用身份取得。"""
+    manifests: dict[tuple[str, str], ItemProjectionManifest] = {}
+    tools_by_item: dict[tuple[str, str, str], dict[str, object]] = {}
+    tools_by_call: dict[tuple[str, str, str], dict[str, object]] = {}
     for (
-        turn_id,
-        anchor_item_id,
-        call_id,
-        name,
-        status,
-        result_sequence,
-        assistant_sequence,
-        call_index,
-        tool_projection_manifest_json,
+        turn_id, anchor_item_id, call_id, name, _status, result_sequence,
+        assistant_sequence, call_index, projection_manifest_json,
     ) in tool_rows:
         turn_id = strict_text(turn_id, field="messages.turn_id")
         anchor_item_id = strict_text(anchor_item_id, field="item_catalog.item_id")
-        call_id = strict_text(call_id, field=f"tool_calls.tool_call_id:{turn_id}")
+        manifest_key = (turn_id, anchor_item_id)
+        if manifest_key not in manifests:
+            manifests[manifest_key] = ItemProjectionManifest.from_dict(_json_object(
+                projection_manifest_json, field="item_catalog.projection_manifest_json:tool",
+            ))
+        identity = manifests[manifest_key].projection_identity
+        call_id = strict_text(call_id, field="tool_calls.tool_call_id")
+        raw_call_id = provider_tool_call_id(identity, call_id)
         tool = {
-            "tool_call_id": call_id,
             "tool_name": strict_text(name, field=f"tool_calls.tool_name:{call_id}"),
-            "status": strict_text(status, field=f"tool_calls.status:{call_id}"),
             "result_message_sequence": strict_optional_non_negative_int(
-                result_sequence,
-                field=f"tool_calls.result_message_sequence:{call_id}",
+                result_sequence, field=f"tool_calls.result_message_sequence:{call_id}",
             ),
             "assistant_message_sequence": strict_non_negative_int(
-                assistant_sequence,
-                field=f"tool_calls.assistant_message_sequence:{call_id}",
+                assistant_sequence, field=f"tool_calls.assistant_message_sequence:{call_id}",
             ),
-            "call_index": strict_non_negative_int(
-                call_index, field=f"tool_calls.call_index:{call_id}"
-            ),
+            "call_index": strict_non_negative_int(call_index, field="tool_calls.call_index"),
         }
-        # 工具和 activity 行在同一快照内连接同一 catalog item，按 item 身份
-        # 共享一次解析；只保留本次归并结果，不跨请求缓存或按展示消息 ID 复用。
-        key = (turn_id, anchor_item_id)
-        if key not in tool_by_item:
-            tool_by_item[key] = (ItemProjectionManifest.from_dict(_json_object(tool_projection_manifest_json, field="item_catalog.projection_manifest_json:tool")), [])
-        manifest, tools = tool_by_item[key]
-        tool_identity = manifest.projection_identity
-        model_call_id = tool_identity.model_call_id if tool_identity is not None else None
-        tools.append(tool)
-        tool_by_call_id[(turn_id, model_call_id, call_id)] = tool
-        tool_by_model_call_index[
-            (turn_id, model_call_id, tool["call_index"])
-        ] = tool
+        tools_by_item[(turn_id, anchor_item_id, raw_call_id)] = tool
+        if identity is not None and identity.model_call_id is not None:
+            # 同一声明的 stream／checkpoint carrier 可以共享调用来源，
+            # 但只规范化真实 ID，不能用另一个声明的相同 index 建立别名。
+            tools_by_call.setdefault((turn_id, identity.model_call_id, raw_call_id), tool)
 
-    canonical_tool_call_ids_by_model_call: dict[
-        tuple[str, str, int], str
-    ] = {}
-    # 分页不能截掉同一模型调用的身份声明；只复用已取得的工具轻元数据。
-    for (turn_id, _item_id), (manifest, tools) in tool_by_item.items():
-        identity = manifest.projection_identity
-        if identity is not None and identity.model_call_id is not None and identity.block_id is not None:
-            canonical_tool_call_ids_by_model_call[(turn_id, identity.model_call_id, identity.block_index)] = identity.block_id
-            canonical_tools_by_model_call.setdefault((turn_id, identity.model_call_id), []).extend(tools)
-    canonical_tool_call_ids_by_raw_id: dict[tuple[str, str | None, str], str | None] = {}
-    # 实时消息流的 tool-call 使用 model-call scoped ID；checkpoint shadow
-    # 仍携带 provider 原始 ID。先建立 canonical 的 (模型调用, call index)
-    # 映射，checkpoint carrier 通过这张表归一化。流式取行并在此解析一次，
-    # 后续归并直接消费 typed 身份与 producer，不再重读同一份 JSON。
-    activities = []
     for (
-        turn_id,
-        item_sequence,
-        item_id,
-        semantic_kind,
-        payload_kind,
-        item_status,
-        item_created_at,
-        producer_ref_json,
-        projection_manifest_json,
-        content,
-        content_truncated,
-        indexed_tool_call_id,
-        logical_item_ordinal,
+        turn_id, item_sequence, item_id, semantic_kind, payload_kind, item_status,
+        item_created_at, producer_ref_json, projection_manifest_json, content,
+        content_truncated, indexed_tool_call_id, logical_item_ordinal, message_group_id, message_sequence, reasoning_kind,
     ) in activity_rows:
         turn_id = strict_text(turn_id, field="item_catalog.turn_id")
+        item_id = strict_text(item_id, field="item_catalog.item_id")
         semantic_kind = strict_text(semantic_kind, field=f"item_catalog.semantic_kind:{item_id}")
-        tool_group = tool_by_item.get((turn_id, item_id))
-        manifest = tool_group[0] if tool_group is not None else ItemProjectionManifest.from_dict(_json_object(projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}"))
+        manifest = manifests.get((turn_id, item_id))
+        if manifest is None:
+            manifest = ItemProjectionManifest.from_dict(_json_object(
+                projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}",
+            ))
         identity = manifest.projection_identity
-        projection_group = manifest.projection_group
-        producer_ref = _json_object(
-            producer_ref_json, field=f"item_catalog.producer_ref_json:{item_id}"
-        )
-        activities.append((
-            turn_id, item_sequence, item_id, semantic_kind, payload_kind, item_status,
-            item_created_at, producer_ref, identity, projection_group, content,
-            content_truncated, indexed_tool_call_id, logical_item_ordinal,
-        ))
-        # ItemProjectionIdentity 已校验 block_id 与 model-call/index 必须同时存在。
-        if semantic_kind == "tool_call" and identity is not None and identity.block_id is not None:
-            canonical_tool_call_ids_by_model_call[
-                (turn_id, identity.model_call_id, identity.block_index)
-            ] = identity.block_id
+        group = manifest.projection_group
+        model_call_id = identity.model_call_id if identity is not None else None
+        kind = ("content" if manifest.output_block_type is not None else "text") if semantic_kind == "assistant_output" else semantic_kind
+        if semantic_kind == "reasoning":
+            kind = strict_text(reasoning_kind, field=f"reasoning_blocks.kind:{item_id}")
+        activity_item: dict[str, object] = {
+            "item_id": item_id,
+            "item_sequence": strict_non_negative_int(item_sequence, field="item_catalog.item_sequence"),
+            "logical_item_ordinal": strict_non_negative_int(
+                logical_item_ordinal, field=f"context_view_items.logical_item_ordinal:{item_id}",
+            ),
 
-    canonical_tool_call_keys = {
-        (turn_id, model_call_id, call_id)
-        for (turn_id, model_call_id, _call_index), call_id
-        in canonical_tool_call_ids_by_model_call.items()
-    }
-
-    for (
-        turn_id,
-        item_sequence,
-        item_id,
-        semantic_kind,
-        payload_kind,
-        item_status,
-        item_created_at,
-        producer_ref,
-        identity,
-        projection_group,
-        content,
-        content_truncated,
-        indexed_tool_call_id,
-        logical_item_ordinal,
-    ) in activities:
-        source_part_id = identity.block_id if identity is not None else None
-        projection_message_id = identity.projection_message_id if identity is not None else None
-        activity_model_call_id = identity.model_call_id if identity is not None else None
-        matching_tools = (
-            tool_by_item[(turn_id, item_id)][1]
-            if isinstance(projection_message_id, str) and (turn_id, item_id) in tool_by_item
-            else []
-        )
-        block_ordinal = (
-            identity.block_index
-            if identity is not None and identity.block_index is not None
-            else projection_group.ordinal if projection_group is not None else 0
-        )
-        activity_tools: list[dict[str, object] | None] = [None]
+            "kind": kind,
+            "carrier_type": manifest.output_block_type,
+            "status": strict_text(item_status, field=f"item_catalog.status:{item_id}"),
+            "created_at": strict_text(item_created_at, field=f"item_catalog.created_at:{item_id}"),
+            "text": strict_text(content, field=f"item_projections.content:{item_id}", allow_empty=True),
+            "truncated": strict_non_negative_int(content_truncated, field="item_projections.content_truncated") == 1,
+            "producer_ref": _json_object(producer_ref_json, field=f"item_catalog.producer_ref_json:{item_id}"),
+            "model_call_id": model_call_id,
+            "message_group": {
+                "message_group_id": message_group_id, "ordinal": group.ordinal, "size": group.size,
+            } if group is not None else None,
+            "block_ordinal": identity.block_index if identity is not None and identity.block_index is not None
+                else group.ordinal if group is not None else 0,
+            "content_block_index": identity.block_index if identity is not None else None,
+            "block_id": identity.block_id if identity is not None else None,
+            "completion_reason": identity.completion_reason if identity is not None else None,
+            "message_sequence": message_sequence if message_sequence is not None else 0,
+        }
         if semantic_kind in {"tool_call", "tool_result"}:
-            metadata_call_id = indexed_tool_call_id
-            block_id = identity.block_id if identity is not None else None
-            tool_call_id: str | None = None
-            if isinstance(metadata_call_id, str) and metadata_call_id:
-                tool_call_id = metadata_call_id
-            elif isinstance(block_id, str) and block_id:
-                tool_call_id = block_id
-            if tool_call_id is not None:
-                selected_tool = tool_by_call_id.get((turn_id, activity_model_call_id, tool_call_id))
-                if selected_tool is None:
-                    selected_tool = tool_by_model_call_index.get(
-                        (turn_id, activity_model_call_id, block_ordinal)
-                    )
-                call_index = (
-                    strict_non_negative_int(
-                        selected_tool.get("call_index"), field="tool_calls.call_index",
-                    )
-                    if selected_tool is not None else block_ordinal
-                )
-                # typed canonical ID 不受独立 message 的局部 call_index 影响；
-                # raw carrier 无论是否已有 message projection，都用同一模型
-                # 调用的稳定 index 归一化，不能把物理自投影当作逻辑身份。
-                tool_key = (turn_id, activity_model_call_id, tool_call_id)
-                canonical_tool_call_id = canonical_tool_call_ids_by_raw_id.get(tool_key) or (
-                    tool_call_id if tool_key in canonical_tool_call_keys else
-                    canonical_tool_call_ids_by_model_call.get(
-                        (turn_id, activity_model_call_id, call_index), tool_call_id,
-                    )
-                )
-                selected_tool = tool_by_call_id.get(
-                    (turn_id, activity_model_call_id, canonical_tool_call_id),
-                    selected_tool,
-                )
-                if selected_tool is None:
-                    if semantic_kind != "tool_call":
-                        raise RuntimeError(
-                            "canonical tool_result 缺少对应 tool_call: "
-                            f"{item_id}"
-                        )
-                    coordinates = _authoritative_tool_coordinates(
-                        tool_by_call_id, turn_id, identity, indexed_tool_call_id or block_id
-                    )
-                    selected_tool = {
-                        "tool_call_id": canonical_tool_call_id,
-                        "tool_name": strict_text(
-                            content,
-                            field=f"item_projections.content:{item_id}",
-                        ),
-                        "status": strict_text(
-                            item_status,
-                            field=f"item_catalog.status:{item_id}",
-                        ),
-                        "result_message_sequence": coordinates.get(
-                            "result_message_sequence"
-                        ),
-                        "assistant_message_sequence": coordinates.get(
-                            "assistant_message_sequence"
-                        ),
-                        "call_index": coordinates.get(
-                            "call_index", block_ordinal
-                        ),
-                    }
-                else:
-                    selected_tool = {**selected_tool, "tool_call_id": canonical_tool_call_id}
-                selected_tool.setdefault("call_index", block_ordinal)
-                if semantic_kind == "tool_call":
-                    tool_by_call_id[tool_key] = selected_tool
-                    tool_by_call_id[(turn_id, activity_model_call_id, canonical_tool_call_id)] = selected_tool
-                    canonical_tools_by_model_call.setdefault(
-                        (turn_id, activity_model_call_id), []
-                    ).append(selected_tool)
-                if semantic_kind == "tool_result":
-                    selected_tool = {
-                        **selected_tool,
-                        "status": strict_text(
-                            item_status,
-                            field=f"item_catalog.status:{item_id}",
-                        ),
-                        "result_message_sequence": selected_tool.get(
-                            "result_message_sequence"
-                        ),
-                    }
-                activity_tools = [selected_tool]
-            elif matching_tools:
-                # 一个 checkpoint tool_call carrier 可以包含多个 tool_calls；
-                # 它们共享物理 item offset，但每个 call 都是独立逻辑 Item。
-                # checkpoint message 仍携带 provider 原始 call id，必须先
-                # 用同一 model-call 的 call_index 映射回 canonical identity，
-                # 否则同一个工具会在历史中同时出现 raw call 和 canonical call。
-                normalized_tools: list[dict[str, object]] = []
-                model_call_key = (
-                    turn_id,
-                    activity_model_call_id,
-                )
-                for matching_tool in matching_tools:
-                    canonical_tool_call_id = (
-                        canonical_tool_call_ids_by_model_call.get(
-                            (
-                                *model_call_key,
-                                strict_non_negative_int(
-                                    matching_tool.get("call_index"),
-                                    field="tool_calls.call_index",
-                                ),
-                            )
-                        )
-                    )
-                    if canonical_tool_call_id is None:
-                        normalized_tools.append(matching_tool)
-                        continue
-                    # raw carrier 复用已选 canonical 配对，不能用自己的物理
-                    # message 坐标覆盖该逻辑调用与结果的共同来源。
-                    normalized_tool = tool_by_call_id.setdefault(
-                        (turn_id, activity_model_call_id, canonical_tool_call_id),
-                        {**matching_tool, "tool_call_id": canonical_tool_call_id},
-                    )
-                    raw_tool_call_id = matching_tool.get("tool_call_id")
-                    if isinstance(raw_tool_call_id, str) and raw_tool_call_id:
-                        alias_key = (turn_id, activity_model_call_id, raw_tool_call_id)
-                        if alias_key not in canonical_tool_call_ids_by_raw_id:
-                            canonical_tool_call_ids_by_raw_id[alias_key] = (
-                                canonical_tool_call_id
-                            )
-                        elif (
-                            canonical_tool_call_ids_by_raw_id[alias_key]
-                            != canonical_tool_call_id
-                        ):
-                            # 同一 raw ID 映射到多个 model-call 时不能猜测
-                            # result 属于哪一次，保持未归一化以避免误合并。
-                            canonical_tool_call_ids_by_raw_id[alias_key] = None
-                    normalized_tools.append(normalized_tool)
-                activity_tools = normalized_tools
-            else:
-                model_call_tools = canonical_tools_by_model_call.get(
-                    (turn_id, activity_model_call_id),
-                    [],
-                )
-                if semantic_kind == "tool_call" and model_call_tools:
-                    # ensure_request_items 生成的 checkpoint shadow
-                    # 可能只在 typed payload 中保存 call id。其 model-call
-                    # provenance 与先到的实时 item 一致，直接复用后端已经
-                    # 解析出的逻辑工具身份，不读取正文或依赖相邻关系。
-                    activity_tools = list(model_call_tools)
-                else:
-                    raise RuntimeError(
-                        f"canonical {semantic_kind} 缺少稳定 tool_call_id: {item_id}"
-                    )
-        kind = (
-            "text"
-            if semantic_kind == "assistant_output"
-            else
-            "reasoning_summary"
-            if semantic_kind == "reasoning" and payload_kind == "summary"
-            else "reasoning_encrypted"
-            if semantic_kind == "reasoning" and payload_kind in {"opaque", "extension"}
-            else semantic_kind
-        )
-        for activity_tool in activity_tools:
-            activity_item: dict[str, object] = {
-                "item_id": strict_text(item_id, field="item_catalog.item_id"),
-                "item_sequence": strict_non_negative_int(
-                    item_sequence, field=f"item_catalog.item_sequence:{item_id}"
-                ),
-                "logical_item_ordinal": strict_non_negative_int(
-                    logical_item_ordinal, field=f"context_view_items.logical_item_ordinal:{item_id}"
-                ),
-                "part_ordinal": 0,
-                "kind": kind,
-                "status": strict_text(item_status, field="item_catalog.status"),
-                "created_at": strict_text(
-                    item_created_at, field=f"item_catalog.created_at:{item_id}"
-                ),
-                "text": strict_text(
-                    content,
-                    field=f"item_projections.content:{item_id}",
-                    allow_empty=True,
-                ),
-                "truncated": strict_non_negative_int(
-                    content_truncated,
-                    field=f"item_projections.content_truncated:{item_id}",
-                )
-                == 1,
-                "producer_ref": producer_ref,
-                "model_call_id": activity_model_call_id,
-                "block_ordinal": block_ordinal,
-                "content_block_index": identity.block_index if identity is not None else None,
-                "block_id": (
-                    source_part_id
-                    if isinstance(source_part_id, str) and source_part_id
-                    else None
-                ),
-                "completion_reason": identity.completion_reason if identity is not None else None,
-                "message_sequence": 0,
-            }
-            if activity_tool is not None:
-                activity_item.update(activity_tool)
-                activity_item["tool_call_id"] = strict_text(
-                    activity_tool.get("tool_call_id"),
-                    field="tool_calls.tool_call_id",
-                )
-                activity_item["part_ordinal"] = strict_non_negative_int(
-                    activity_tool.get("call_index"),
-                    field="tool_calls.call_index",
-                )
-            items = result[turn_id]["activity_items"]
-            if not isinstance(items, list):
-                raise TypeError("Turn activity_items projection 必须是列表")
-            if semantic_kind == "assistant_output" and payload_kind == "structured_content":
-                items.extend({**activity_item, **part} for part in text_parts[item_id])
-            else:
-                items.append(activity_item)
-
-
-def _merge_final_reasoning(
-    result: dict[str, dict[str, object]],
-    final_reasoning_rows: object,
-    final_manifests: dict[str, object],
-) -> None:
-    """物化 final checkpoint 的真实 reasoning 部位；成员由统一坐标查询选择。"""
-    previous_turn_id: str | None = None
-    model_call_id: str | None = None
-    for (
-        turn_id,
-        message_sequence,
-        content_block_index,
-        item_index,
-        carrier_type,
-        reasoning_text,
-        summary_text,
-        signature_present,
-        encrypted_length,
-        reasoning_item_id,
-        item_id,
-        item_sequence,
-        item_created_at,
-        logical_item_ordinal,
-        part_ordinal,
-    ) in final_reasoning_rows:
-        turn_id = strict_text(turn_id, field="turns.turn_id")
-        content_block_index = strict_non_negative_int(
-            content_block_index,
-            field=f"reasoning_blocks.content_block_index:{turn_id}",
-        )
-        item_index = strict_non_negative_int(
-            item_index, field=f"reasoning_blocks.item_index:{turn_id}"
-        )
-        encrypted_length = strict_optional_non_negative_int(
-            encrypted_length,
-            field=f"reasoning_blocks.encrypted_length:{turn_id}",
-        )
-        if reasoning_text is not None:
-            kind, text = "reasoning", strict_text(
-                reasoning_text, field=f"reasoning_blocks.reasoning_text:{turn_id}", allow_empty=True
-            )
-        elif summary_text is not None:
-            kind, text = "reasoning_summary", strict_text(
-                summary_text, field=f"reasoning_blocks.summary_text:{turn_id}", allow_empty=True
-            )
-        elif encrypted_length is not None:
-            kind, text = "reasoning_encrypted", ""
-            result[turn_id]["has_encrypted_reasoning"] = True
-        else:
-            continue
-        signature_value = strict_non_negative_int(
-            signature_present,
-            field=f"reasoning_blocks.signature_present:{turn_id}",
-        )
-        if signature_value not in {0, 1}:
-            raise RuntimeError(f"reasoning signature 标记非法: {turn_id}")
-        if turn_id != previous_turn_id:
-            # SQL 按 Turn 聚合有序块；manifest 随 final header 只取一次，part 引用也只索引一次。
-            # 不得为每个思考块重读整条 manifest、再扫描全部 part，避免块数增加时平方增长。
-            final_identity = ItemProjectionManifest.from_dict(_json_object(final_manifests[turn_id], field=f"item_catalog.projection_manifest_json:{item_id}")).projection_identity
-            model_call_id = final_identity.model_call_id if final_identity is not None else None
-            previous_turn_id = turn_id
+            call_id = strict_text(indexed_tool_call_id, field=f"item_catalog.tool_call_id:{item_id}")
+            raw_call_id = provider_tool_call_id(identity, call_id)
+            tool = tools_by_item.get((turn_id, item_id, raw_call_id))
+            if tool is None and model_call_id is not None:
+                tool = tools_by_call.get((turn_id, model_call_id, raw_call_id))
+            # 没有声明来源时保留独立回执；不能用 block ID、工具名或本页
+            # 唯一候选补配。参数／结果详情仍由原 locator 读取。
+            activity_item.update({
+                "tool_call_id": call_id,
+                "tool_name": tool["tool_name"] if tool is not None else content if semantic_kind == "tool_call" else None,
+                "assistant_message_sequence": tool["assistant_message_sequence"] if tool is not None else None,
+                "result_message_sequence": message_sequence if semantic_kind == "tool_result"
+                    else tool["result_message_sequence"] if tool is not None else None,
+                "call_index": tool["call_index"] if tool is not None else None,
+            })
         items = result[turn_id]["activity_items"]
         if not isinstance(items, list):
             raise TypeError("Turn activity_items projection 必须是列表")
-        items.append(
-            {
-                "item_id": strict_text(item_id, field="item_catalog.item_id"),
-                "item_sequence": strict_non_negative_int(
-                    item_sequence, field="item_catalog.item_sequence"
-                ),
-                "logical_item_ordinal": strict_non_negative_int(
-                    logical_item_ordinal, field=f"context_view_items.logical_item_ordinal:{item_id}"
-                ),
-                "part_ordinal": part_ordinal,
-                "model_call_id": model_call_id,
-                "kind": kind,
-                "status": "completed",
-                "created_at": strict_text(
-                    item_created_at, field="item_catalog.created_at"
-                ),
-                "text": text,
-                "truncated": False,
-                "message_sequence": strict_non_negative_int(
-                    message_sequence, field="reasoning_blocks.message_sequence"
-                ),
-                "content_block_index": content_block_index,
-                "item_index": item_index,
-                "carrier_type": strict_text(
-                    carrier_type, field="reasoning_blocks.carrier_type"
-                ),
-                "signature_present": signature_value == 1,
-            }
-        )
+        items.append(activity_item)
 
 
 def _finalize_projections(
@@ -482,13 +132,8 @@ def _finalize_projections(
         if not isinstance(activity_items, list):
             raise TypeError("Turn activity_items projection 必须是列表")
         activity_items.sort(
-            key=lambda item: (
-                strict_non_negative_int(
-                    item.get("logical_item_ordinal"), field="activity_item.logical_item_ordinal"
-                ),
-                strict_non_negative_int(
-                    item.get("part_ordinal", 0), field="activity_item.part_ordinal"
-                ),
+            key=lambda item: strict_non_negative_int(
+                item.get("logical_item_ordinal"), field="activity_item.logical_item_ordinal"
             )
         )
         _finalize_activity_projection(projection)

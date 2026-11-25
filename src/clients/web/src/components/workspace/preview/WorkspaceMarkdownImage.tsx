@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { useEffect, useRef, useState } from "react";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import { getWorkspaceRawFileBlob } from "../../../api";
@@ -90,7 +91,7 @@ function WorkspaceFileMarkdownImage({
   }, [apiPort, isWithinPreloadMargin, target.fragment, target.path, workspaceId]);
 
   if (error) {
-    return <span className="workspace-markdown-image-error" role="alert">{alt}: {error}</span>;
+    return <span className="workspace-markdown-image-error failure-summary" role="alert">{failureSummary(error, alt)}</span>;
   }
   if (!resolvedSrc) {
     return (
@@ -114,7 +115,7 @@ export default function WorkspaceMarkdownImage({
   try {
     target = resolveWorkspaceMarkdownTarget(markdownPath, src);
   } catch (resolveError) {
-    return <span className="workspace-markdown-image-error" role="alert">{alt}: {errorMessage(resolveError)}</span>;
+    return <span className="workspace-markdown-image-error failure-summary" role="alert">{failureSummary(errorMessage(resolveError), alt)}</span>;
   }
 
   if (target.kind === "external") {

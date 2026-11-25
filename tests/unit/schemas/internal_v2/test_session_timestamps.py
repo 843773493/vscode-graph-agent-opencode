@@ -24,6 +24,7 @@ def test_interrupt_result_default_timestamp_is_timezone_aware() -> None:
 def test_compact_result_default_timestamp_is_timezone_aware() -> None:
     result = SessionCompactResultDTO(
         session_id="s",
+        thread_id="t",
         status="skipped",
         message="m",
         before_message_count=0,

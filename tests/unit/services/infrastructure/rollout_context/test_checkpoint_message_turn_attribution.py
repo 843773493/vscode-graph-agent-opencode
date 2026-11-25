@@ -17,8 +17,9 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
-from app.core.path_utils import get_session_path_resolver
+from app.core.path_utils import get_session_path_resolver, workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
@@ -43,11 +44,23 @@ from app.services.infrastructure.rollout_context.store import RolloutContextStor
 from tests.support.message_service import accept_queued_message, build_message_service
 from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.rollout.view_mutations import mutate_view_members
+from tests.support.workspaces import prepare_test_workspace
 
 SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
 OTHER_SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd657"
 USER_TURN_ID = "turn-user-attribution"
 USER_EXECUTION_ID = "execution-user-attribution"
+
+
+@pytest.fixture
+def attribution_workspace(tmp_path: Path) -> Iterator[Path]:
+    """消息准入显式绑定本用例工作区，不借用宿主默认身份。"""
+    root = tmp_path / "workspace"
+    prepare_test_workspace(workspace_root=root,
+                           template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+                           template_items=())
+    with workspace_context(load_or_create_workspace_id(root), root):
+        yield root
 
 
 def _checkpoint(checkpoint_id: str, messages: list[object]) -> dict[str, object]:
@@ -314,19 +327,22 @@ def test_new_user_turn_append_uses_acceptance_and_prefix_replay_needs_no_admissi
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["retry_failed", "regenerate", "edit_and_continue"])
 async def test_message_admission_preserves_replay_annotations_in_cold_history(
-    tmp_path: Path, session_bundle_factory, empty_workspace_scope, action: str,
+    tmp_path: Path, session_bundle_factory, attribution_workspace: Path, action: str,
 ) -> None:
     storage, saver, thread_id = _make_saver(tmp_path, session_bundle_factory)
     metadata: dict[str, object] = {"replay_action": action, "replaced_message_id": "msg-replaced"}
     service = build_message_service(
         storage.storage.sessions_dir, checkpointer=saver,
-        workspace_root=empty_workspace_scope[1],
+        workspace_root=attribution_workspace,
     )
     message = await service.create(SESSION_ID, MessageCreateRequest(
         role=MessageRole.user, content="从回退后的输入继续。", metadata=metadata,
     ))
     # 真实 acceptance 必须取得并保存标签，不能靠 checkpoint 或前端乐观态补写。
     accept_queued_message(service, message)
+    pending, = saver.execution_queue_snapshot(SESSION_ID, thread_id).records
+    saver.claim_execution_queue(SESSION_ID, thread_id, job_id=pending.cursor.admission.job_id,
+                                claim_owner="attribution-test", previous_generation=0)
     (root,) = storage.storage.read_items(
         SESSION_ID, thread_id, item_ids=(f"item-{message.message_id}",),
     )
@@ -341,7 +357,7 @@ async def test_message_admission_preserves_replay_annotations_in_cold_history(
     ).items
     runtime_input = saver.accepted_user_message(
         SESSION_ID, thread_id=thread_id, job_id=warm.job_id, message_id=message.message_id,
-    )
+    )[1]
     assert runtime_input.id == message.message_id and runtime_input.content == message.content
     assert {key: runtime_input.response_metadata[key] for key in metadata} == metadata
     with RolloutCheckpointSaver(storage.storage.sessions_dir) as cold:

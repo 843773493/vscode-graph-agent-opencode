@@ -93,7 +93,7 @@ export class ItemDocuments extends Disposable implements IFileSystemProviderWith
   private contextReference(resource: URI): { reference: ContextContentReferenceDTO } | undefined {
     if (!resource.query) return undefined;
     const value: { reference: ContextContentReferenceDTO } = JSON.parse(resource.query);
-    if (!value.reference || !['item', 'sealed_contribution'].includes(value.reference.kind)) throw new Error('上下文内容引用身份无效');
+    if (!value.reference || !['item', 'sealed_contribution', 'execution_output'].includes(value.reference.kind)) throw new Error('上下文内容引用身份无效');
     return value;
   }
   async stat() {

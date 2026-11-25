@@ -72,7 +72,7 @@ class ContextPlanRegistryStorageMixin:
         thread_id: str,
     ) -> ContextPlanRegistration:
         with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
-            self._storage._require_v2_runtime(connection)
+            self._storage._require_current_rollout_format(connection)
             current = connection.execute(
                 "SELECT session_id,thread_id FROM context_plans WHERE plan_id=? "
                 "AND session_id=? AND thread_id=?", (plan_id, session_id, thread_id),

@@ -266,6 +266,7 @@ class WorkspaceStateStoreSnapshotMixin:
                 current_rows = connection.execute(
                     _SOURCE_LAYER_BASELINE_SELECT
                 ).fetchall()
+                current_rows = [row for row in current_rows if str(row[0]) in expected_sources]
                 current_keys = {str(row[0]) for row in current_rows}
                 if current_keys != set(expected_sources):
                     raise ConfigConflictError(

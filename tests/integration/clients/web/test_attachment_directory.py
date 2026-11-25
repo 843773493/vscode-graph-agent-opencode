@@ -57,10 +57,11 @@ async def test_composer_uploads_before_send_and_restores_reference_after_reload(
     session = await create_session(client, "附件独立上传验收")
     thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
     config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text())
-    provider = config["llm"]["providers"]["primary"]
+    provider = config["settings"]["workspace"]["llm"]["providers"]["primary"]
     model = provider["models"]["default"]["model"]
+    endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
     replay.control.plan_model_calls(session, thread, cast(list[dict[str, object]], build_cassette(
-        asset_id="composer-preupload", model=model, url=provider["defaults"]["endpoint"] + "/chat/completions",
+        asset_id="composer-preupload", model=model, url=endpoint + "/chat/completions",
         frames=chat_completion_frames(response_id="chatcmpl-preupload", model=model,
             deltas=({"role": "assistant", "content": "附件已通过独立上传进入消息。"},), finish_reason="stop"),
     ).raw["interactions"]))
@@ -102,14 +103,16 @@ async def test_attachment_directory_shortcut_and_derived_edit_survive_web_reload
     assert main.status_code == 200, main.text
     thread = main.json()["data"]["thread_id"]
     config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text())
-    provider = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
+    provider = config["settings"]["workspace"]["llm"]["providers"]["primary"]
+    model = provider["models"]["default"]["model"]
+    endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
 
     def plan(replies: list[dict[str, object]]) -> list[str]:
         return replay.control.plan_model_calls(session, thread, [cast(list[dict[str, object]], build_cassette(
-            asset_id="attachment-directory-web", model=provider["model"],
-            url=provider["endpoint"] + "/chat/completions",
+            asset_id="attachment-directory-web", model=model,
+            url=endpoint + "/chat/completions",
             frames=chat_completion_frames(
-                response_id=f"chatcmpl-directory-{index}", model=provider["model"],
+                response_id=f"chatcmpl-directory-{index}", model=model,
                 deltas=({"role": "assistant", **reply},),
                 finish_reason="tool_calls" if "tool_calls" in reply else "stop",
             ),

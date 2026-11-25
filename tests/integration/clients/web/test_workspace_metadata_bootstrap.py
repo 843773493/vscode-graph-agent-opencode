@@ -66,7 +66,7 @@ async def metadata_case(
     )
     config = commentjson.loads(config_path.read_text())
     clear_test_provider_api_keys(config, endpoint=f"http://127.0.0.1:{provider_port}/v1")
-    for agent in config["agents"].values():
+    for agent in config["settings"]["workspace"]["agents"].values():
         agent["model"]["fallbacks"] = []
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     with model_stream_replay(

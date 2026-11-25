@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import React, { useMemo, useState, useLayoutEffect, useRef } from "react";
 import type { RequestLogNavigation } from "../../../hooks/runtime/useRequestLogNavigation";
@@ -147,7 +148,7 @@ export default function RequestLogPanel({
       {error ? (
         <div className="panel-feedback" role="alert">
           <div className="error-title">{t("inspection.request.loadFailed")}</div>
-          <div className="error-message">{error}</div>
+          <div className="error-message failure-summary">{failureSummary(error)}</div>
           <button
             type="button"
             className="error-retry-button"
@@ -208,7 +209,7 @@ function RequestLogEntry({ summary, apiPort, workspaceId, active, chronologicalI
         <span>{formatDateTime(new Date(summary.recorded_at).toISOString())}</span></span>
       <span>{t("inspection.request.expandSize", formatNumber(summary.size_bytes / 1024, { minimumFractionDigits: 1, maximumFractionDigits: 1 }))}</span>
     </button>
-    {open && error ? <div role="alert">{t("inspection.request.readFailed", error)}
+    {open && error ? <div role="alert"><span className="failure-summary">{failureSummary(t("inspection.request.readFailed", error))}</span>
       <button type="button" onClick={() => setOpen(false)}>{t("inspection.request.closeRetry")}</button></div>
       : open ? <div role="status">{t("inspection.request.loadingOne")}</div> : null}
   </article>;
@@ -223,7 +224,7 @@ function RequestLogChain({ logs, apiPort, workspaceId, active }: {
     <button type="button" disabled={loading} onClick={load}>
       {loading ? t("inspection.request.loadingChain") : t("inspection.request.loadChain")}
     </button>
-    {error ? <div role="alert">{t("inspection.request.chainFailed", error)}</div> : null}
+    {error ? <div className="failure-summary" role="alert">{failureSummary(t("inspection.request.chainFailed", error))}</div> : null}
   </section>;
 }
 
@@ -242,7 +243,7 @@ function LocatedRequestLog({ navigation, onClose }: { navigation: RequestLogNavi
   return <section className="panel-view request-log-panel" aria-label={t("inspection.request.locatedAria")}>
     <div className="panel-header"><span>{t("inspection.request.sessionRecord", navigation.match.reference?.file_name)}</span>
       <button type="button" onClick={onClose}>{t("inspection.request.closeLocation")}</button></div>
-    {navigation.error ? <div className="empty-state error-state" role="alert">{t("inspection.request.matchFailed", navigation.error)}</div>
+    {navigation.error ? <div className="empty-state error-state failure-summary" role="alert">{failureSummary(t("inspection.request.matchFailed", navigation.error))}</div>
       : location ? <div className="panel-list">
         {source && <section aria-label={t("inspection.request.originalAria")}><p>{t("inspection.match.original", formatNumber(location.reference!.start_codepoint), formatNumber(location.reference!.end_codepoint))}</p>
           <pre>{source.hasBefore ? "…" : ""}{source.before}<mark ref={mark}>{source.match}</mark>{source.after}{source.hasAfter ? "…" : ""}</pre></section>}

@@ -51,6 +51,7 @@ class ToolExecutionOutcome(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     TOOL_EXECUTION_OUTCOME_PROVIDER_ERROR: _ClassVar[ToolExecutionOutcome]
     TOOL_EXECUTION_OUTCOME_EXECUTION_LOST: _ClassVar[ToolExecutionOutcome]
     TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN: _ClassVar[ToolExecutionOutcome]
+    TOOL_EXECUTION_OUTCOME_CANCELLED: _ClassVar[ToolExecutionOutcome]
 
 class ActivityStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -96,6 +97,7 @@ TOOL_EXECUTION_OUTCOME_SUCCESS: ToolExecutionOutcome
 TOOL_EXECUTION_OUTCOME_PROVIDER_ERROR: ToolExecutionOutcome
 TOOL_EXECUTION_OUTCOME_EXECUTION_LOST: ToolExecutionOutcome
 TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN: ToolExecutionOutcome
+TOOL_EXECUTION_OUTCOME_CANCELLED: ToolExecutionOutcome
 ACTIVITY_STATUS_UNSPECIFIED: ActivityStatus
 ACTIVITY_STATUS_RUNNING: ActivityStatus
 ACTIVITY_STATUS_WAITING: ActivityStatus
@@ -215,7 +217,7 @@ class BlockCompleted(_message.Message):
     def __init__(self, block_id: _Optional[str] = ..., block_index: _Optional[int] = ..., carrier_type: _Optional[str] = ..., status: _Optional[str] = ..., completion_reason: _Optional[str] = ..., partial: _Optional[bool] = ...) -> None: ...
 
 class ToolCall(_message.Message):
-    __slots__ = ("tool_call_id", "tool_name", "arguments", "status", "arguments_complete", "completion_reason", "started_seq", "last_event_seq", "completed_seq", "started_at", "updated_at", "completed_at", "tool_invocation_id", "tool_attempt_id")
+    __slots__ = ("tool_call_id", "tool_name", "arguments", "status", "arguments_complete", "completion_reason", "started_seq", "last_event_seq", "completed_seq", "started_at", "updated_at", "completed_at", "tool_invocation_id", "tool_attempt_id", "provider_call_index", "model_call_id")
     TOOL_CALL_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_NAME_FIELD_NUMBER: _ClassVar[int]
     ARGUMENTS_FIELD_NUMBER: _ClassVar[int]
@@ -230,6 +232,8 @@ class ToolCall(_message.Message):
     COMPLETED_AT_FIELD_NUMBER: _ClassVar[int]
     TOOL_INVOCATION_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    PROVIDER_CALL_INDEX_FIELD_NUMBER: _ClassVar[int]
+    MODEL_CALL_ID_FIELD_NUMBER: _ClassVar[int]
     tool_call_id: str
     tool_name: str
     arguments: _struct_pb2.Struct
@@ -244,10 +248,12 @@ class ToolCall(_message.Message):
     completed_at: _timestamp_pb2.Timestamp
     tool_invocation_id: str
     tool_attempt_id: str
-    def __init__(self, tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., arguments: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., status: _Optional[str] = ..., arguments_complete: _Optional[bool] = ..., completion_reason: _Optional[str] = ..., started_seq: _Optional[int] = ..., last_event_seq: _Optional[int] = ..., completed_seq: _Optional[int] = ..., started_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., completed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tool_invocation_id: _Optional[str] = ..., tool_attempt_id: _Optional[str] = ...) -> None: ...
+    provider_call_index: int
+    model_call_id: str
+    def __init__(self, tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., arguments: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., status: _Optional[str] = ..., arguments_complete: _Optional[bool] = ..., completion_reason: _Optional[str] = ..., started_seq: _Optional[int] = ..., last_event_seq: _Optional[int] = ..., completed_seq: _Optional[int] = ..., started_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., completed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tool_invocation_id: _Optional[str] = ..., tool_attempt_id: _Optional[str] = ..., provider_call_index: _Optional[int] = ..., model_call_id: _Optional[str] = ...) -> None: ...
 
 class ToolCallDelta(_message.Message):
-    __slots__ = ("tool_call_id", "tool_name", "arguments_delta", "arguments", "arguments_complete", "tool_invocation_id", "tool_attempt_id")
+    __slots__ = ("tool_call_id", "tool_name", "arguments_delta", "arguments", "arguments_complete", "tool_invocation_id", "tool_attempt_id", "provider_call_index")
     TOOL_CALL_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_NAME_FIELD_NUMBER: _ClassVar[int]
     ARGUMENTS_DELTA_FIELD_NUMBER: _ClassVar[int]
@@ -255,6 +261,7 @@ class ToolCallDelta(_message.Message):
     ARGUMENTS_COMPLETE_FIELD_NUMBER: _ClassVar[int]
     TOOL_INVOCATION_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    PROVIDER_CALL_INDEX_FIELD_NUMBER: _ClassVar[int]
     tool_call_id: str
     tool_name: str
     arguments_delta: str
@@ -262,7 +269,8 @@ class ToolCallDelta(_message.Message):
     arguments_complete: bool
     tool_invocation_id: str
     tool_attempt_id: str
-    def __init__(self, tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., arguments_delta: _Optional[str] = ..., arguments: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., arguments_complete: _Optional[bool] = ..., tool_invocation_id: _Optional[str] = ..., tool_attempt_id: _Optional[str] = ...) -> None: ...
+    provider_call_index: int
+    def __init__(self, tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., arguments_delta: _Optional[str] = ..., arguments: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., arguments_complete: _Optional[bool] = ..., tool_invocation_id: _Optional[str] = ..., tool_attempt_id: _Optional[str] = ..., provider_call_index: _Optional[int] = ...) -> None: ...
 
 class ToolCallCompleted(_message.Message):
     __slots__ = ("tool_call_id", "tool_name", "status", "completion_reason", "arguments_complete", "tool_invocation_id", "tool_attempt_id")
@@ -283,21 +291,23 @@ class ToolCallCompleted(_message.Message):
     def __init__(self, tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., status: _Optional[str] = ..., completion_reason: _Optional[str] = ..., arguments_complete: _Optional[bool] = ..., tool_invocation_id: _Optional[str] = ..., tool_attempt_id: _Optional[str] = ...) -> None: ...
 
 class ToolStarted(_message.Message):
-    __slots__ = ("tool_execution_id", "tool_call_id", "tool_name", "tool_invocation_id", "tool_attempt_id")
+    __slots__ = ("tool_execution_id", "tool_call_id", "tool_name", "tool_invocation_id", "tool_attempt_id", "started_at")
     TOOL_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_CALL_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_NAME_FIELD_NUMBER: _ClassVar[int]
     TOOL_INVOCATION_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    STARTED_AT_FIELD_NUMBER: _ClassVar[int]
     tool_execution_id: str
     tool_call_id: str
     tool_name: str
     tool_invocation_id: str
     tool_attempt_id: str
-    def __init__(self, tool_execution_id: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., tool_invocation_id: _Optional[str] = ..., tool_attempt_id: _Optional[str] = ...) -> None: ...
+    started_at: _timestamp_pb2.Timestamp
+    def __init__(self, tool_execution_id: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., tool_invocation_id: _Optional[str] = ..., tool_attempt_id: _Optional[str] = ..., started_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class ToolCompleted(_message.Message):
-    __slots__ = ("tool_execution_id", "tool_call_id", "tool_name", "status", "result", "error", "outcome", "completion_reason", "tool_invocation_id", "tool_attempt_id")
+    __slots__ = ("tool_execution_id", "tool_call_id", "tool_name", "status", "result", "error", "outcome", "completion_reason", "tool_invocation_id", "tool_attempt_id", "execution_completed_at")
     TOOL_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_CALL_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -308,6 +318,7 @@ class ToolCompleted(_message.Message):
     COMPLETION_REASON_FIELD_NUMBER: _ClassVar[int]
     TOOL_INVOCATION_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    EXECUTION_COMPLETED_AT_FIELD_NUMBER: _ClassVar[int]
     tool_execution_id: str
     tool_call_id: str
     tool_name: str
@@ -318,7 +329,8 @@ class ToolCompleted(_message.Message):
     completion_reason: str
     tool_invocation_id: str
     tool_attempt_id: str
-    def __init__(self, tool_execution_id: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., status: _Optional[_Union[ToolExecutionStatus, str]] = ..., result: _Optional[str] = ..., error: _Optional[str] = ..., outcome: _Optional[_Union[ToolExecutionOutcome, str]] = ..., completion_reason: _Optional[str] = ..., tool_invocation_id: _Optional[str] = ..., tool_attempt_id: _Optional[str] = ...) -> None: ...
+    execution_completed_at: _timestamp_pb2.Timestamp
+    def __init__(self, tool_execution_id: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., status: _Optional[_Union[ToolExecutionStatus, str]] = ..., result: _Optional[str] = ..., error: _Optional[str] = ..., outcome: _Optional[_Union[ToolExecutionOutcome, str]] = ..., completion_reason: _Optional[str] = ..., tool_invocation_id: _Optional[str] = ..., tool_attempt_id: _Optional[str] = ..., execution_completed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class InterruptRequested(_message.Message):
     __slots__ = ("interrupt_request_id", "reason")
@@ -415,7 +427,7 @@ class MessageBlockSnapshot(_message.Message):
     def __init__(self, block_id: _Optional[str] = ..., block_index: _Optional[int] = ..., carrier_type: _Optional[str] = ..., status: _Optional[str] = ..., text: _Optional[str] = ..., items: _Optional[_Iterable[_Union[_struct_pb2.Struct, _Mapping]]] = ..., redacted: _Optional[bool] = ..., projection: _Optional[str] = ..., model_call_id: _Optional[str] = ..., completion_reason: _Optional[str] = ..., partial: _Optional[bool] = ..., started_seq: _Optional[int] = ..., last_event_seq: _Optional[int] = ..., completed_seq: _Optional[int] = ..., started_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., completed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class ToolExecutionSnapshot(_message.Message):
-    __slots__ = ("tool_execution_id", "tool_call_id", "tool_name", "status", "result", "error", "outcome", "completion_reason", "started_seq", "last_event_seq", "completed_seq", "started_at", "updated_at", "completed_at", "tool_invocation_id", "tool_attempt_id")
+    __slots__ = ("tool_execution_id", "tool_call_id", "tool_name", "status", "result", "error", "outcome", "completion_reason", "started_seq", "last_event_seq", "completed_seq", "started_at", "updated_at", "completed_at", "tool_invocation_id", "tool_attempt_id", "execution_completed_at")
     TOOL_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_CALL_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -432,6 +444,7 @@ class ToolExecutionSnapshot(_message.Message):
     COMPLETED_AT_FIELD_NUMBER: _ClassVar[int]
     TOOL_INVOCATION_ID_FIELD_NUMBER: _ClassVar[int]
     TOOL_ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    EXECUTION_COMPLETED_AT_FIELD_NUMBER: _ClassVar[int]
     tool_execution_id: str
     tool_call_id: str
     tool_name: str
@@ -448,7 +461,8 @@ class ToolExecutionSnapshot(_message.Message):
     completed_at: _timestamp_pb2.Timestamp
     tool_invocation_id: str
     tool_attempt_id: str
-    def __init__(self, tool_execution_id: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., status: _Optional[_Union[ToolExecutionStatus, str]] = ..., result: _Optional[str] = ..., error: _Optional[str] = ..., outcome: _Optional[_Union[ToolExecutionOutcome, str]] = ..., completion_reason: _Optional[str] = ..., started_seq: _Optional[int] = ..., last_event_seq: _Optional[int] = ..., completed_seq: _Optional[int] = ..., started_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., completed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tool_invocation_id: _Optional[str] = ..., tool_attempt_id: _Optional[str] = ...) -> None: ...
+    execution_completed_at: _timestamp_pb2.Timestamp
+    def __init__(self, tool_execution_id: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., status: _Optional[_Union[ToolExecutionStatus, str]] = ..., result: _Optional[str] = ..., error: _Optional[str] = ..., outcome: _Optional[_Union[ToolExecutionOutcome, str]] = ..., completion_reason: _Optional[str] = ..., started_seq: _Optional[int] = ..., last_event_seq: _Optional[int] = ..., completed_seq: _Optional[int] = ..., started_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., completed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., tool_invocation_id: _Optional[str] = ..., tool_attempt_id: _Optional[str] = ..., execution_completed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class ModelCallSnapshot(_message.Message):
     __slots__ = ("model_call_id", "attempt", "status", "outcome", "completion_reason", "retryable", "model", "started_seq", "last_event_seq", "completed_seq", "started_at", "updated_at", "completed_at")

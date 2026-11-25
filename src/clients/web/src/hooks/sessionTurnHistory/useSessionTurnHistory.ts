@@ -151,7 +151,7 @@ export function useSessionTurnHistory({
     const byExecution = new Map<string, string[]>();
     for (const reference of executionItems) {
       const execution = timeline?.internalExecutions.find(item => item.execution_id === reference.executionId);
-      if (!execution?.display_parts.some(part => part.item_id === reference.itemId && part.bodyEvicted)) continue;
+      if (!execution?.display_items.some(part => part.item_id === reference.itemId && part.bodyEvicted)) continue;
       const ids = byExecution.get(reference.executionId) ?? [];
       if (!ids.includes(reference.itemId)) ids.push(reference.itemId);
       byExecution.set(reference.executionId, ids);

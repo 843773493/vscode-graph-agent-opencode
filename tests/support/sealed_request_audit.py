@@ -107,7 +107,7 @@ def audit_sealed_requests(
                         ).fetchone()
                         assert row is not None, source.ref_id
                         require_historical_scope(connection, row[6], row[7])
-                        item = RolloutCanonicalReadMixin._read_v2_item_at(
+                        item = RolloutCanonicalReadMixin._read_item_at(
                             connection, stream, sequence=row[0], offset=row[1], length=row[2],
                         )
                         assert item.item_id == source.ref_id

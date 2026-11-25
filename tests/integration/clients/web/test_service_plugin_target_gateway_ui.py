@@ -395,7 +395,8 @@ def test_workbench_extension_title_target_keeps_remote_plugin_state_on_original_
     principal = principal_ref_for_gateway(gateway_a)
 
     def bind_gateway(configuration: dict[str, object], version: str, marker: str) -> None:
-        plugins = configuration.setdefault("plugins", {})
+        gateway_settings = configuration["settings"]["gateway"]
+        plugins = gateway_settings.setdefault("plugins", {})
         plugins["runtime"] = {"entries": [{
             "package_id": _PACKAGE_ID,
             "plugin_id": _PLUGIN_ID,
@@ -406,10 +407,10 @@ def test_workbench_extension_title_target_keeps_remote_plugin_state_on_original_
 
     def configure_b(configuration: dict[str, object]) -> None:
         bind_gateway(configuration, "1.0.0", "B-before")
-        configuration["plugins"]["sources"] = {"entries": [{
+        configuration["settings"]["gateway"]["plugins"]["sources"] = {"entries": [{
             "source_id": "target-ui", "protocol_version": 1, "base_url": plugin_source_server, "enabled": True,
         }]}
-        configuration["permissions"] = {"federation": {
+        configuration["settings"]["gateway"]["permissions"] = {"federation": {
             "default_effect": "deny",
             "rules": [{"capability": capability, "effect": "allow", "principal_ref": principal}
                 for capability in capabilities],

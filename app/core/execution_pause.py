@@ -83,7 +83,7 @@ def current_execution_pause() -> ExecutionPause | None:
 
 
 @contextmanager
-def bind_execution_pause(pause: ExecutionPause) -> Iterator[None]:
+def bind_execution_pause(pause: ExecutionPause | None) -> Iterator[None]:
     token = _CURRENT_PAUSE.set(pause)
     try:
         yield

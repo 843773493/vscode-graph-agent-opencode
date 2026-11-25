@@ -93,7 +93,10 @@ async def test_task_error_slot_keeps_failure_facts_across_replacement_and_cold_r
             assert original is not None and original.pending_writes is not None
             values = {channel: value for _, channel, value in original.pending_writes}
             assert values["counter"] == 1
-            assert values[ERROR] == "执行节点失败: task_id=failed-task, task_path=failed-node: stage=checkpoint-task, error=OSError, errno=5"
+            assert values[ERROR] == (
+                "执行节点失败: task_id=failed-task, task_path=failed-node: "
+                f"stage=checkpoint-task, error=OSError, errno=5, reason={error}"
+            )
             replacement = RuntimeError("后续失败: " + " | ".join(locations))
             if asynchronous:
                 await saver.aput_writes(config, [(ERROR, replacement)], "failed-task", "failed-node")
@@ -104,14 +107,19 @@ async def test_task_error_slot_keeps_failure_facts_across_replacement_and_cold_r
                 restored = await cold.aget_tuple(config) if asynchronous else cold.get_tuple(config)
                 assert restored is not None and restored.pending_writes is not None
                 values = {channel: value for _, channel, value in restored.pending_writes}
-                assert values == {"counter": 1, ERROR: "执行节点失败: task_id=failed-task, task_path=failed-node: stage=checkpoint-task, error=RuntimeError"}
+                assert values == {"counter": 1, ERROR: (
+                    "执行节点失败: task_id=failed-task, task_path=failed-node: "
+                    f"stage=checkpoint-task, error=RuntimeError, reason={replacement}"
+                )}
                 with cold._storage.storage.read_connection(SESSION_ID, thread) as connection:
                     rows = connection.execute("SELECT task_id,task_path,channel,write_index,value_blob FROM pending_writes WHERE checkpoint_id='error-cp' ORDER BY write_index").fetchall()
                 assert [(row[0], row[1], row[2], row[3]) for row in rows] == [
                     ("failed-task", "failed-node", ERROR, WRITES_IDX_MAP[ERROR]),
                     ("failed-task", "failed-node", "counter", 1),
                 ]
-                assert all(b"pending-error.sqlite" not in row[4] for row in rows)
-    assert any(record.name == "app.core.failures" and record.exc_info is not None
-               and record.exc_info[1] is error for record in caplog.records)
+                # 诊断路径是可持久化原因，不能把它误作资源定位字段而删掉。
+                assert all(location in values[ERROR] for location in locations)
+                assert b"pending-error.sqlite" in rows[0][4]
+    assert any(record.name == "app.core.failures" and "OSError" in record.message
+               and "failed-task" in record.message for record in caplog.records)
     assert str(error) in caplog.text

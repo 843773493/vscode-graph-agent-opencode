@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from .attachment import AttachmentDirectoryURI, AttachmentFileURI
 from .common import JobStatus, PublicErrorDTO
+from .message_stream import ToolExecutionOutcome, ToolExecutionStatus
 from .session import SessionDTO
 from .trace import TraceEventDTO
 from .turn_search import (
@@ -92,16 +93,30 @@ class TurnThinkingBlockDTO(BaseModel):
     text: str = Field(default="", max_length=4096)
 
 
+class TurnMessageGroupSourceDTO(BaseModel):
+    """原消息的轻量来源，不参与当前 view 排序或独立阅读定位。"""
+
+    message_group_id: str = Field(min_length=1)
+    ordinal: int = Field(ge=0)
+    size: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_member(self) -> TurnMessageGroupSourceDTO:
+        if self.ordinal >= self.size:
+            raise ValueError("消息组 ordinal 必须小于 size")
+        return self
+
+
 class TurnResponseSourceDTO(BaseModel):
-    """响应部件在 canonical rollout 中的稳定来源坐标。
+    """响应 Item在 canonical rollout 中的稳定来源坐标。
 
     ``assistant_message_sequence`` 只用于把 ToolMessage 结果关联回产生它的
-    assistant；它不是新的全局 part 序号。``call_index`` 仍然只表示同一
+    assistant；它不是新的全局内容序号。``call_index`` 仍然只表示同一
     assistant 的 tool_calls 列表顺序。
 
     历史 activity 的 ``created_at`` 沿原 item 创建时刻；``elapsed_ms`` 为逻辑
     activity 列表相邻项的整数毫秒差，首项从 Turn projection.created_at 起算。
-    final 使用 final_item_created_at，elapsed_ms 固定为 0。standalone internal
+    final 使用各个原输出 Item 的创建时刻，elapsed_ms 固定为 0。standalone internal
     则沿同 view、同 execution 的前一 visible/display_only 逻辑成员，首项从
     execution.created_at 起算；runtime notice 自身为输入锚点，elapsed_ms 为 0。
     历史时间缺少时区或倒退时明确拒绝；streaming 可缺省这两个时间字段。
@@ -117,20 +132,37 @@ class TurnResponseSourceDTO(BaseModel):
     item_sequence: int | None = Field(default=None, ge=1)
     logical_item_ordinal: int | None = Field(default=None, ge=0)
     model_call_id: str | None = None
-    part_ordinal: int | None = Field(default=None, ge=0)
+    message_group: TurnMessageGroupSourceDTO | None = None
     created_at: datetime | None = None
     elapsed_ms: int | None = Field(default=None, ge=0)
     turn_id: str | None = None
     execution_id: str | None = None
     process_segment_item_id: str | None = None
     activity_group_item_id: str | None = None
-    activity_group_part_ordinal: int | None = Field(default=None, ge=0)
 
 
-class TurnResponsePartDTO(BaseModel):
-    """历史和 live 共用的响应部件语义模型。"""
+class ToolExecutionSummaryDTO(BaseModel):
+    """历史只读的执行证据；时间和 scope 始终来自原执行 owner。"""
 
-    part_id: str = Field(min_length=1, max_length=256, description="历史部件由 canonical item_id 与 part_ordinal 生成唯一引用；streaming 为临时部件 ID，不代表 canonical item 身份。")
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_id: str = Field(min_length=1)
+    thread_id: str = Field(min_length=1)
+    turn_stream_id: str = Field(min_length=1)
+    tool_invocation_id: str = Field(min_length=1)
+    tool_attempt_id: str = Field(min_length=1)
+    tool_execution_id: str = Field(min_length=1)
+    started_seq: int = Field(ge=0)
+    started_at: datetime | None = None
+    execution_completed_at: datetime | None = None
+    status: ToolExecutionStatus
+    outcome: ToolExecutionOutcome | None = None
+
+
+class TurnResponseItemDTO(BaseModel):
+    """历史和 live 共用的响应 Item语义模型。"""
+
+    id: str = Field(min_length=1, max_length=256, description="已提交内容等于 source.item_id；未提交和上下文标记沿原来源使用临时／标记 ID。")
     kind: Literal[
         "text",
         "reasoning",
@@ -140,16 +172,20 @@ class TurnResponsePartDTO(BaseModel):
         "tool_call",
         "tool_result",
         "final_text",
+        "content",
         "context_notice",
     ]
     projection: Literal["summary", "detail", "streaming"]
-    status: Literal["pending", "running", "completed", "failed", "cancelled"] = Field(default="completed", description="响应部件的归一化状态；历史值由 canonical/消息投影映射，streaming 值随部件更新。completed 仅表示该部件完成，可与工具拒绝、Job 或 Execution 失败并存，不证明工具执行成功。")
+    status: Literal["pending", "running", "completed", "failed", "cancelled"] = Field(default="completed", description="响应 Item的归一化状态；历史值由 canonical/消息投影映射，streaming 值随部件更新。completed 仅表示该部件完成，可与工具拒绝、Job 或 Execution 失败并存，不证明工具执行成功。")
     outcome_unknown: bool = Field(default=False, description="历史 terminal Turn 的本次 mapper 输入缺少同一 ModelCall 与 Provider call ID 的匹配结果；不证明底层工具未执行或执行失败。")
     source: TurnResponseSourceDTO
     text: str = Field(default="", max_length=65536)
     carrier_type: str | None = Field(default=None, max_length=64)
-    tool_call_id: str | None = Field(default=None, max_length=256, description="保留 canonical payload 中合法的工具调用 ID 表示，可为 Provider 原始 ID 或已有 ModelCall 限定 ID；不等同于历史工具 Trace/摘要的聚合引用，也不等同于 part_id。")
+    content: dict[str, JsonValue] | None = None
+    tool_call_id: str | None = Field(default=None, max_length=256, description="保留 canonical payload 中合法的工具调用 ID 表示，可为 Provider 原始 ID 或已有 ModelCall 限定 ID；不等同于历史工具 Trace/摘要的聚合引用，也不等同于 id。")
     tool_name: str | None = Field(default=None, max_length=256)
+    tool_execution: ToolExecutionSummaryDTO | None = None
+    tool_outcome: Literal["success", "failure", "cancelled", "unknown"] | None = None
     arguments: str | None = Field(default=None, max_length=65536)
     result: str | None = Field(default=None, max_length=65536)
     truncated: bool = False
@@ -170,30 +206,31 @@ class TurnResponsePartDTO(BaseModel):
     context_cursor: str | None = None
 
     @model_validator(mode="after")
-    def validate_source_identity(self) -> TurnResponsePartDTO:
-        """历史 part 必须携带 canonical identity；live 只使用临时 part_id。"""
+    def validate_source_identity(self) -> TurnResponseItemDTO:
+        """历史 Item 必须携带 canonical identity；live 只使用临时 id。"""
         if self.projection == "streaming":
             if self.source.item_id is not None or self.source.item_sequence is not None:
-                raise ValueError("live streaming part 不得伪造 canonical item identity")
+                raise ValueError("live streaming Item 不得伪造 canonical item identity")
             return self
         if self.kind == "context_notice":
             if self.context_content_ref is None or self.context_anchor is None:
                 raise ValueError("上下文标记缺少冻结引用或展示锚点")
             return self
         if self.source.item_id is None or self.source.item_sequence is None:
-            raise ValueError("历史 response part 缺少 canonical item identity")
+            raise ValueError("历史 response Item 缺少 canonical item identity")
+        if self.id != self.source.item_id:
+            raise ValueError("历史 response Item id 必须等于 canonical item_id")
         if self.source.created_at is None:
-            raise ValueError("历史 response part 缺少 canonical created_at")
+            raise ValueError("历史 response Item 缺少 canonical created_at")
         return self
 
 
 class TurnActivityStatsDTO(BaseModel):
     """Turn 折叠行使用的可展开中间 item 统计，不包含 Item 正文。
 
-    历史 duration_ms 取 Turn projection.created_at 到 updated_at 的整数毫秒差。
-    已有历史投影的起止时刻必须合法、带时区且不倒退；无统计投影时为 None。
-    这些是历史投影起止时刻，不能统一解释为 acceptance 到 terminal，
-    也不同于 Web live 计时。
+    duration_ms 由历史 owner 按 Turn acceptance 到 terminal 计算整数毫秒，
+    进行中或无统计投影时为 None，不使用消息投影时间或累计工具耗时。
+    生命周期时刻必须合法、带时区且不倒退；Web live 计时沿原展示规则。
     """
 
     duration_ms: int | None = Field(default=None, ge=0)
@@ -270,7 +307,7 @@ class TurnSummaryDTO(TurnBaseDTO):
     tool_summary: list[TurnToolSummaryDTO] = Field(default_factory=list, max_length=64)
     tool_summary_truncated: bool = False
     # 普通摘要仍由 mapper 限为 128 项；另有同页最多 128 个无正文来源标记。
-    response_parts: list[TurnResponsePartDTO] = Field(default_factory=list, max_length=256)
+    response_items: list[TurnResponseItemDTO] = Field(default_factory=list, max_length=256)
     activity_stats: TurnActivityStatsDTO = Field(default_factory=TurnActivityStatsDTO)
 
 
@@ -287,7 +324,7 @@ class TurnDetailDTO(TurnBaseDTO):
     thinking_blocks: list[TurnThinkingBlockDTO] = Field(default_factory=list)
     tool_summary: list[TurnToolSummaryDTO] = Field(default_factory=list, max_length=64)
     tool_summary_truncated: bool = False
-    response_parts: list[TurnResponsePartDTO] = Field(
+    response_items: list[TurnResponseItemDTO] = Field(
         default_factory=list,
         max_length=640,
     )
@@ -526,7 +563,7 @@ class InternalDisplayProvenanceDTO(BaseModel):
     source_item_id: str | None = Field(default=None, min_length=1, max_length=256)
 
 
-class InternalExecutionDisplayPartDTO(BaseModel):
+class InternalExecutionDisplayItemDTO(BaseModel):
     """独立 internal execution 的安全展示文本和 canonical 定位。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -540,7 +577,7 @@ class InternalExecutionDisplayPartDTO(BaseModel):
     provenance: InternalDisplayProvenanceDTO
 
     @model_validator(mode="after")
-    def validate_safe_text(self) -> InternalExecutionDisplayPartDTO:
+    def validate_safe_text(self) -> InternalExecutionDisplayItemDTO:
         if not self.text.strip():
             raise ValueError("internal display text 不能为空")
         return self
@@ -576,23 +613,19 @@ class InternalExecutionHistoryDTO(BaseModel):
     ] = Field(description="对应 executions.outcome 的独立 internal execution 历史结果，不是 Job 或 Turn 状态。")
     created_at: datetime = Field(description="对应 executions 持久记录不可变的 UTC 创建时刻，接口按 ISO8601 表达，复制保留源值。")
     updated_at: datetime = Field(description="对应 executions.updated_at 的来源更新时刻，接口按 ISO8601 表达；fork 保留全部历史行的原始时间，不用目标安装、发布或取消时间覆盖。")
-    display_parts: list[InternalExecutionDisplayPartDTO] = Field(
+    display_items: list[InternalExecutionDisplayItemDTO] = Field(
         max_length=256,
     )
-    response_parts: list[TurnResponsePartDTO] = Field(default_factory=list, max_length=640)
+    response_items: list[TurnResponseItemDTO] = Field(default_factory=list, max_length=640)
 
     @model_validator(mode="after")
-    def validate_response_part_identity(self) -> InternalExecutionHistoryDTO:
-        for part in self.response_parts:
+    def validate_response_item_identity(self) -> InternalExecutionHistoryDTO:
+        for part in self.response_items:
             if part.kind == "context_notice":
                 continue
-            if part.source.part_ordinal is None:
-                raise ValueError(
-                    "internal execution response part 缺少 canonical part_ordinal"
-                )
             if part.source.logical_item_ordinal is None:
                 raise ValueError(
-                    "internal execution response part 缺少 membership ordinal"
+                    "internal execution response Item 缺少 membership ordinal"
                 )
         return self
 
@@ -602,7 +635,7 @@ class ContextNoticeBatchDTO(BaseModel):
 
     owner_id: str
     owner_kind: Literal["turn", "execution"]
-    parts: list[TurnResponsePartDTO] = Field(max_length=128)
+    items: list[TurnResponseItemDTO] = Field(max_length=128)
 
 
 class TurnHistoryPageDTO(BaseModel):
@@ -640,17 +673,17 @@ class TurnHistoryPageDTO(BaseModel):
         item_ids = [
             part.item_id
             for entry in self.internal_executions
-            for part in entry.display_parts
+            for part in entry.display_items
         ]
         if len(item_ids) != len(set(item_ids)):
             raise ValueError("internal_executions 中 display item_id 不能重复")
         response_item_ids = [
-            part.part_id
+            part.id
             for entry in self.internal_executions
-            for part in entry.response_parts
+            for part in entry.response_items
         ]
         if len(response_item_ids) != len(set(response_item_ids)):
-            raise ValueError("internal_executions 中 response part_id 不能重复")
+            raise ValueError("internal_executions 中 response id 不能重复")
         return self
 
 
@@ -681,7 +714,7 @@ class TurnCursorDTO(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    version: Literal[2] = 2
+    version: Literal[3] = 3
     session_id: str
     thread_id: str
     checkpoint_ns: str

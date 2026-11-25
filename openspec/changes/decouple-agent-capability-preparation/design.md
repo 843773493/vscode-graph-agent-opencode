@@ -18,7 +18,7 @@
 | 工具能力测试 | 已有 `tool_test_tools.py` 与独立测试服务 | 保留专用隔离 sandbox；实际执行某个工具允许加载其实现，不等于必须启动 Agent |
 | 插件／MCP／调试贡献与资源列表 | 已有插件 bindings、MCP 状态、调试 capabilities／配置、终端／浏览器资源 API | 保持定义／状态查询与 initialize／start／create／attach 命令分离；不为本次拆分重做插件或资源 owner |
 
-上批真实入口延迟证据见 `../unify-failure-reporting/design.md` 的“快速失败延迟的进一步定位”，原件位于 `out/tests/temp/2026/11/22/unify-failure-reporting/artifacts/latency-diagnosis/`。无 profiler 的一次冷样本中，错误 DOM 可见约5378ms，模型准备约3824ms，其中首次 LiteLLM 导入约3629ms；暖样本约928～2067ms。各阶段有包含关系，不可累加；不能把一次样本当 p95，也不能把所有剩余延迟归咎于 Graph。
+上批真实入口延迟证据见 `../archive/2026-11-24-unify-failure-reporting/design.md` 的“快速失败延迟的进一步定位”，原件位于 `out/tests/temp/2026/11/22/unify-failure-reporting/artifacts/latency-diagnosis/`。无 profiler 的一次冷样本中，错误 DOM 可见约5378ms，模型准备约3824ms，其中首次 LiteLLM 导入约3629ms；暖样本约928～2067ms。各阶段有包含关系，不可累加；不能把一次样本当 p95，也不能把所有剩余延迟归咎于 Graph。
 
 ### VS Code 对照
 

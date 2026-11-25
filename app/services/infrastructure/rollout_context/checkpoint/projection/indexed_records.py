@@ -481,7 +481,7 @@ class IndexedRecordQueryMixin:
         ).open("rb") as stream:
             # 只在本次有界只读批次复用提交与历史授权，不能跨请求或写入复用。
             read_item = partial(
-                self._storage._read_v2_item_at,
+                self._storage._read_item_at,
                 validated_commits=set(), validated_scopes=set(),
             )
             for sequence, turn_id_value, offset, length in indexed_rows:

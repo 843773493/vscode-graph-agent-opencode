@@ -11,10 +11,11 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from app.domain.itemized.execution_admission import (
-    CompactionExecutionReference,
+    DerivedExecutionReference,
     InternalExecutionIntent,
 )
 from app.domain.itemized.execution_queue import ExecutionQueueInput
+from app.prompting import PromptSection, internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -34,9 +35,8 @@ def intent() -> InternalExecutionIntent:
     return InternalExecutionIntent(
         message_id="msg-compaction", execution_id="exe-compaction",
         admission_idempotency_key="admission-compaction",
-        compaction_reference=CompactionExecutionReference(
-            task_id="task-summary", candidate_id="candidate-summary",
-            plan_id="plan-frozen-summary", stage="chunk", ordinal=0, attempt=1,
+        derived_reference=DerivedExecutionReference(
+            task_id="task-summary", plan_id="plan-frozen-summary",
         ),
     )
 
@@ -71,12 +71,12 @@ def test_compaction_admission_is_durable_without_chat_side_effects(
             (first.execution_id,),
         ).fetchall()
         assert json.loads(commit[0])["request_input"] == {
-            "kind": "compaction_reference", "reference": asdict(intent.compaction_reference),
+            "kind": "derived_reference", "reference": asdict(intent.derived_reference),
         }
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        assert cold.compaction_execution_reference(
+        assert cold.derived_execution_reference(
             SESSION, thread_id=thread, execution_id=first.execution_id,
-        ) == intent.compaction_reference
+        ) == intent.derived_reference
         assert cold.execution_admission(SESSION, thread_id=thread, execution_id=first.execution_id) == first
         assert cold.internal_seed_source(SESSION, thread, first.execution_id) is None
         with pytest.raises(ValueError, match="不是普通 Agent 聊天输入"):
@@ -88,7 +88,7 @@ def test_compaction_admission_is_durable_without_chat_side_effects(
         with pytest.raises(ValueError, match="不是普通 Agent 聊天输入"):
             cold.accepted_internal_message(
                 SESSION, thread_id=thread, job_id=first.job_id,
-                message_id=intent.message_id, intent=replace(intent, compaction_reference=None),
+                message_id=intent.message_id, intent=replace(intent, derived_reference=None),
             )
 
 
@@ -104,14 +104,48 @@ def test_compaction_admission_rejects_changed_input_and_forged_notice(
     saver.admit_internal_execution(
         SESSION, thread_id=thread, job_id="job-compaction", intent=intent, message=None,
     )
-    changed = replace(intent, compaction_reference=replace(intent.compaction_reference, ordinal=1))
+    changed = replace(intent, derived_reference=replace(intent.derived_reference, plan_id="changed-plan"))
     with pytest.raises(ValueError, match="幂等键已绑定不同"):
         saver.admit_internal_execution(
             SESSION, thread_id=thread, job_id="job-compaction", intent=changed, message=None,
         )
-    assert saver.compaction_execution_reference(
+    assert saver.derived_execution_reference(
         SESSION, thread_id=thread, execution_id=intent.execution_id,
-    ) == intent.compaction_reference
+    ) == intent.derived_reference
+
+
+@pytest.mark.parametrize("ordinary_kind", ["runtime_notice", "seed_reference"])
+def test_derived_admission_does_not_require_ordinary_queue_input(
+    saver: RolloutCheckpointSaver, intent: InternalExecutionIntent, ordinary_kind: str,
+) -> None:
+    thread = saver._storage.storage.main_thread_id(SESSION)
+    saver.admit_internal_execution(
+        SESSION, thread_id=thread, job_id="job-compaction", intent=intent, message=None,
+    )
+    saver.execution_queue_snapshot(SESSION, thread, validate_inputs=True)
+    ordinary = InternalExecutionIntent(
+        message_id="ordinary-notice", execution_id="ordinary-execution",
+        admission_idempotency_key="ordinary-admission",
+        input_reference_json=json.dumps({
+            "creation_idempotency_key": "creation", "task_seed_hash": "seed",
+            "reference_binding_hash": "binding",
+        }) if ordinary_kind == "seed_reference" else None,
+    )
+    prepared = internal_message_factory.build(
+        kind="generated_session_result", control="处理内部结果",
+        sections=(PromptSection("control_context", {"source": "test"}),
+                  PromptSection("generated_session_result", "必须由普通队列调度")),
+        display_content="内部结果等待调度",
+    )
+    saver.admit_internal_execution(
+        SESSION, thread_id=thread, job_id="ordinary-job", intent=ordinary,
+        message=None if ordinary_kind == "seed_reference" else HumanMessage(id=ordinary.message_id, content=prepared.content, response_metadata={
+            "message_id": ordinary.message_id, "created_at": "2026-11-24T12:00:00+00:00",
+            "message_metadata": prepared.metadata,
+        }),
+    )
+    with pytest.raises(RuntimeError, match="job_id=ordinary-job"):
+        saver.execution_queue_snapshot(SESSION, thread, validate_inputs=True)
 
 
 def test_compaction_cannot_enter_ordinary_execution_queue(intent: InternalExecutionIntent) -> None:
@@ -133,7 +167,7 @@ def test_low_level_admission_cannot_hide_compaction_behind_notice_queue_binding(
 ) -> None:
     thread = saver._storage.storage.main_thread_id(SESSION)
     ordinary = ExecutionQueueInput(
-        execution_binding=replace(intent, compaction_reference=None),
+        execution_binding=replace(intent, derived_reference=None),
         message_id=intent.message_id, agent_id="default", model=None,
         delivery_policy="after_turn", gateway_id=None, request_id=None,
         created_at="2026-11-24T12:00:00+00:00",
@@ -167,18 +201,16 @@ def test_compaction_cold_reader_rejects_tampered_admission(
         RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold,
         pytest.raises(RuntimeError, match="hash 与冻结 request 不一致"),
     ):
-        cold.compaction_execution_reference(
+        cold.derived_execution_reference(
             SESSION, thread_id=thread, execution_id=intent.execution_id,
         )
 
 
 @pytest.mark.parametrize("field,value", [
-    ("task_id", ""), ("candidate_id", " "), ("plan_id", None),
-    ("stage", "initial"), ("ordinal", -1), ("ordinal", True),
-    ("attempt", 0), ("attempt", False),
+    ("task_id", ""), ("task_id", " "), ("plan_id", None),
 ])
-def test_compaction_reference_rejects_ambiguous_coordinates(
+def test_derived_reference_rejects_ambiguous_coordinates(
     intent: InternalExecutionIntent, field: str, value: object,
 ) -> None:
     with pytest.raises(ValueError):
-        replace(intent.compaction_reference, **{field: value})
+        replace(intent.derived_reference, **{field: value})

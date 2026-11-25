@@ -97,7 +97,7 @@ class ContextSourceVersionsStorageMixin:
         """核验真实 view/control 后在同一事务恢复版本并登记 pending。"""
         if not connection.in_transaction:
             raise RuntimeError("epoch-rebuild-transaction-required: 必须传入边界的活动 SQLite 事务")
-        self._storage._require_v2_runtime(connection)
+        self._storage._require_current_rollout_format(connection)
         meta = connection.execute(
             "SELECT session_id, thread_id, history_view_revision, last_control_sequence "
             "FROM database_meta WHERE singleton_id=1"
@@ -223,7 +223,7 @@ class ContextSourceVersionsStorageMixin:
             assembly = pending_assembly if pending_assembly is not None else connection.execute(
                 "SELECT assembly_id FROM context_assemblies WHERE session_id = ? AND thread_id = ? "
                 "AND status IN ('sealed','terminal') "
-                "AND json_extract(snapshot_json,'$.selection_policy') <> 'summary_candidate' "
+                "AND json_extract(snapshot_json,'$.selection_policy') <> 'derived_request' "
                 "ORDER BY rowid DESC LIMIT 1",
                 (session_id, thread_id),
             ).fetchone()

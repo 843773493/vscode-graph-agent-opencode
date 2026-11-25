@@ -49,10 +49,12 @@ def workspace_plugin_case(request: pytest.FixtureRequest, unused_tcp_port: int):
     for workspace in [gateway_workspace, *workspaces]:
         config_path = workspace / ".boxteam/workspace.jsonc"
         payload = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        for provider in payload["llm"]["providers"].values():
-            if "api_key" in provider["defaults"]:
-                provider["defaults"]["api_key"] = ""
-        payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+        workspace_settings = payload["settings"]["workspace"]
+        for profile in payload["profiles"].values():
+            options = profile["settings"].get("model_options", {})
+            if "api_key" in options:
+                options["api_key"] = ""
+        workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
         config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     interrupted_creation = getattr(request, "param", "normal") in {"interrupted", "deleted", "cancelled"}
@@ -162,9 +164,10 @@ def test_workspace_plugins_follow_owner_configuration_and_independent_lifecycle(
         headers = {"X-BoxTeam-Workspace-Id": workspace_id}
         document = exchange("GET", path, headers=headers).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
-        source.setdefault("plugins", {})["runtime"] = {"entries": entries}
+        workspace_settings = source["settings"]["workspace"]
+        workspace_settings.setdefault("plugins", {})["runtime"] = {"entries": entries}
         if parameters is not None:
-            source["plugins"]["configuration"] = {"values": {"probe.tools": {"probe": parameters}}}
+            workspace_settings["plugins"]["configuration"] = {"values": {"probe.tools": {"probe": parameters}}}
         response = exchange("POST" if preflight else "PUT", path + ("/preflight" if preflight else ""), {
             "gateway_id": gateway_id(),
             "workspace_id": workspace_id,
@@ -450,7 +453,7 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
         path = "/api/gateway/config/sources/gateway_mutable_override"
         document = exchange("GET", path).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
-        source.setdefault("plugins", {})["workspace_defaults"] = {"entries": entries}
+        source["settings"]["gateway"].setdefault("plugins", {})["workspace_defaults"] = {"entries": entries}
         return exchange("PUT", path, {
             "gateway_id": gateway_id, "source_key": "gateway_mutable_override",
             "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
@@ -479,14 +482,21 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
         # 新目录尚无配置；只给用户配置提供本测试的服务地址及不调用模型的依赖。
         config_path = context.boxteam_home_for_node(request.node.nodeid) / "config/workspace.jsonc"
         source = commentjson.loads((workspaces[0] / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-        source["llm"]["providers"] = {"primary": {
-            "defaults": {"endpoint": "http://127.0.0.1:1/v1", "api_key": "", "custom_llm_provider": "openai",
+        workspace_settings = source["settings"]["workspace"]
+        workspace_settings["llm"]["providers"] = {"primary": {
+            "models": {"default": {"model": "unused", "config_ref": "context:provider/primary"}},
+            "config_ref": "#/profiles/provider.primary",
+        }}
+        source["profiles"]["provider.primary"] = {
+            "extends": "context:workspace",
+            "settings": {"model_options": {
+                "endpoint": "http://127.0.0.1:1/v1", "api_key": "", "custom_llm_provider": "openai",
                 "api_mode": {"protocol": "chat_completions",
                     "model_info": {"supports_function_calling": True, "supports_reasoning": False},
-                    "supports_reasoning": {"reasoning_content": False}}},
-            "models": {"default": {"model": "unused"}},
-        }}
-        for agent in source["agents"].values():
+                    "supports_reasoning": {"reasoning_content": False}},
+            }},
+        }
+        for agent in workspace_settings["agents"].values():
             if "model" in agent:
                 agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
         config_path.write_text(json.dumps(source), encoding="utf-8")
@@ -604,7 +614,7 @@ def test_new_workspace_freezes_defaults_without_changing_existing_workspaces(wor
         assert f"workspace-create:{new_id}:" not in denied.text, denied.text
         source_doc = document(new_id)
         config = commentjson.loads(source_doc["jsonc"])
-        config["plugins"]["runtime"]["entries"] = []
+        config["settings"]["workspace"]["plugins"]["runtime"]["entries"] = []
         exchange("PUT", f"/api/v1/workspaces/{new_id}/config/sources/workspace_root_mutable_override", {
             "gateway_id": gateway_id, "workspace_id": new_id, "source_key": "workspace_root_mutable_override",
             "jsonc": json.dumps(config), "base_file_digest": source_doc["file_digest"],

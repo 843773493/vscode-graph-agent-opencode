@@ -95,6 +95,8 @@ async function verifyModelLayouts() {
     await expect(heading).toHaveAttribute('title', /^模型与 Provider\n/);
     await page.screenshot({ path: path.join(fixture.artifacts, `model-layout-${label}.png`), animations: 'disabled' });
     // 表单内部滚动后，底部动作仍能通过键盘到达；不发起额外探测。
+    const moreTests = form.locator('details.configuration-probe-more');
+    if (await moreTests.getAttribute('open') === null) await moreTests.locator('summary').click();
     const action = form.getByRole('button', { name: '测试流式', exact: true });
     await action.focus();
     await expect(action).toBeInViewport();
@@ -140,6 +142,7 @@ async function verifyModelLayouts() {
 }
 
 async function measureProbeBudget(panel) {
+  await panel.locator('details.configuration-probe-more > summary').click();
   // 只观察本场景的真实响应字节；不复制网络请求，不改正文、终态或取消语义。
   await panel.evaluate(panel => {
     const originalFetch = globalThis.fetch;
@@ -197,7 +200,6 @@ async function measureProbeBudget(panel) {
     globalThis.__modelProbeBudget = { samples, close() { globalThis.fetch = originalFetch; observer.disconnect(); } };
   });
   try {
-    const button = panel.getByRole('button', { name: '测试流式', exact: true });
     // 首次读取单列且保留原样，随后二十个暖样本不删慢值。
     for (let index = 0; index < 21; index++) {
       for (const action of ['获取上游模型', '测试流式']) {

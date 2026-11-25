@@ -95,7 +95,7 @@ async def test_job_io_failure_has_public_reason_and_original_diagnostic(
         assert await service._start_next_pending(session_id, thread_id=job.thread_id)
         await asyncio.wait_for(job.task, 2)
     expected = (
-        f"执行数据库失败: error={type(native_error).__name__}, sqlite_errorcode={getattr(native_error, 'sqlite_errorcode', None)}"
+        f"执行数据库失败: error={type(native_error).__name__}, sqlite_errorcode={getattr(native_error, 'sqlite_errorcode', None)}, reason={native_error}"
         if isinstance(native_error, sqlite3.Error)
         else f"执行系统 I/O 失败: error={type(native_error).__name__}, errno={native_error.errno}"
     )
@@ -111,5 +111,7 @@ async def test_job_io_failure_has_public_reason_and_original_diagnostic(
     assert (await service.get(job.job_id)).error_message == expected
     failed, = [event["payload"] for event in bus.events if event["event_type"] == EventType.JOB_FAILED]
     assert failed == {"session_id": session_id, "error": expected}
-    assert ("private" in expected) == (isinstance(native_error, OSError) and native_error.filename is not None)
-    assert any(record.exc_info and record.exc_info[1] is native_error for record in caplog.records)
+    assert ("private" in expected) == (isinstance(native_error, sqlite3.Error) or native_error.filename is not None)
+    diagnostics = [record for record in caplog.records if record.name == "app.core.failures"]
+    assert len(diagnostics) == 1 and diagnostics[0].exc_info is None
+    assert str(native_error) in diagnostics[0].getMessage()

@@ -1,4 +1,4 @@
-"""rollout checkpoint typed value 与 v2 format dispatch owner。
+"""rollout checkpoint typed value 与当前格式闸门 owner。
 
 本模块只负责序列化端口、格式版本和 reasoning projection schema 检查；它不
 构造 LangChain 对象，typed serializer 由 checkpoint 组装层注入。
@@ -11,11 +11,9 @@ import sqlite3
 from collections.abc import Mapping
 
 from app.core.hashing import sha256_hex as _hash_bytes
-from app.services.infrastructure.rollout_context.storage import (
-    schema as storage_version,
-)
+from app.domain.itemized.errors import FormatDispatchError
 from app.services.infrastructure.rollout_context.storage.format_dispatch import (
-    require_v2_runtime,
+    require_current_rollout_format,
 )
 
 
@@ -67,16 +65,23 @@ class RolloutSerializationMixin:
                 "SELECT name FROM pragma_table_info('reasoning_blocks')"
             )
         }
-        if {"block_index", "block_kind"} & columns:
+        if {"block_index", "block_kind", "message_sequence"} & columns:
             raise RuntimeError(
                 "rollout SQLite 使用已移除的 reasoning_blocks 旧 schema；"
                 "原型阶段不提供兼容迁移，请重新生成该 rollout"
             )
         required = {
-            "message_sequence",
-            "content_block_index",
-            "item_index",
+            "item_id",
+            "kind",
             "carrier_type",
+            "reasoning_text",
+            "summary_text",
+            "reasoning_truncated",
+            "summary_truncated",
+            "signature_present",
+            "encrypted_length",
+            "encrypted_hash",
+            "projection_version",
         }
         if not required.issubset(columns):
             raise RuntimeError(
@@ -104,7 +109,9 @@ class RolloutSerializationMixin:
         if connection.execute(
             "SELECT 1 FROM pragma_table_info('database_meta') WHERE name='rollout_format_version'"
         ).fetchone() is None:
-            return 1
+            raise FormatDispatchError(
+                "unsupported_legacy_rollout: 缺少 rollout_format_version；原件保留"
+            )
         row = connection.execute(
             "SELECT rollout_format_version FROM database_meta WHERE singleton_id = 1"
         ).fetchone()
@@ -115,21 +122,18 @@ class RolloutSerializationMixin:
         )
 
     @classmethod
-    def _require_v2_runtime(cls, connection: sqlite3.Connection) -> None:
-        """禁止 v1 artifact 进入正常 runtime/history/provider/checkpoint。"""
+    def _require_current_rollout_format(cls, connection: sqlite3.Connection) -> None:
+        """runtime/history/provider/checkpoint 只接受当前 canonical 格式。"""
         rollout_format = cls._rollout_format(connection)
-        require_v2_runtime(
-            rollout_format,
-            expected=storage_version.ROLLOUT_FORMAT_VERSION,
-        )
+        require_current_rollout_format(rollout_format)
 
     @classmethod
-    def _require_v2_readable(
+    def _require_rollout_readable(
         cls,
         connection: sqlite3.Connection,
     ) -> None:
-        """拒绝读取尚未完成 legacy staging 的 target。"""
-        cls._require_v2_runtime(connection)
+        """拒绝读取尚未完成发布的 target。"""
+        cls._require_current_rollout_format(connection)
         row = connection.execute(
             "SELECT database_state FROM database_meta WHERE singleton_id = 1"
         ).fetchone()
@@ -138,8 +142,7 @@ class RolloutSerializationMixin:
         database_state = _strict_text(row[0], field="database_meta.database_state")
         if database_state == "migrating":
             raise RuntimeError(
-                "legacy migration target 在安装完成前不可读取；"
-                "请等待 migration 完成后重新打开 rollout"
+                "rollout target 在发布完成前不可读取；请完成原发布流程后重新打开"
             )
 
 

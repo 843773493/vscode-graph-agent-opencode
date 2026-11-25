@@ -16,7 +16,7 @@ app/core/
 │   └── logging_layout.py（产品 Home 到日志根目录的解析）
 ├── 请求、模型与执行上下文
 │   ├── trace_middleware.py / job_context.py
-│   ├── model_request_context.py / model_delta_context.py
+│   ├── model_delta_context.py
 │   ├── execution_admission_context.py / session_thread_context.py
 │   ├── turn_execution_scope.py / cancelable_stream.py
 │   └── session_interrupt_state.py / history_loading.py / checkpoint_config.py

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from app.abstractions.execution_queue import ExecutionQueueLoad
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     ExecutionAdmissionCursor,
@@ -79,21 +80,24 @@ def job_service_factory():
                 created_at=job.message_created_at, updated_at=job.message_created_at)
 
         async def load(session_id):
-            result = []
-            for identity, job in states.items():
-                record = records[identity]
-                if job.session_id != session_id or record.phase != "queued":
-                    continue
-                binding = job.execution_binding
-                result.append(PendingRequestDTO(job_id=identity, execution_binding=binding, message_id=job.message_id,
-                    session_id=job.session_id, thread_id=job.thread_id,
-                    turn_id=binding.turn_id if isinstance(binding, UserExecutionIdentity) else None,
-                    agent_id=job.agent_id, gateway_id=job.gateway_id, request_id=job.request_id,
-                    content=job.message, attachments=job.attachments, message_metadata=job.message_metadata,
-                    message_created_at=job.message_created_at, enqueue_sequence=record.cursor.commit_id,
-                    delivery_policy=job.delivery_policy, created_at=job.created_at, updated_at=job.updated_at,
-                    snapshot_version=revision, position=len(result)))
-            return result
+            return ExecutionQueueLoad(
+                tuple(record for record in records.values()
+                      if record.cursor.admission.session_id == session_id and record.phase == "queued"),
+                revision,
+            )
+
+        async def project(record, *, position, snapshot_version):
+            identity = record.cursor.admission.job_id
+            job = states[identity]
+            binding = job.execution_binding
+            return PendingRequestDTO(job_id=identity, execution_binding=binding, message_id=job.message_id,
+                session_id=job.session_id, thread_id=job.thread_id,
+                turn_id=binding.turn_id if isinstance(binding, UserExecutionIdentity) else None,
+                agent_id=job.agent_id, gateway_id=job.gateway_id, request_id=job.request_id,
+                content=job.message, attachments=job.attachments, message_metadata=job.message_metadata,
+                message_created_at=job.message_created_at, enqueue_sequence=record.cursor.commit_id,
+                delivery_policy=record.delivery_policy, created_at=job.created_at, updated_at=job.updated_at,
+                snapshot_version=snapshot_version, position=position)
 
         async def claim(record):
             nonlocal revision
@@ -109,9 +113,11 @@ def job_service_factory():
             return handle
 
         async def snapshot(session_id, thread_id):
+            loaded = await load(session_id)
+            selected = [record for record in loaded.records if record.cursor.admission.thread_id == thread_id]
             return PendingRequestListDTO(session_id=session_id, thread_id=thread_id,
-                requests=[item.model_copy(update={"position": position}) for position, item in enumerate(
-                    item for item in await load(session_id) if item.thread_id == thread_id)],
+                requests=[await project(record, position=position, snapshot_version=loaded.snapshot_version)
+                          for position, record in enumerate(selected)],
                 active_job_id=next((identity for identity, record in records.items()
                     if record.phase in {"claimed", "started"} and record.cursor.admission.thread_id == thread_id), None),
                 snapshot_version=revision, thread_revision=revision)
@@ -145,8 +151,8 @@ def job_service_factory():
         store.pauses = AsyncMock(return_value=())
         owner.accept_job_input.side_effect = accept
         owner.accepted_job_message.side_effect = message
-        owner.accepted_job_outcome.return_value = "unknown"
         store.load = AsyncMock(side_effect=load)
+        store.project = AsyncMock(side_effect=project)
         store.snapshot = AsyncMock(side_effect=snapshot)
         store.record = AsyncMock(side_effect=lambda _session, _thread, identity: records[identity])
         store.records = AsyncMock(return_value=())

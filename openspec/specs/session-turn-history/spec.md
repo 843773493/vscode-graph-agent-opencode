@@ -8,7 +8,7 @@
 ## Requirements
 ### Requirement: Rollout 是聊天历史的唯一权威来源
 
-系统 SHALL 直接从会话 rollout 的 `index.sqlite` 和 `rollout.jsonl` 读取聊天历史。上下文边界由 SQLite context view 表达，不创建物理 segment。Trace、日志和旧 turn projection MUST NOT 作为 `/bootstrap` 或 `/history` 的数据源，也不得在 rollout 缺失时静默回退。
+系统 SHALL 直接从会话 rollout 的 `index.sqlite` 和 `rollout.jsonl` 读取聊天历史。正常读取只接受 canonical 格式3语义 Item 与原 storage owner 登记的当前 SQLite 结构；本轮集成目标为 schema34，不将早期未发布的 schema31／32／33 当作兼容来源。元数据和 JSONL envelope 必须一致，旧版、未知版本或未完整发布的来源明确拒绝并保留原件，不运行已退出支持的 v1→v2 importer。上下文边界由 SQLite context view 表达，不创建物理 segment。Trace、日志和旧 turn projection MUST NOT 作为 `/bootstrap` 或 `/history` 的数据源，也不得在 rollout 缺失时静默回退。
 
 #### Scenario: 旧 Trace 不能伪造历史
 
@@ -51,17 +51,36 @@
 
 ### Requirement: include 策略控制内容投影
 
-系统 SHALL 支持用户消息、最终响应、工具摘要、工具调用、工具结果、内部消息和 metadata 的独立选择。默认工具内容 MUST 只返回工具名与状态；完整参数和结果必须显式请求并受服务端限制。
+系统 SHALL 支持独立选择用户消息、可见 text、工具摘要、工具调用、工具结果、reasoning 摘要/详情、encrypted reasoning 元数据、内部消息和 metadata。`assistant_text` 不作为 canonical 事件类型，只能是 `assistant_output` Item 的统一内容投影；默认工具展示 MUST 只包含工具名称、状态、原结果tool_outcome及最小安全声明／执行关系，完整参数和结果正文必须显式请求。结果marker与可空执行摘要独立，不能因缺时序把completed解释为成功。
 
 #### Scenario: 默认工具摘要
 
-- **WHEN** 请求用户消息、`tool_summary` 和最终响应
-- **THEN** 返回用户消息、工具名称/状态摘要和最终响应，不返回工具参数或完整结果
+- **WHEN** 调用方未请求工具详情
+- **THEN** 系统从 SQLite 安全工具投影返回工具名称、原结果marker、可得声明／执行摘要及有界错误摘要，不读取参数或结果正文；页外关联与view边界遵守session-turn-history的同一有界合同
+
+#### Scenario: 请求完整工具结果
+
+- **WHEN** 调用方明确请求工具结果并且通过服务端大小限制
+- **THEN** 系统根据当前格式Item 的 SQLite source offset 读取对应 JSONL，并在预算耗尽时返回 bounded detail cursor；格式1／2的 source 原件保留，当前程序拒绝读取且不提供旧转换入口
+
+#### Scenario: 隐藏内部消息
+
+- **WHEN** 调用方未请求内部消息
+- **THEN** 系统只返回公开可见内容，visibility 为 internal 的 runtime notice 不会被误当成用户消息或 Turn root
+
+#### Scenario: 加载工具摘要和模型最终响应
+
+- **WHEN** 选定 view 中 root 可见，且调用方选择用户消息、tool_summary 和模型最终响应
+- **THEN** 每个完整 Turn 返回 root user input、工具名称与状态摘要和 `TurnRecord.final_item_id` 对应的最终 assistant projection，不返回工具参数或完整结果
+
+#### Scenario: 加载工具调用、结果和模型最终响应
+
+- **WHEN** 选定 view 中 root 可见，且调用方选择用户消息、tool_call、tool_result 和模型最终响应
+- **THEN** 每个完整 Turn 返回用户 root、工具调用、对应工具结果和最终 assistant projection，并遵守详情大小限制
 
 #### Scenario: 显式工具详情
-
-- **WHEN** 请求用户消息、`tool_call`、`tool_result` 和最终响应
-- **THEN** 返回对应工具调用、结果和最终响应，并返回有界详情
+- **WHEN** 调用方显式请求选中工具的参数／结果正文
+- **THEN** 同一历史 owner 沿精确 Item、view binding 和原预算返回正文；其它工具不详情化，超限保留截断事实，不改变声明／结果身份。
 
 ### Requirement: Gateway 应用默认渐进加载
 
@@ -84,7 +103,7 @@
 
 ### Requirement: 历史 cursor 必须校验精确快照版本
 
-历史 cursor SHALL 复用 checkpoint-history-loading 的唯一复合游标合同，绑定精确 SessionThread、view、history_view_revision、projection epoch、查询选择器与逻辑位置。成员变化、普通追加或终态更新推进该历史版本时旧 cursor MUST 明确 stale；不得把 token 内部推进阶段当成按滚动次数增加页面批次。rewind、branch 切换和删除同样不得静默切到新历史。
+历史 cursor SHALL 复用 checkpoint-history-loading 的唯一 v3 复合游标合同（逻辑 Item 续点，不保留 Part 坐标或旧版本解码），绑定精确 SessionThread、view、history_view_revision、projection epoch、查询选择器与逻辑位置。成员变化、普通追加或终态更新推进该历史版本时旧 cursor MUST 明确 stale；不得把 token 内部推进阶段当成按滚动次数增加页面批次。rewind、branch 切换和删除同样不得静默切到新历史。
 
 #### Scenario: rewind 后使用旧游标
 
@@ -116,12 +135,12 @@
 
 ### Requirement: 历史投影区分 assistant text、reasoning 和 final response
 
-系统 SHALL 独立支持 `user_text`、`user_attachments`、`assistant_text`、`thinking`、`tool_summary`、`tool_call`、`tool_result`、`compaction_summary` 和 `final_response`。`assistant_text` 是从 canonical `assistant_output` item/content part 派生的 projection，不是 canonical item kind；history `compaction_summary` part必须直接引用同一Turn中`semantic_kind=compaction_summary`的canonical item identity/view revision，不得从压缩后的普通文本或notice猜测。历史 Turn 的开头 MUST 使用 `TurnRecord.root_input_item_id` 或等价的 root input identity；不得把第一个 wire role 为 user 的 item 当作 Turn 起点。`thinking` 投影由 canonical reasoning item 或受保护 reasoning content part 表达，块类型为可读 `reasoning`、provider 生成的 `summary` 或不携带正文的 `encrypted` 标记。`final_response` MUST 使用 `TurnRecord.final_item_id` 或等价的 final item identity，而不是把最后一个 assistant role 作为唯一依据；`Turn.status=completed` 时 final item 必须存在，`completed_empty`、interrupted、cancelled、failed、unknown 或未 finalization 时 final item 必须为空。若为一次性 `legacy_import_v1_to_v2` staging 的无 finalization 旧 fixture，只能在 migration report 中标记 heuristic 提示；正常 v2 history/provider/checkpoint/runtime 不得启用 heuristic fallback。`cancelled` 仅表示该 Turn 被明确停止且不可作为成功响应，不得被历史投影成 final response。
+系统 SHALL 独立支持 `user_text`、`user_attachments`、`assistant_text`、`thinking`、`tool_summary`、`tool_call`、`tool_result`、`compaction_summary` 和 `final_response`。`assistant_text` 是从 canonical `assistant_output` Item 派生的 projection，不是 canonical item kind；history `compaction_summary` Item 投影必须直接引用同一Turn中`semantic_kind=compaction_summary`的canonical item identity/view revision，不得从压缩后的普通文本或notice猜测。历史 Turn 的开头 MUST 使用 `TurnRecord.root_input_item_id` 或等价的 root input identity；不得把第一个 wire role 为 user 的 item 当作 Turn 起点。`thinking` 投影由 独立 canonical reasoning Item 的安全投影 表达，块类型为可读 `reasoning`、provider 生成的 `summary` 或不携带正文的 `encrypted` 标记。`final_response` MUST 使用 `TurnRecord.final_item_id` 或等价的 final item identity，而不是把最后一个 assistant role 作为唯一依据；`Turn.status=completed` 时 final item 必须存在，`completed_empty`、interrupted、cancelled、failed、unknown 或未 finalization 时 final item 必须为空。格式1／2转换已退出支持，正常 history/provider/checkpoint/runtime 不启用 heuristic fallback。`cancelled` 仅表示该 Turn 被明确停止且不可作为成功响应，不得被历史投影成 final response。
 
 #### Scenario: 混合 canonical item 的 Turn
 
 - **WHEN** 一个 Turn 依次包含 `assistant_output`、reasoning item 和 tool call
-- **THEN** 历史 projection 可以从 assistant output content part 独立返回 `assistant_text`、thinking 和 tool summary，LangChain 恢复只按 message group 生成需要的消息，不因 projection 拆分而伪造多条 assistant message
+- **THEN** 历史 projection 可以从 独立 assistant output Item 独立返回 `assistant_text`、thinking 和 tool summary，LangChain 恢复只按 message group 生成需要的消息，不因 projection 拆分而伪造多条 assistant message
 
 #### Scenario: 思考 item 来源保持可区分
 
@@ -131,7 +150,7 @@
 #### Scenario: 上下文压缩作为独立历史 Item
 
 - **WHEN**一个Turn在工具循环中提交了可见且`turn_scope=turn_member`的canonical `compaction_summary`
-- **THEN**history按其原item identity/order返回一个可展开`compaction_summary` response part，既不伪装成thinking/final，也不与压缩前后的reasoning或tool part合并
+- **THEN**history按其原item identity/order返回一个可展开`compaction_summary` response Item，既不伪装成thinking/final，也不与压缩前后的reasoning或tool Item合并
 
 #### Scenario: runtime notice 不伪装成 Turn root
 
@@ -142,6 +161,12 @@
 
 - **WHEN** 冻结的 user_input 同时包含文本、附件 manifest 和模型使用的图片预览
 - **THEN** 历史仅将用户文本与附件 metadata 投影为各自 DTO，不把 rich block 或整个 payload 字符串化为正文；完整模型恢复仍按冻结输入取得预览，默认历史不返回预览 data URL
+
+最终回答 SHALL 沿明确 final_item_id 所属原输出组的真实有序输出成员展示；final_item_id 指向该组末输出 Item。多段文本／媒体不因最后一项为非文本而丢失，不另写聚合 final 正文或按最后 assistant 文本猜测。已提交思考复用真实来源，不重复写入或计数。历史与实时投影、同 binding 丰富度合并及受保护内容沿 checkpoint-history-loading「历史与实时共享 Item 内容投影」执行。
+
+#### Scenario: 多 Item 最终回答
+- **WHEN** 原最终消息包含多个文本或媒体输出 Item
+- **THEN** final pointer 只引用已有真实末输出 Item，最终回答按原组成员显示全部允许公开的输出；不另造聚合消息，不把纯思考当作最终回答
 
 ### Requirement: 历史摘要不 materialize 完整消息
 
@@ -155,12 +180,12 @@
 
 `tool_summary`、`thinking`、final pointer 和受界限的最终 `visible_text` SHALL 从 SQLite item/index projection 读取。中间完整 `assistant_output` item、tool_call 参数和 tool_result 只在显式 include 时按 item offset 读取目标 `rollout.jsonl` 记录；普通分页不得扫描整个 rollout 文件、恢复完整 canonical item 集合或 materialize 完整 LangChain checkpoint，也不得把 request-only system context、缓存保持型 source delta 或 pending runtime notice 当作历史 Turn message；这些上下文只能通过 assembly/provenance reference 在授权详情视图中展开。`visible_text`、`reasoning` 和 `summary` 均不得包含 encrypted reasoning 或未授权工具 payload。
 
-Turn标题的`item_count` MUST只统计同一history revision、显式属于该Turn且被projection标记为`expandable_activity`的逻辑成员：每个可见reasoning/summary content part计1，每个tool_call参数计1，每个匹配tool_result计1，可见且以`turn_scope=turn_member`归属该Turn的`compaction_summary`计1，其它扩展类型只有显式声明相同activity语义才计数。聚合`tool_summary`行、DOM容器和checkpoint/provider carrier不另计；真实user root、final response、transport chunk、encrypted-only无正文标记、request-only contribution、CSM source/隐藏runtime notice及仅有存储metadata的记录均不计。相同持久logical identity无论被多少carrier引用只计一次，正文相同但identity不同的可展开成员分别计数。每个成员的`elapsed_ms` MUST由后端按logical order计算：首个成员相对Turn acceptance/root时间，后续成员相对前一个计数成员；`duration_ms`从acceptance到Turn terminal时间。时间缺失、倒退或membership revision不一致必须返回显式projection错误，不得由Web钳零、补默认值或使用物理相邻item代替。
+Turn标题的`item_count` MUST只统计同一history revision、显式属于该Turn且被projection标记为`expandable_activity`的逻辑成员：每个可见 reasoning/summary Item 计1，每个独立 tool_call Item 计1，每个匹配 tool_result Item 计1，非 final 普通文本／媒体等显式可展开过程 Item 各计1，可见且以`turn_scope=turn_member`归属该Turn的`compaction_summary`计1，其它扩展类型只有显式声明相同activity语义才计数。聚合`tool_summary`行、DOM容器和checkpoint/provider carrier不另计；真实user root、final response、transport chunk、encrypted-only无正文标记、request-only contribution、CSM source/隐藏runtime notice及仅有存储metadata的记录均不计。相同持久 item_id无论被多少carrier引用只计一次，正文相同但identity不同的可展开成员分别计数。每个成员的`elapsed_ms` MUST由后端按logical order计算：首个成员相对Turn acceptance/root时间，后续成员相对前一个计数成员；`duration_ms`从acceptance到Turn terminal时间。时间缺失、倒退或membership revision不一致必须返回显式projection错误，不得由Web钳零、补默认值或使用物理相邻item代替。
 
 #### Scenario: 默认摘要只读取轻量投影
 
 - **WHEN** 前端请求默认的最新 Turn 摘要
-- **THEN** 服务从 SQLite projection 和目标 JSONL item offset 读取 user、thinking blocks、tool summary 与 final response，不 materialize 完整 LangChain message list，也不读取 tool_result 正文
+- **THEN** 服务从 SQLite 轻量 Item projection 和有界目标 JSONL offset 读取 user、thinking 安全摘要、tool summary 与 final response，不 materialize 完整 LangChain message list，也不读取 tool_result 正文
 
 #### Scenario: 显式详情读取目标 item
 
@@ -177,6 +202,8 @@ Turn标题的`item_count` MUST只统计同一history revision、显式属于该T
 - **WHEN**一个Turn含一条可见reasoning、一个tool_call、一个tool_result、一条Turn-member compaction summary和最终response，Web把call/result渲染为一个聚合工具行
 - **THEN**后端`item_count`为4，聚合行不产生第五项、final不产生第五项；每项elapsed按logical order给出，刷新后不得按DOM节点数或物理sequence重算
 
+工具摘要 SHALL 包含本规范「工具历史保留声明关系和可持久执行摘要」允许的轻量事实；默认不为恢复同批或执行关系读取完整参数／结果。final 输出组全部成员不计为过程活动，工具 call/result 合行不改变两项业务计数。
+
 ### Requirement: 页面级读取延迟可验收
 
 系统 SHALL 使用资产工作区中预生成的 128 Turn 混合 fixture 验证 bootstrap、around、before/after 双向加载和当前 Turn 详情重载。后端 SQLite/reader 热路径的优化目标为 p95 100ms 内，硬验收上限为 200ms；浏览器 prepend/append 与锚点恢复硬验收上限为 200ms。后端真实模型会话和浏览器确定性大型工具 mock 会话必须使用不同 session ID，测试运行时只读取复制后的工作区，不重新生成或修改资产。测试必须记录 p50/p95 和 snapshot、SQLite query、materialize 计数。
@@ -190,11 +217,11 @@ Turn标题的`item_count` MUST只统计同一history revision、显式属于该T
 
 每个历史 Turn SHALL 显示同一历史 revision 的权威 duration_ms 和 item_count。逻辑活动成员、去重与 elapsed_ms 的唯一计量合同沿本规范的历史摘要和 checkpoint-history-loading，不按分组、组件或隐藏 carrier 重新计量。三层过程展开 SHALL 通过原 SQLite-backed history owner 按层加载：第一层取得有界中间文本与活动轮廓，第二层展示组内轻量标题／状态，第三层才读取所选成员的受限思考、参数或结果正文。未展开组不得因第一层打开而全量详情化，其它 Turn 也不得被顺带读取。零成员不制造展开按钮；失败 metadata 和必要操作入口不依赖详情展开。
 
-非 final 的普通文本 SHALL 作为显式过程成员参与相同计量，不因 Turn 失败、中断或没有 final pointer 而丢失。原 `text`／`assistant_text` 正文选择与默认摘要中的 `final_response` 正文覆盖保持可读，但不改变该部件的 `text` 身份、不升级成 `final_text`；活动轮廓中的普通文本仍遵守原有界正文预算。计数与诊断范围 SHALL 使用同一成员集合，不能出现计数为零但仍携带成员 sequence 范围的响应。
+非 final 的普通文本 SHALL 作为显式过程成员参与相同计量，不因 Turn 失败、中断或没有 final pointer 而丢失。原 `text`／`assistant_text` 正文选择与默认摘要中的 `final_response` 正文覆盖保持可读，但不改变该 Item 的 `text` 身份、不升级成 `final_text`；活动轮廓中的普通文本仍遵守原有界正文预算。计数与诊断范围 SHALL 使用同一成员集合，不能出现计数为零但仍携带成员 sequence 范围的响应。
 
 #### Scenario: 仅含普通文本的中断过程
 - **WHEN** 一轮执行只留下非 final 文本后被中断，或失败前已产生普通中间说明
-- **THEN** 冷启动首读、活动轮廓及 Item 点读保留相同文本部件与真实来源，过程计数非零，独立最终回答保持为空
+- **THEN** 冷启动首读、活动轮廓及 Item 点读保留相同文本 Item与真实来源，过程计数非零，独立最终回答保持为空
 
 #### Scenario: 统计行默认折叠
 - **WHEN** around 或 before/after 返回有可展开活动的已结束 Turn
@@ -210,7 +237,7 @@ Turn标题的`item_count` MUST只统计同一history revision、显式属于该T
 
 ### Requirement: Turn 身份分组与正文可见性分离
 
-Turn 的真实 root identity 与正文可见性 SHALL 分离。有效前缀只保留某 Turn 的摘要、回答或其它可见 canonical 成员，而其真实 root 仅作 hidden backing 时，唯一普通 Turn history reader 仍须按原 Turn 分组返回这些可见成员；root membership、原 logical 坐标和 TurnRecord 继续校验，但 hidden root 不进入 `user_messages`、response parts 或 Provider selection。只有 hidden backing 的 Turn 不单独列为历史行；不得升 root 为可见、伪造用户输入、改成 internal execution 或新增并行 fragment reader。tail/bootstrap、显式 Turn 选择、窗口和续页必须使用同一分组准入规则。
+Turn 的真实 root identity 与正文可见性 SHALL 分离。有效前缀只保留某 Turn 的摘要、回答或其它可见 canonical 成员，而其真实 root 仅作 hidden backing 时，唯一普通 Turn history reader 仍须按原 Turn 分组返回这些可见成员；root membership、原 logical 坐标和 TurnRecord 继续校验，但 hidden root 不进入 `user_messages`、response_items 或 Provider selection。只有 hidden backing 的 Turn 不单独列为历史行；不得升 root 为可见、伪造用户输入、改成 internal execution 或新增并行 fragment reader。tail/bootstrap、显式 Turn 选择、窗口和续页必须使用同一分组准入规则。
 
 #### Scenario: 压缩后保留回答但不显示旧提问
 
@@ -228,7 +255,7 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 
 ### Requirement: Web 正式入口支持按稳定来源坐标重复定位
 
-Web 主窗口的主聊天区域 SHALL 保留用户可操作的“跳到指定轮次”入口，并将其与 Item／Part 搜索、引用和浏览恢复统一到原历史读取与虚拟列表定位链路。Turn 入口允许输入稳定 turn_id 或选择已加载轮次；内容目标使用真实 Item／Part，支持没有 turn_id 的内部 execution。目标 MUST 固定到完整 Gateway／工作区／Session／Thread，展示序号和虚拟列表索引不得作为身份。
+Web 主窗口的主聊天区域 SHALL 保留用户可操作的“跳到指定轮次”入口，并将其与 Item 搜索、引用和浏览恢复统一到原历史读取与虚拟列表定位链路。Turn 入口允许输入稳定 turn_id 或选择已加载轮次；内容目标使用真实 Item，支持没有 turn_id 的内部 execution。目标 MUST 固定到完整 Gateway／工作区／Session／Thread，展示序号和虚拟列表索引不得作为身份。
 
 未加载的 Turn 使用原 anchor_turn_id 有界 around；未加载 Item 使用同一 history 入口的 anchor_item_id，在同一历史快照核验其 owner、可见性及真实逻辑位置；内部 execution 目标必须取得包含该成员的受限邻近窗口，不能逐页扫描至命中。定位与保存恢复不再限主 Thread；每个真实 Thread 有独立展示记录，替代旧 `(user_id, workspace_id, session_id)` 与无 Turn 时保存 scrollTop 后忽略的约定。
 
@@ -300,7 +327,7 @@ Web 主窗口的主聊天区域 SHALL 保留用户可操作的“跳到指定轮
 #### Scenario: 旧 path-based 投影不能恢复
 
 - **WHEN** legacy UI/projector 尝试从 generic read 的 path、Skill 正文或旧 middleware 字段反推来源
-- **THEN** 正常 v2 history 明确拒绝该 projection 或标记 migration-only loss，不创建虚拟 resource ref、不回退当前 Registry，也不保留兼容字段
+- **THEN** 正常当前格式 history 明确拒绝该 projection，不创建虚拟 resource ref、不回退当前 Registry，也不保留兼容字段
 
 ### Requirement: 当前 Session 的 child thread 必须作为右侧侧边栏会话资源可见
 
@@ -492,7 +519,7 @@ Session Trace 的历史与 SSE 入口 SHALL 默认保留 Session 诊断聚合范
 
 ### Requirement: Internal execution history 使用独立 envelope 和 typed display coordinate
 
-顶层 history envelope MUST 仅在有效 include 包含 `internal` 时填充 `internal_executions: InternalExecutionHistoryDTO[]`；有效 include 与默认 Web 集合以「内部 execution history 由持久 admission 独立加载」为准。每个 `InternalExecutionHistoryDTO` 的字段固定为 `execution_id`、`job_id`、`session_id`、`thread_id`、`status`、`created_at`、`updated_at`、`display_parts` 和 `response_parts`；不得套用 `TurnDetailDTO`，也不得增加 `turn_id`、root/final Turn 字段或把内部 execution 映射成 synthetic Turn。DTO 的 `session_id/thread_id` 表示该条 durable execution/admission 的真实历史 scope，`execution_id/job_id`、状态和时间也沿该历史事实投影；fork 不将这些字段重写为目标身份。请求路径、顶层 `page.thread_id` 和 cursor 绑定本次读取的目标容器；reader MUST 先验证目标 snapshot 与数据库当前 owner 一致，再以目标本地冻结 namespace binding 校验每条历史 scope，禁止重定向读取来源。再次 fork 可保留更早来源的精确历史 scope，不把所有继承记录强制归到直接来源。`response_parts` 只表示该 `execution_id` 下本页命中的内部输出 history，跨页完整性由同一 history cursor 保证，不声明单页已包含该 execution 的全部输出。
+顶层 history envelope MUST 仅在有效 include 包含 `internal` 时填充 `internal_executions: InternalExecutionHistoryDTO[]`；有效 include 与默认 Web 集合以「内部 execution history 由持久 admission 独立加载」为准。每个 `InternalExecutionHistoryDTO` 的字段固定为 `execution_id`、`job_id`、`session_id`、`thread_id`、`status`、`created_at`、`updated_at`、`display_items` 和 `response_items`；不得套用 `TurnDetailDTO`，也不得增加 `turn_id`、root/final Turn 字段或把内部 execution 映射成 synthetic Turn。DTO 的 `session_id/thread_id` 表示该条 durable execution/admission 的真实历史 scope，`execution_id/job_id`、状态和时间也沿该历史事实投影；fork 不将这些字段重写为目标身份。请求路径、顶层 `page.thread_id` 和 cursor 绑定本次读取的目标容器；reader MUST 先验证目标 snapshot 与数据库当前 owner 一致，再以目标本地冻结 namespace binding 校验每条历史 scope，禁止重定向读取来源。再次 fork 可保留更早来源的精确历史 scope，不把所有继承记录强制归到直接来源。`response_items` 只表示该 `execution_id` 下本页命中的内部输出 history，跨页完整性由同一 history cursor 保证，不声明单页已包含该 execution 的全部输出。
 
 `TurnHistoryLoadRequest` SHALL 接受可选 `execution_id`（1–256 字符）以读取同一目标容器中、属于选定 view 的单个 internal execution；继承 execution 仍须通过上述历史 binding 校验。请求 MUST 只使用 `tail` 或 `before`，不得同时提供 `turn_ids`、`tool_call_ids`、`anchor_turn_id`、`turns`、`before_turns` 或 `after_turns`；显式 `include` MUST 包含 `internal`。唯一 history reader MUST 在 SQL/索引边界联合约束目标 Session、thread、选定 view/checkpoint 和 execution，保持原分页硬上限与独立 envelope。非活动轮廓的原 execution 查询继续使用 `TurnCursorDTO.query_mode=execution`；显式 activity_outline 查询使用统一 `query_mode=activity`，其入口与续读约束消费「活动轮廓与 Item 正文回补使用同一有界历史合同」。两种模式均 MUST 冻结精确 `execution_id` 及首次请求的目标 owner/view/checkpoint；续读选择器或归属冲突必须明确拒绝，不切换目标，不启动 runtime。调用方不得用 DTO 的历史 scope 替换请求目标或 cursor owner。原 execution_item_ids 被统一的 item_ids 替换；该定点请求保持单个 execution、最多四项、tail 且无 cursor，沿同一 snapshot 验证成员，不放宽上述禁止混用的 Turn／工具／窗口选择器约束。
 
@@ -506,9 +533,9 @@ Session Trace 的历史与 SSE 入口 SHALL 默认保留 Session 诊断聚合范
 - **WHEN** 请求混用 execution 与 Turn/tool/window 选择器、使用非 tail/before 方向、显式 include 缺少 internal，或续页更改 execution、Session/thread、view/checkpoint
 - **THEN** 系统明确拒绝请求，不返回其它 owner 的内容，也不重新解释为默认历史读取
 
-每个 `display_parts` 元素 MUST 使用 `InternalExecutionDisplayPartDTO={kind,text,item_id,item_sequence,logical_item_ordinal,created_at,provenance}`。`item_id` 和 `item_sequence` 必须指向当前 canonical display carrier item 的稳定 identity 与物理坐标；`kind` 为 `generated_session_result`。`provenance` 是 typed source identity object，仅允许有值时出现的 `source_session_id`、`source_thread_id`、`delegation_id`、`source_execution_id`、`source_item_id`，不得携带 run/generator/control ID 或分支正文。普通 Turn history、SSE 与 Web 默认展示不得把这些 provenance ID 当可见文本；Web 对生成回报只展示安全 `text` 和“会话生成”标签，不展示私有 prompt、source branch 正文或可由其推导的内容。
+每个 `display_items` 元素 MUST 使用 `InternalExecutionDisplayItemDTO={kind,text,item_id,item_sequence,logical_item_ordinal,created_at,provenance}`。`item_id` 和 `item_sequence` 必须指向当前 canonical display carrier item 的稳定 identity 与物理坐标；`kind` 为 `generated_session_result`。`provenance` 是 typed source identity object，仅允许有值时出现的 `source_session_id`、`source_thread_id`、`delegation_id`、`source_execution_id`、`source_item_id`，不得携带 run/generator/control ID 或分支正文。普通 Turn history、SSE 与 Web 默认展示不得把这些 provenance ID 当可见文本；Web 对生成回报只展示安全 `text` 和“会话生成”标签，不展示私有 prompt、source branch 正文或可由其推导的内容。
 
-Turn summary/detail MUST 投影必填非负 `root_logical_item_ordinal`，从选定 view 的 `context_view_turns.root_input_item_id` 对应真实 canonical root membership 读取；有可见 canonical 成员的 Turn 可以使用其 hidden backing root 的原坐标，坐标本身不授权显示 root 正文。每个 internal display part 的必填非负 `logical_item_ordinal` 从同一 view 的可见 display-only membership 读取。两个字段只是既有 `context_view_items.logical_item_ordinal` 的只读投影，不产生第二排序账本。Web MUST 以该共同 view 坐标合并完整 Turn 的 root anchor 和 standalone notice；Turn 自身成员仍按显式 logical membership 展示，不因 notice 插入而拆散或改归属。缺少对应 membership/ordinal 必须明确报 projection 错误，不用活动首尾、物理邻接、墙钟或默认值补顺序。Turn ordinal 与 internal item sequence 仍分别服务于各自分页，不直接互比。
+Turn summary/detail MUST 投影必填非负 `root_logical_item_ordinal`，从选定 view 的 `context_view_turns.root_input_item_id` 对应真实 canonical root membership 读取；有可见 canonical 成员的 Turn 可以使用其 hidden backing root 的原坐标，坐标本身不授权显示 root 正文。每个 internal display Item 的必填非负 `logical_item_ordinal` 从同一 view 的可见 display-only membership 读取。两个字段只是既有 `context_view_items.logical_item_ordinal` 的只读投影，不产生第二排序账本。Web MUST 以该共同 view 坐标合并完整 Turn 的 root anchor 和 standalone notice；Turn 自身成员仍按显式 logical membership 展示，不因 notice 插入而拆散或改归属。缺少对应 membership/ordinal 必须明确报 projection 错误，不用活动首尾、物理邻接、墙钟或默认值补顺序。Turn ordinal 与 internal item sequence 仍分别服务于各自分页，不直接互比。
 
 每个 Turn summary/detail MUST 携带本次真实读取快照的 `source_view_id` 和 `source_view_revision`；分页、detail 和客户端镜像合并保留各行自己的 binding，不用页面当前 head 覆写旧行。消息操作首次请求原样携带该 binding 和点击 item，来源已漂移时明确拒绝，不按 item 猜祖先或悄悄选择最新 view。
 
@@ -531,13 +558,13 @@ Turn summary/detail MUST 投影必填非负 `root_logical_item_ordinal`，从选
 #### Scenario: internal history 保持 execution-scoped 且不伪造 Turn
 
 - **WHEN** 客户端显式请求 include `internal` 并读取一次 internal execution
-- **THEN** history envelope 的 `thread_id` 标识请求目标，`InternalExecutionHistoryDTO` 保留经目标本地 binding 校验的真实历史 session/thread、execution/job、状态和时间；其中 `display_parts` 坐标指向目标本地的真实 runtime notice carrier，`response_parts` 只属于同一 execution
+- **THEN** history envelope 的 `thread_id` 标识请求目标，`InternalExecutionHistoryDTO` 保留经目标本地 binding 校验的真实历史 session/thread、execution/job、状态和时间；其中 `display_items` 坐标指向目标本地的真实 runtime notice carrier，`response_items` 只属于同一 execution
 - **AND** 响应不含 `turn_id`，不构造 `TurnDetailDTO`、用户 root 或 final response，不改变任何 completed Turn
 - **AND** 首屏及 around 的内部执行摘要保留普通思考／工具的轻量活动身份，即使没有模型提供的安全摘要也能展开；未请求思考、参数和结果正文时不打开这些 canonical 正文，不把“没有正文投影”当成“没有活动”
 
 #### Scenario: Web 只呈现安全的生成回报
 
-- **WHEN** Web 渲染 `generated_session_result` display part
+- **WHEN** Web 渲染 `generated_session_result` display Item
 - **THEN** 可见内容仅为安全固定文案和“会话生成”标签；DOM 不包含来源 ID、run/control ID、模型 prompt 或 source branch 正文
 
 ### Requirement: 历史字段在类型定义处明确业务时间语义
@@ -649,9 +676,9 @@ Turn summary/detail MUST 投影必填非负 `root_logical_item_ordinal`，从选
 
 ### Requirement: 活动轮廓与 Item 正文回补使用同一有界历史合同
 
-原 history 接口 SHALL 支持活动轮廓与最多四个选中 Item 的受限正文回补，适用于普通 Turn 和内部 execution。轮廓只交付顺序、身份、真实组边界、类型、状态、工具名与已有安全摘要／时间；不得附带完整思考、参数、结果或加密 payload。Item 回补 SHALL 固定同一 owner、history view／revision 并沿原预算验证成员可见性，不推进主历史游标。首次活动轮廓及 item_ids 定点请求 SHALL 在原 TurnHistoryLoadRequest 成对回传已取得页面或 summary 的 source_view_id／source_view_revision，原 reader 在同一 snapshot 校验当前 view／revision；cursor 续读可消费冻结值，显式 binding 冲突、缺一半或版本漂移沿原 invalid／stale 合同拒绝，不悄悄改到当前最新投影。原主时间线初读不增加此详情前置要求，未提交流式 Part 不伪造历史 binding。轮廓首次 SHALL 使用 direction=tail，并互斥选择单个 turn_ids=[id] 或 execution_id；include 显式包含 activity_outline，可加受限 assistant_text，内部执行仍包含 internal。不得混入 item_ids、tool_call_ids、around／anchor 选择器、context_cursor 或主窗口数量选择器。每页最多256个 canonical record，并受原字节预算限制；原 cursor codec 以 query_mode=activity 冻结该 process_ref、目标 owner、view／revision、include、首次成员上界和成员续点（需要时含原 part_ordinal，不能因字节预算跳过同一 Item 的其它部件），通过 before_cursor＋direction=before 向前续读。省略 selector／include 使用冻结值，显式不一致必须拒绝；此模式从请求派生，不新增请求 mode 开关、token 格式或 execution 专用 phase。主时间线与活动轮廓游标不能互换，context_cursor 仍只用于上下文 metadata。
+原 history 接口 SHALL 支持活动轮廓与最多四个选中 Item 的受限正文回补，适用于普通 Turn 和内部 execution。轮廓只交付顺序、身份、真实组边界、类型、状态、工具名与已有安全摘要／时间；不得附带完整思考、参数、结果或加密 payload。Item 回补 SHALL 固定同一 owner、history view／revision 并沿原预算验证成员可见性，不推进主历史游标。首次活动轮廓及 item_ids 定点请求 SHALL 在原 TurnHistoryLoadRequest 成对回传已取得页面或 summary 的 source_view_id／source_view_revision，原 reader 在同一 snapshot 校验当前 view／revision；cursor 续读可消费冻结值，显式 binding 冲突、缺一半或版本漂移沿原 invalid／stale 合同拒绝，不悄悄改到当前最新投影。原主时间线初读不增加此详情前置要求，未提交流式 draft 不伪造历史 binding。轮廓首次 SHALL 使用 direction=tail，并互斥选择单个 turn_ids=[id] 或 execution_id；include 显式包含 activity_outline，可加受限 assistant_text，内部执行仍包含 internal。不得混入 item_ids、tool_call_ids、around／anchor 选择器、context_cursor 或主窗口数量选择器。每页最多256个 canonical record，并受原字节预算限制；原 cursor codec 以 query_mode=activity 冻结该 process_ref、目标 owner、view／revision、include、首次成员上界和逻辑 Item 成员续点；不保留 part_ordinal 或 Item 内部 continuation，通过 before_cursor＋direction=before 向前续读。省略 selector／include 使用冻结值，显式不一致必须拒绝；此模式从请求派生，不新增请求 mode 开关、token 格式或 execution 专用 phase。主时间线与活动轮廓游标不能互换，context_cursor 仍只用于上下文 metadata。
 
-item_ids 回补 SHALL 显式限定一个 Turn 或 execution，最多四个不重复真实 Item，direction=tail 且没有任何 cursor；不得混入轮廓续页或其它定位／工具选择器。定点响应同时交付所选成员的真实组首／展示段边界元数据，允许挂载必要标题及目标，不要求遍历轮廓尾页至命中，不将未读区间标作完整。正文受原字节上限约束，超大单项保留原截断事实及既有完整输出／详情入口。超出字节或成员上限必须明确提供适用 continuation／truncation，不伪报完整；不得为获得轮廓而物化整轮正文或扫描 Trace。完整 owner 投影与轮廓／正文片段的应用统一遵守 checkpoint-history-loading 的 response part 合同，不以片段整体替换其它已加载成员。
+item_ids 回补 SHALL 显式限定一个 Turn 或 execution，最多四个不重复真实 Item，direction=tail 且没有任何 cursor；不得混入轮廓续页或其它定位／工具选择器。定点响应同时交付所选成员的真实组首／展示段边界元数据，允许挂载必要标题及目标，不要求遍历轮廓尾页至命中，不将未读区间标作完整。正文受原字节上限约束，超大单项保留原截断事实及既有完整输出／详情入口。超出字节或成员上限必须明确提供适用 continuation／truncation，不伪报完整；不得为获得轮廓而物化整轮正文或扫描 Trace。完整 owner 投影与轮廓／正文片段的应用统一遵守 checkpoint-history-loading 的 「历史与实时共享 Item 内容投影」合同，不以片段整体替换其它已加载成员。
 
 #### Scenario: 长过程展开与单项工具读取
 - **WHEN** 一个过程有大量工具和大型结果，用户展开轮廓后仅打开其中一项
@@ -670,8 +697,10 @@ item_ids 回补 SHALL 显式限定一个 Turn 或 execution，最多四个不重
 - **THEN** 通过同一 canonical reducer 保留正文及其它成员；原请求覆盖外的成员不删除，已失效 binding 的旧响应不应用
 
 #### Scenario: 显式定位不遍历整个活动轮廓
-- **WHEN** 用户跳到一个很长过程早期、尚未加载的 Item／Part
+- **WHEN** 用户跳到一个很长过程早期、尚未加载的 Item
 - **THEN** 原 around 核验归属后，通过同一 item_ids 入口定点取得所需正文及真实组／段边界，挂载必要标题与目标；不先逐页拉完整轮廓，不把中间缺页当作不存在
+
+轮廓直接消费既有 Item 索引，不能依赖 response_outline_json、复合 Part 数组或第二份展示索引。真实组首边界由原 owner 有界解析；页中只有部分消息组成员时保留原 ordinal／size，不重编号或从 size 推断工具数量。单个超预算 Item 明确截断并保留既有详情入口，不拆伪 Item 或增加 Part 续页。
 
 ### Requirement: Item 附近窗口由原历史快照完成定位
 
@@ -684,3 +713,73 @@ item_ids 回补 SHALL 显式限定一个 Turn 或 execution，最多四个不重
 #### Scenario: 定位长内部 execution 的中间成员
 - **WHEN** Item 位于一个超过单页上限的内部 execution 中间
 - **THEN** 原入口直接返回包含目标的受限窗口和前后继续访问能力，不从尾部反复翻页直到命中
+
+### Requirement: 工具历史保留声明关系和可持久执行摘要
+
+历史与实时 SHALL 分开表达声明来源、结果事实和执行证据。同一原模型消息的调用各为独立 Item，公开 source.message_group 镜像原 message_group_id、ordinal、size；有组时字段完整且 0≤ordinal<size，没有显式组时缺省／null，不以协议默认零值造组。同批由完整 owner、ModelCall 和原消息组共同确认；同一 ModelCall 的不同消息、同一活动组或同一执行流不等于同批。组 ordinal 覆盖文本、思考等全部成员，只保持组内调用的相对声明顺序，不是全局排序或执行顺序。
+
+原执行 owner SHALL 在 invocation 开始和真实返回／异常／确认取消边界冻结观察，沿原 ToolStarted／ToolResultCompletion→commit_tool_result→typed manifest／SQLite 链路持久交付可空 tool_execution 安全摘要，包含原 scoped invocation／attempt／execution 身份、真实历史 session/thread、turn_stream_id、状态／outcome、started_seq、可得 started_at 与 execution_completed_at。当前一个 scoped call 一个 attempt，不新增 attempts 数组、批次表、执行日志、计时服务或逐调用查询。completed_at／completed_seq 保留镜像发布时间／序号含义，不能冒充实际结束；事件消费、提交锁、批量 gather 或结果发布延迟不能延长真实区间。缺原证据明确不可得，不凭 call completed、结果存在、取消请求或恢复清理时间补造结束；存储失败沿原错误合同暴露。
+
+原结果 payload.tool_outcome SHALL 独立经 typed manifest、SQLite 和公共 Item 投影返回，null 与已记录 unknown 分开；它不依赖完整执行时序，不从 completed 推断成功。call 只从同 view 可见、精确关联的结果取得派生摘要，不回写不可变 call canonical；result 保留自己的 Item／原消息来源，不复制 call 的声明组。配对核完整 owner、声明 ModelCall、真实 scoped tool_call_id 及已知 invocation／attempt，不用工具名、到达顺序、Provider 索引或最近候选猜配。模型回退的新 ModelCall 不覆盖旧调用。
+
+默认 tool_summary、activity_outline 及 internal 摘要 SHALL 沿原 snapshot 批量关联本页所需的轻量声明／结果／执行证据，保留 read fence、目标 view 的成员可见性与历史 scope binding；不先取整轮调用、读取参数／结果正文或扫描 Trace。组末 locator 只定位原消息元数据，不要求组末本身可见才提供选中成员的安全摘要。fork／rewind 读取目标已冻结且可见的证据，不回读来源 Thread；清空实时内存后刷新使用相同语义，不靠终态 snapshot 长期驻留。
+
+只有原执行 owner 确认同一可比较 owner／执行流范围、相同时间依据的两个有限真实区间满足 max(startA,startB)<min(endA,endB)，才能说明这两个 attempt 实际重叠。未闭合、缺时间、时间不可比或取消未确认时不猜并行／串行；半开边界相接不算重叠，两两重叠不传递，也不推断依赖。不同声明组可发生真实重叠但不合批，跨范围不能比较；工具调用区间不代替后台资源生命周期。UI 默认无需并行徽标，解释只消费已加载证据，不新增请求、全历史平方级配对或并行缓存。
+
+#### Scenario: 同批先后执行与完成镜像延迟
+- **WHEN** 原消息声明 A、B，A 已真实结束但其提交或完成事件延迟，B 随后开始
+- **THEN** 刷新与实时仍按原声明顺序显示 A、B，真实区间不重叠，不因镜像延迟、call completed 或同批声明误标并行／成功
+
+#### Scenario: 不同声明组重叠与反序结果
+- **WHEN** G1 的 A 与 G2 的 B 在同一可比较执行流中真实重叠，且 B 的回执先提交
+- **THEN** 两条调用保留各自声明组和位置，结果按精确调用独立结算；只说明真实 attempt 重叠，不合并 Provider 数组或移动声明行
+
+#### Scenario: 页内只有回执或部分声明
+- **WHEN** 页中仅有 B 或 result，另一个 call／组末不在当前可见范围
+- **THEN** 保留实际 Item 和已知结果，批量关联只取得授权安全证据，不补占位调用、不读取页外正文、不把组 size 当工具数；补入真实 call 后合行仍保留 result 独立定位
+
+#### Scenario: 取消与未知结果不伪造结束
+- **WHEN** 只收到取消请求、进程丢失，或原 owner 确认取消但缺少真实结束观察
+- **THEN** 分别保留已知状态、unknown 或 cancelled 结果，缺少的有限区间保持不可得，不将取消请求或恢复时间当作已停止证据
+
+#### Scenario: 迟到摘要与换 view
+- **WHEN** 同 binding 已知终态与开始边界后收到迟到 running／缺时间摘要，或响应来自旧 view
+- **THEN** 同 attempt 可补缺失真实边界而不倒退终态；旧 binding 不能向新 view 补回已排除结果，清空实时缓存后读取仍取得同样的可见声明与执行事实
+
+### Requirement: 历史失败原因来自原执行终态而不是展示猜测
+
+Turn 历史 summary 与 detail SHALL 以原 rollout convergence 的终态提交为唯一失败来源，failure、execution／Turn 状态和 history revision 在同一原事务提交；消息流仅为传输镜像，不作为历史权威来源。读取 SHALL 沿实际 view／revision 与 terminal execution 的原提交关联定位，精确绑定原 SessionThread、Turn 和执行，不扫描全部 commits 猜最后一次错误。已经接受但尚未产生模型／工具 Item 的失败也必须保留原因。失败 metadata MUST NOT 创建虚构消息、改变 Item 数量或依赖展开详情。仅有状态而没有原因的历史 SHALL 明确表示未记录详情，不猜测工具、Provider 或当前配置原因。读取 MUST NOT 扫描 Trace、日志或全历史进行补写／重建，且须服从原 cursor、字节及延迟预算。
+
+默认紧凑摘要 SHALL 仅为原 failure 的显示投影，不写回 summary／detail、前端缓存或消息流中的失败字段。刷新后 SHALL 仍可沿原按需诊断入口读取／复制已经交付的安全原因及关联，不依赖旧 JS Error／cause、展开 Item 或日志尚未轮转；日志不可用只影响日志导航。原公开预算及截断标记保持，不承诺还原未保存文本，不增加失败详情 API、额外存储／迁移或扫描补读。
+
+#### Scenario: Agent 初始化失败且 Item 为零
+- **WHEN** 用户经真实发送入口接受 Turn 后，Agent 工具选项校验失败
+- **THEN** 实时和刷新后的 summary／detail 均显示原校验原因及真实归属，Item 保持 0，不显示“后端没有提供可用的失败详情”替代已存在原因
+
+#### Scenario: 原历史没有保存原因
+- **WHEN** 原权威记录只有失败／未知状态而没有失败原因
+- **THEN** 页面如实显示该记录未保存详情，不伪造失败来源，不读相邻事件补齐，不阻断其它可读取 Turn
+
+#### Scenario: 分页和详情展开后错误保持一致
+- **WHEN** 用户读取摘要、展开详情、离开后再按同一历史快照定位失败 Turn
+- **THEN** 各入口保留同一已记录原因与归属，正文裁剪不删除失败 metadata，也不把另一个执行的错误附到该 Turn
+
+#### Scenario: 刷新后原日志已经不可用
+- **WHEN** 已保存失败原因的 Turn 先以紧凑摘要展示，刷新后原日志已轮转或离线
+- **THEN** 用户仍可按需读取／复制 summary／detail 中原预算内的安全原因及关联，原 failure 不变，不要求展开 Item、不用旧内存异常或扫描日志重建；日志动作如实表达不可用
+
+### Requirement: attempt 失败不得替代 Turn 的权威结果
+
+模型或工具 attempt 的失败 SHALL 继续保存在原 attempt 明细；只有原 convergence 确认 Turn 失败时才投影 Turn.failure。成功终态 MUST NOT 因较早失败事件而带上整轮 failure。显式恢复产生新 execution 后，旧失败 SHALL 留在原执行终态提交，当前投影按实际历史快照选择 execution，新活动或成功不得继承旧失败。模型回退、工具继续执行及恢复决策 MUST 保持原规则。
+
+#### Scenario: 模型回退成功
+- **WHEN** 模型 A 失败，原回退链选择模型 B 且 Turn 最终成功
+- **THEN** A 的失败可在 attempt 明细中查看，Turn 保持成功且不带 failure，刷新后仍不显示整轮失败
+
+#### Scenario: 工具错误后继续完成
+- **WHEN** 工具返回 isError，Agent 继续执行并成功完成 Turn
+- **THEN** 工具调用保留原错误，summary／detail 不把工具错误投影为 Turn.failure
+
+#### Scenario: 失败执行被显式恢复
+- **WHEN** 失败后按原规则创建新 execution，并分别读取旧历史快照和新活动／成功快照
+- **THEN** 旧快照保留旧 failure，新快照使用实际所选 execution 的结果，不从最近错误事件继承旧 failure

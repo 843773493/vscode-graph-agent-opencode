@@ -93,7 +93,7 @@ async def test_pinned_outbox_recovers_after_channel_epoch_without_discovery(
         assert source.gateway_home is not None
         config_path = source.gateway_home / "config/gateway.jsonc"
         configuration = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        configuration.setdefault("permissions", {}).setdefault("federation", {})["rules"] = [
+        configuration.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {}).setdefault("federation", {})["rules"] = [
             {"capability": "discovery", "effect": "deny"},
         ]
         config_path.write_text(json.dumps(configuration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

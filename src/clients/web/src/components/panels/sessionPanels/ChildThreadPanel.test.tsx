@@ -161,14 +161,14 @@ describe("子会话线程面板", () => {
       user_messages: [{ message_id: "child_user_message", content: "子线程输入", attachments: [], created_at: "2026-09-15T12:00:00Z" }],
       final_response: "最终响应", items: [],
       activity_stats: { duration_ms: 100, item_count: 4 },
-      response_parts: [
-        { part_id: "child_before", kind: "reasoning", projection: "detail", status: "completed",
+      response_items: [
+        { id: "child_before", kind: "reasoning", projection: "detail", status: "completed",
           source: { message_sequence: 1, item_id: "child_item_before", logical_item_ordinal: 1 }, text: "压缩前思考" },
-        { part_id: "child_summary", kind: "compaction_summary", projection: "detail", status: "completed",
+        { id: "child_summary", kind: "compaction_summary", projection: "detail", status: "completed",
           source: { message_sequence: 2, item_id: "child_item_summary", logical_item_ordinal: 2 }, text: "压缩摘要" },
-        { part_id: "child_after", kind: "reasoning", projection: "detail", status: "completed",
+        { id: "child_after", kind: "reasoning", projection: "detail", status: "completed",
           source: { message_sequence: 3, item_id: "child_item_after", logical_item_ordinal: 3 }, text: "压缩后思考" },
-        { part_id: "child_final", kind: "final_text", projection: "detail", status: "completed", final: true,
+        { id: "child_final", kind: "final_text", projection: "detail", status: "completed", final: true,
           source: { message_sequence: 4, item_id: "child_item_final", logical_item_ordinal: 4 }, text: "最终响应" },
       ],
     };
@@ -207,7 +207,7 @@ describe("子会话线程面板", () => {
     const sources = () => renderer!.root.findAll((node) =>
       typeof node.type === "string" && typeof node.props["data-response-sources"] === "string",
     ).flatMap((node) => JSON.parse(node.props["data-response-sources"]));
-    const expected = turn.response_parts!.map(({ part_id, kind, source }) => ({ part_id, kind, source }));
+    const expected = turn.response_items!.map(({ id, kind, source }) => ({ id, kind, source }));
     expect(sources()).toEqual([expected[1], expected[3]]);
     act(() => { forkAt("child_item_final"); });
     expect(clicks).toEqual([{ threadId: selected.thread_id, point: {

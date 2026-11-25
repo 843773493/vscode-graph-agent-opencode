@@ -31,7 +31,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.mapping.agent_state_messages import message_to_agent_state_record
 from app.services.mapping.message_content import is_user_visible_message
 from tests.support.message_service import build_message_service
-from tests.support.messages import compaction_summary_message
 
 MESSAGE_TIME = "2026-07-14T00:00:00+00:00"
 
@@ -147,16 +146,6 @@ async def _put_checkpoint(
             "updated_channels": list(checkpoint["updated_channels"]),
         }
         partial_versions = dict(versions)
-        if "_summarization_event" in partial["channel_values"]:
-            # 各真实 Human root 的中间投影不应提前消费只属于完整冻结消息快照的压缩事件。
-            partial["channel_values"].pop("_summarization_event")
-            partial["channel_versions"].pop("_summarization_event", None)
-            partial_versions.pop("_summarization_event", None)
-            partial["updated_channels"] = [
-                channel
-                for channel in partial["updated_channels"]
-                if channel != "_summarization_event"
-            ]
         with execution_admission_scope(admission, langgraph_thread_id=thread_id):
             await saver.aput(config, partial, metadata, partial_versions)
     assert admission is not None, "checkpoint fixture 必须含真实输入根"
@@ -680,149 +669,6 @@ async def test_message_service_restores_identity_from_rollout_index(
     assert len(messages.items) == 1
     assert messages.items[0].message_id.startswith("generated-")
     assert messages.items[0].created_at.tzinfo is not None
-
-
-@pytest.mark.asyncio
-async def test_agent_context_state_applies_summarization_event(
-    tmp_path,
-    session_bundle_factory,
-):
-    saver = _build_message_checkpoint_saver(
-        tmp_path, session_bundle_factory, "ses_019bab7eeedc7a5f83bddb61e54d8a28"
-    )
-    thread_id = get_session_path_resolver(tmp_path).main_thread_id(
-        "ses_019bab7eeedc7a5f83bddb61e54d8a28"
-    )
-    config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-    checkpoint = {
-        "channel_values": {
-            "messages": [
-                HumanMessage(content="旧问题", id="summary-old-user"),
-                AIMessage(content="旧回答", id="summary-old-answer"),
-                HumanMessage(content="保留问题", id="summary-kept-user"),
-                AIMessage(content="保留回答", id="summary-kept-answer"),
-            ],
-            "_summarization_event": {
-                "cutoff_index": 2,
-                "summary_message": compaction_summary_message(
-                    content="旧上下文摘要",
-                    id="summary-old-context",
-                    additional_kwargs={"lc_source": "summarization"},
-                ),
-            },
-        },
-        "channel_versions": {"messages": "1", "_summarization_event": "1"},
-        "updated_channels": ["_summarization_event"],
-        "id": "ckpt-compacted",
-    }
-    with session_thread_owner_scope(
-        MutationIntentOwner(
-            session_id="ses_019bab7eeedc7a5f83bddb61e54d8a28",
-            thread_id=thread_id,
-        ),
-        langgraph_thread_id=thread_id,
-    ):
-        await _put_checkpoint(
-            saver,
-            "ses_019bab7eeedc7a5f83bddb61e54d8a28",
-            config,
-            checkpoint,
-            {"source": "test", "step": 1, "writes": {}},
-            {"messages": "1", "_summarization_event": "1"},
-        )
-
-    state = await build_message_service(
-        tmp_path, checkpointer=saver
-    ).get_agent_context_state(
-        "ses_019bab7eeedc7a5f83bddb61e54d8a28",
-        thread_id,
-    )
-
-    assert state["checkpoint_id"] == "ckpt-compacted"
-    assert state["raw_message_count"] == 4
-    assert state["compacted"] is True
-    assert state["compaction_cutoff"] == 2
-    assert "history_file_path" not in state
-    assert [record["content"] for record in state["records"]] == [
-        checkpoint["channel_values"]["_summarization_event"]["summary_message"].content,
-        "保留问题",
-        "保留回答",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_agent_context_state_applies_cache_preserving_event(
-    tmp_path,
-    session_bundle_factory,
-):
-    saver = _build_message_checkpoint_saver(
-        tmp_path,
-        session_bundle_factory,
-        "ses_019bd626995878aa855827ea5ee075e3",
-    )
-    thread_id = get_session_path_resolver(tmp_path).main_thread_id(
-        "ses_019bd626995878aa855827ea5ee075e3"
-    )
-    config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-    prefix = [
-        HumanMessage(content="稳定问题", id="cache-prefix-user"),
-        AIMessage(content="稳定回答", id="cache-prefix-answer"),
-    ]
-    messages = [
-        *prefix,
-        HumanMessage(content="被压缩问题", id="cache-summarized-user"),
-        AIMessage(content="被压缩回答", id="cache-summarized-answer"),
-        HumanMessage(content="近期问题", id="cache-recent-user"),
-    ]
-    checkpoint = {
-        "channel_values": {
-            "messages": messages,
-            "_summarization_event": {
-                "strategy": "cache_preserving",
-                "cutoff_index": 4,
-                "cache_prefix_messages": prefix,
-                "summary_message": compaction_summary_message(
-                    content="中段上下文摘要",
-                    id="summary-cache-preserving-context",
-                    additional_kwargs={"lc_source": "summarization"},
-                ),
-            },
-        },
-        "channel_versions": {"messages": "1", "_summarization_event": "1"},
-        "updated_channels": ["_summarization_event"],
-        "id": "ckpt-cache-compacted",
-    }
-    with session_thread_owner_scope(
-        MutationIntentOwner(
-            session_id="ses_019bd626995878aa855827ea5ee075e3",
-            thread_id=thread_id,
-        ),
-        langgraph_thread_id=thread_id,
-    ):
-        await _put_checkpoint(
-            saver,
-            "ses_019bd626995878aa855827ea5ee075e3",
-            config,
-            checkpoint,
-            {"source": "test", "step": 1, "writes": {}},
-            {"messages": "1", "_summarization_event": "1"},
-        )
-
-    state = await build_message_service(
-        tmp_path, checkpointer=saver
-    ).get_agent_context_state(
-        "ses_019bd626995878aa855827ea5ee075e3",
-        thread_id,
-    )
-
-    assert state["compacted"] is True
-    assert state["compaction_cutoff"] == 4
-    assert [record["content"] for record in state["records"]] == [
-        "稳定问题",
-        "稳定回答",
-        checkpoint["channel_values"]["_summarization_event"]["summary_message"].content,
-        "近期问题",
-    ]
 
 
 @pytest.mark.asyncio

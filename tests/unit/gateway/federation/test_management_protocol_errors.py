@@ -13,6 +13,7 @@ import pytest
 
 from app.gateway.credentials import FederationCredential
 from app.gateway.federation import (
+    FEDERATION_PROTOCOL_VERSION,
     discover_remote_gateway,
     request_remote_gateway_management,
 )
@@ -55,12 +56,14 @@ def invoke_remote(
                 return httpx.Response(remote_reply.status, content=remote_reply.content)
             return httpx.Response(remote_reply.status, json=remote_reply.payload)
         return httpx.Response(200, json={"data": {
-            "protocol_version": 1, "gateway_id": "gateway_remote", "items": [],
+            "protocol_version": FEDERATION_PROTOCOL_VERSION, "gateway_id": "gateway_remote", "items": [],
         }})
 
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **options: client_class(
-        **options, transport=httpx.MockTransport(respond), trust_env=False,
-    ))
+    def client(**options):
+        assert options["trust_env"] is False, "联邦管理控制通道不能读取外部代理环境"
+        return client_class(**options, transport=httpx.MockTransport(respond))
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
     if entry == "management":
         return lambda: request_remote_gateway_management(
             gateway_url="http://127.0.0.1:41000", credential=credential, method="GET",
@@ -106,7 +109,7 @@ async def test_http_rejection_keeps_original_status_and_response(
         await invoke_remote()
     assert caught.value.response.status_code == 409
     assert caught.value.response.json() == remote_reply.payload
-    assert not caplog.records
+    assert not [record for record in caplog.records if record.name == "app.gateway.federation"]
 
 
 async def test_invalid_json_keeps_existing_decoder_error(
@@ -122,10 +125,10 @@ async def test_valid_payload_keeps_original_content(
     invoke_remote: Callable[[], Awaitable[object]], remote_reply: RemoteReply,
     entry: str, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    data = {"protocol_version": 1, "gateway_id": "gateway_remote", "items": [], "tail": "\n".join(NATIVE_PATHS)}
+    data = {"protocol_version": FEDERATION_PROTOCOL_VERSION, "gateway_id": "gateway_remote", "items": [], "tail": "\n".join(NATIVE_PATHS)}
     remote_reply.payload = {"data": data}
     result = await invoke_remote()
     assert result == (data if entry == "management" else (data if entry == "manifest" else {
-        "protocol_version": 1, "gateway_id": "gateway_remote", "items": [],
+        "protocol_version": FEDERATION_PROTOCOL_VERSION, "gateway_id": "gateway_remote", "items": [],
     }, []))
-    assert not caplog.records
+    assert not [record for record in caplog.records if record.name == "app.gateway.federation"]

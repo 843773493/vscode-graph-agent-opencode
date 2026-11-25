@@ -156,7 +156,12 @@ async def test_auto_title_io_failure_preserves_execution_and_original_diagnostic
         "phase": "session_auto_title",
     }
     assert str(missing) in caplog.text
-    assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
+    diagnostic, = [record for record in caplog.records if record.name == "app.core.failures"]
+    assert diagnostic.exc_info is None
+    assert f"FileNotFoundError: {error}" in diagnostic.getMessage()
+    assert "job_execution_service.py" in diagnostic.getMessage()
+    assert "test_auto_title_io_failure_preserves_execution_and_original_diagnostic" in diagnostic.getMessage()
+    assert error is raised.value and str(error.filename) == str(missing)
     if sink_fails:
         assert len(diagnostic_sink.errors) == 1
         assert any(str(diagnostic_sink.errors[0]) in note for note in error.__notes__)

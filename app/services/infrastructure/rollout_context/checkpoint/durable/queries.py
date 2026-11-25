@@ -42,7 +42,7 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
-from app.services.mapping.itemized.carrier_dedup import superseded_item_ids
+from app.services.mapping.itemized.carrier_dedup import select_item_carriers
 
 if TYPE_CHECKING:
     from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
@@ -300,7 +300,7 @@ class RolloutCheckpointQueriesMixin:
             snapshot.session_id, snapshot.thread_id, checkpoint_ns=snapshot.checkpoint_ns,
             item_ids=selected_ids, snapshot=snapshot,
         )}
-        return tuple(by_id[item_id] for item_id in selected_ids)
+        return select_item_carriers(tuple(by_id[item_id] for item_id in selected_ids))
 
     def precompaction_context_items(
         self, snapshot: RolloutReadSnapshot,
@@ -393,7 +393,7 @@ class RolloutCheckpointQueriesMixin:
     ) -> list[int]:
         """执行状态、闭合校验与计划选择共用同一 typed carrier selection。"""
         view_id = self.active_view_id(snapshot)
-        selected = {item.item_id for item in items} - superseded_item_ids(items)
+        selected = {item.item_id for item in items}
         rows = snapshot.connection.execute(
             "SELECT member.item_id, message.message_sequence "
             "FROM context_view_items AS member "

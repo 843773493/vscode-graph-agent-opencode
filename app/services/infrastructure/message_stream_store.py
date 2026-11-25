@@ -9,7 +9,7 @@ import sys
 import zlib
 from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,6 +30,7 @@ from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     ExecutionTerminalResult,
 )
+from app.domain.itemized.identity.item_projection import ToolExecutionEvidence
 from app.domain.message_stream.errors import MessageStreamError
 from app.domain.message_stream.projection import (
     apply_event,
@@ -1711,6 +1712,10 @@ class MessageStreamStore:
                     tool_attempt_id=attempt.get("tool_attempt_id"),
                     tool_name=attempt.get("tool_name"), content=RECOVERED_TOOL_RESULT_UNKNOWN,
                     tool_outcome="unknown",
+                    tool_execution=replace(
+                        ToolExecutionEvidence.from_started_snapshot(state, attempt),
+                        status="failed", outcome="outcome_unknown",
+                    ),
                 )
                 if completion.tool_attempt_id != attempt.get("tool_execution_id"):
                     raise MessageStreamError("工具恢复的 execution/attempt 身份不一致")
@@ -1726,8 +1731,11 @@ class MessageStreamStore:
                     else "success" if outcome == "success"
                     else "provider_error"
                 )
+                evidence = item.tool_execution
                 await self.commit(
                     stream_id, "tool.completed", {
+                        **({"execution_completed_at": evidence.execution_completed_at}
+                           if evidence is not None else {}),
                         "tool_execution_id": completion.tool_attempt_id,
                         "tool_call_id": completion.tool_call_id,
                         "tool_invocation_id": completion.tool_invocation_id,
@@ -1857,6 +1865,8 @@ class MessageStreamStore:
         """返回已校验保留窗口中的事件；仅复制本页正文，不重扫磁盘历史。"""
         # 原 Turn 锁覆盖选页、正文复制及取消结算，不与裁剪或后续追加交错。
         async with self._lock_for(turn_stream_id):
+            if turn_stream_id not in self._states:
+                await self._load_state_from_disk(session_id, turn_stream_id)
             state = self._cached_state(turn_stream_id)
             if state["session_id"] != session_id:
                 raise MessageStreamError(f"消息流关联键不匹配: session_id={session_id} turn_stream_id={turn_stream_id}")

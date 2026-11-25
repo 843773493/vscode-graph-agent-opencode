@@ -13,13 +13,13 @@ from app.agents.policy.tool_capability import ToolCapabilityPolicy, ToolMetadata
 from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.failures import mark_public_failure
-from app.core.model_request_context import SummaryCandidateScope
 from app.core.resource_uri import parse_attachment_uri, parse_message_attachment_uri
 from app.core.sqlite_state import utc_now_text
 from app.core.trace_middleware import get_current_gateway_id
 from app.domain.context_compaction import ModelCapacity
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
+from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.identity.item_projection import ItemProjectionManifest
 from app.domain.itemized.identity.refs import ContextRef
@@ -45,8 +45,11 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.metadata impor
     canonical_message_anchor,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.preparation import (
-    prepare_registered_context,
+    PreparedProviderContext,
+    ProviderPreparationConflict,
+    freeze_registered_context,
     prepared_context_plan_id,
+    seal_prepared_context,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
@@ -155,7 +158,7 @@ class ContextDispatchOwnerMixin:
         with self._storage.storage._connect(
             thread_id, checkpoint_ns, session_id=session_id, read_only=True,
         ) as connection:
-            self._storage.storage._require_v2_runtime(connection)
+            self._storage.storage._require_current_rollout_format(connection)
             # 分别使用调用 ID / model-call 索引定位候选；用 OR 合并会遍历全部 assistant 历史。
             # 这里只缩小候选集合，下方仍逐条核对 canonical typed provenance 与 scope。
             call_rows = connection.execute(
@@ -208,11 +211,12 @@ class ContextDispatchOwnerMixin:
     def find_sealed_context_for_provider_creation(
         self, session_id: str, thread_id: str, *,
         plan_creation_idempotency_key: str, checkpoint_ns: str = "",
+        plan_id: str | None = None,
     ) -> ContextPlanRegistration | None:
         """按唯一 plan key 完整冷恢复；将核验结果交给本次派发继续消费。"""
 
         checkpoint_ns = self.context_owner_namespace(checkpoint_ns)
-        plan_id = prepared_context_plan_id(plan_creation_idempotency_key)
+        plan_id = plan_id if plan_id is not None else prepared_context_plan_id(plan_creation_idempotency_key)
         with self._lock, self._storage.storage.open_read_snapshot(
             session_id, thread_id, checkpoint_ns,
         ) as read_snapshot:
@@ -248,8 +252,8 @@ class ContextDispatchOwnerMixin:
         plan_creation_idempotency_key: str,
         seal_idempotency_key: str,
         request_messages: Sequence[BaseMessage] = (),
-        context_source_manager: ContextSourceManager,
-        tool_set_supplier: Callable[[], ToolSetSnapshot],
+        context_source_manager: ContextSourceManager | None = None,
+        tool_set_supplier: Callable[[], ToolSetSnapshot] | None = None,
         extension_policy_resolver: Callable[[Sequence[ToolMetadata]], Mapping[str, ToolCapabilityPolicy]] | None = None,
         provider_version: str,
         wire_profile: ChatWireProfile | ResponsesWireProfile,
@@ -259,7 +263,9 @@ class ContextDispatchOwnerMixin:
         model_call_id: str,
         callback_model_call_id: str | None = None,
         activation_snapshot: ResourceActivationSnapshotRef,
-        summary_candidate: SummaryCandidateScope | None = None,
+        frozen_plan: ContextRequestPlan | None = None,
+        context_preparation: ContextSealPreparation | None = None,
+        request_only_content: Mapping[str, object] | None = None,
         sealed_context: ContextPlanRegistration | None = None,
         allow_provider_reprojection: bool = False,
         source_message_grouping: Literal["aggregate", "separate"] = "aggregate",
@@ -275,8 +281,7 @@ class ContextDispatchOwnerMixin:
             self._storage.storage._path_resolver.thread_resolution_scope(),
             self._storage.storage.catalog_body_validation_scope(),
         ):
-            prepared = prepare_registered_context(
-                self,
+            context = self.freeze_context_for_provider(
                 session_id,
                 thread_id,
                 turn_id=turn_id,
@@ -293,31 +298,62 @@ class ContextDispatchOwnerMixin:
                 target_format=target_format,
                 model_call_id=model_call_id, activation_snapshot=activation_snapshot,
                 checkpoint_ns=self.context_owner_namespace(checkpoint_ns),
-                summary_candidate=summary_candidate,
+                frozen_plan=frozen_plan, context_preparation=context_preparation,
+                request_only_content=request_only_content,
                 sealed_context=sealed_context,
                 allow_provider_reprojection=allow_provider_reprojection,
                 source_message_grouping=source_message_grouping,
                 model_capacity=model_capacity,
             )
-            snapshot = prepared["snapshot"]
-            if not isinstance(snapshot, ContextAssemblySnapshot):
-                raise TypeError("sealed-assembly binding violation: Saver prepare 缺少 snapshot")
-            reference = self.issue_context_dispatch_ref(
-                snapshot, checkpoint_ns=checkpoint_ns,
-                attempt_key=snapshot.plan_id,
-                callback_model_call_id=callback_model_call_id if callback_model_call_id is not None else model_call_id,
+            return self.seal_context_for_provider(
+                context, callback_model_call_id=callback_model_call_id,
+                checkpoint_ns=checkpoint_ns,
             )
-            prepared["dispatch_ref"] = reference
-            with self._lock:
-                key = (session_id, thread_id, self.context_owner_namespace(checkpoint_ns), execution_id)
-                queue = self._prepared_dispatches.setdefault(key, [])
-                existing = [item for item in queue if isinstance(stored := item.get("dispatch_ref"), SealedContextDispatchRef)
-                            and stored.callback_model_call_id == reference.callback_model_call_id]
-                if existing and existing[0]["dispatch_ref"] != reference:
-                    raise ValueError("sealed-assembly binding violation: 同 callback 绑定了不同请求")
-                if not existing:
-                    queue.append(prepared)
-            return cast(ContextDispatchPayload, prepared)
+
+    def freeze_context_for_provider(
+        self, session_id: str, thread_id: str, **options,
+    ) -> PreparedProviderContext | dict[str, object]:
+        """冻结现有组装链；返回前不创建 draft、seal 或消费 pending 来源。"""
+        options["checkpoint_ns"] = self.context_owner_namespace(options.get("checkpoint_ns", ""))
+        with (
+            self._storage.storage._path_resolver.thread_resolution_scope(),
+            self._storage.storage.catalog_body_validation_scope(),
+        ):
+            for attempt in range(2):
+                try:
+                    return freeze_registered_context(self, session_id, thread_id, **options)
+                except ProviderPreparationConflict:
+                    if attempt:
+                        raise
+        raise RuntimeError("provider-preparation-unavailable: 未生成冻结请求")
+
+    def seal_context_for_provider(
+        self, context: PreparedProviderContext | dict[str, object], *,
+        callback_model_call_id: str | None = None, checkpoint_ns: str = "",
+    ) -> ContextDispatchPayload:
+        """封存同一次冻结值并登记唯一 dispatch；重试沿原 sealed receipt。"""
+        prepared = seal_prepared_context(self, context) if isinstance(context, PreparedProviderContext) else context
+        snapshot = prepared["snapshot"]
+        if not isinstance(snapshot, ContextAssemblySnapshot):
+            raise TypeError("sealed-assembly binding violation: Saver prepare 缺少 snapshot")
+        snapshot_namespace = self.context_owner_namespace(checkpoint_ns)
+        reference = self.issue_context_dispatch_ref(
+            snapshot, checkpoint_ns=snapshot_namespace,
+            attempt_key=snapshot.plan_id,
+            callback_model_call_id=callback_model_call_id if callback_model_call_id is not None else snapshot.model_call_id,
+        )
+        prepared["dispatch_ref"] = reference
+        with self._lock:
+            key = (snapshot.session_id, snapshot.thread_id, snapshot_namespace, snapshot.execution_id)
+            queue = self._prepared_dispatches.setdefault(key, [])
+            existing = [item for item in queue if isinstance(stored := item.get("dispatch_ref"), SealedContextDispatchRef)
+                        and stored.callback_model_call_id == reference.callback_model_call_id]
+            if existing and existing[0]["dispatch_ref"] != reference:
+                raise ValueError("sealed-assembly binding violation: 同 callback 绑定了不同请求")
+            if not existing:
+                queue.append(prepared)
+        return cast(ContextDispatchPayload, prepared)
+
 
     def consume_prepared_context_for_dispatch(
         self,

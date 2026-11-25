@@ -107,7 +107,7 @@ def test_long_session_persists_message_deltas_without_snapshot_growth(
     ]
     rollout_bytes = rollout_path.stat().st_size
 
-    assert all(record["format_version"] == 2 for record in records)
+    assert all(record["format_version"] == 3 for record in records)
     assert all(record["record_type"] == "item" for record in records)
     assert all(
         "role" not in record and "message" not in record and "sequence" not in record

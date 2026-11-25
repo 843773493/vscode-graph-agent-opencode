@@ -14,8 +14,8 @@ from app.services.infrastructure.rollout_context.execution.terminal_helpers impo
 from app.services.infrastructure.rollout_context.storage.catalog.history_scope import (
     require_historical_scope,
 )
-from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
-    read_response_outline,
+from app.services.infrastructure.rollout_context.storage.catalog.tool_result_identity import (
+    read_tool_result_summaries,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_helpers import (
     _item_elapsed_ms,
@@ -61,7 +61,7 @@ _COORDINATES_SQL = load_sql(
 
 
 def _response_coordinates(connection: sqlite3.Connection, view_id: str, execution_id: str,
-    snapshot_upper: int, item_ids: tuple[str, ...]) -> dict[str, dict[int, dict[str, object]]]:
+    snapshot_upper: int, item_ids: tuple[str, ...]) -> dict[str, dict[str, object]]:
     """只在 SQLite 派生真实段首与组首，不加载正文、不以当前页首作为身份。"""
     candidates = """WITH page_candidates AS MATERIALIZED (
         SELECT refs.view_id,membership.logical_item_ordinal,item.item_id,item.projection_manifest_json
@@ -76,12 +76,12 @@ def _response_coordinates(connection: sqlite3.Connection, view_id: str, executio
         "view_id":view_id,"execution_id":execution_id,"snapshot_upper":snapshot_upper,
         "coordinate_items":json.dumps(item_ids),
     })
-    result: dict[str, dict[int, dict[str, object]]] = {}
-    for item_id, ordinal, segment, group, group_part, kind in rows:
+    result: dict[str, dict[str, object]] = {}
+    for item_id, segment, group, kind in rows:
         coordinates = {"process_segment_item_id":segment}
         if kind in {"reasoning","reasoning_summary","reasoning_encrypted","tool_call","tool_result"}:
-            coordinates.update(activity_group_item_id=group, activity_group_part_ordinal=group_part)
-        result.setdefault(item_id, {})[ordinal] = coordinates
+            coordinates["activity_group_item_id"] = group
+        result[item_id] = coordinates
     return result
 
 
@@ -467,18 +467,19 @@ class InternalExecutionHistoryMixin:
             for row in selected
         )
         metadata_by_id = {}
-        if outline:
-            for row in selected:
-                metadata = connection.execute(
-                    "SELECT item.semantic_kind,item.payload_kind,item.status,item.created_at,item.projection_manifest_json,"
+        if outline and item_ids:
+            # 页内成员已受256条预算约束；一次批量取安全投影，不逐Item执行同一查询。
+            metadata_by_id = {
+                row[0]: row[1:] for row in connection.execute(
+                    "SELECT item.item_id,item.semantic_kind,item.payload_kind,item.status,item.created_at,item.projection_manifest_json,"
                     "item.tool_call_id,CASE WHEN item.semantic_kind IN ('assistant_output','tool_call') THEN ip.content ELSE '' END, "
-                    "item.message_group_id FROM item_catalog item JOIN item_projections ip ON ip.item_id=item.item_id "
-                    "WHERE item.item_id=?",
-                    (row[1],),
-                ).fetchone()
-                if metadata is None:
-                    raise RuntimeError("internal 活动缺少索引元数据")
-                metadata_by_id[row[1]] = metadata
+                    "item.message_group_id,reasoning.kind FROM item_catalog item JOIN item_projections ip ON ip.item_id=item.item_id "
+                    "LEFT JOIN reasoning_blocks reasoning ON reasoning.item_id=item.item_id "
+                    f"WHERE item.item_id IN ({','.join('?' for _ in item_ids)})", item_ids,
+                )
+            }
+            if len(metadata_by_id) != len(item_ids):
+                raise RuntimeError("internal 活动缺少索引元数据")
         # notice 是独立展示入口，不属于可隐藏的思考／工具正文。
         body_ids = tuple(item_id for item_id in item_ids
             if not outline or metadata_by_id[item_id][0] == "runtime_notice")
@@ -509,22 +510,20 @@ class InternalExecutionHistoryMixin:
                     continue
                 manifest = ItemProjectionManifest.from_dict(json.loads(metadata[4]))
                 identity = manifest.projection_identity
-                kind = "text" if metadata[0] == "assistant_output" else (
-                    "reasoning_summary" if metadata[0] == "reasoning" and metadata[1] == "summary" else
-                    "reasoning_encrypted" if metadata[0] == "reasoning" and metadata[1] in {"opaque", "extension"} else metadata[0])
+                kind = ("content" if manifest.output_block_type is not None else "text") if metadata[0] == "assistant_output" else metadata[0]
+                if metadata[0] == "reasoning":
+                    kind = strict_text(metadata[8], field=f"reasoning_blocks.kind:{row[1]}")
                 common = {"item_id": row[1], "item_sequence": row[0], "logical_item_ordinal": row[7],
-                    "created_at": metadata[3], "status": metadata[2], "model_call_id": identity.model_call_id if identity else None}
-                # 消息身份不代表结构化载体；独立 reasoning 没有 messages 投影行。
-                if metadata[7] is not None or metadata[0] == "assistant_output" and metadata[1] == "structured_content":
-                    outline_parts = read_response_outline(connection, row[1])
-                    members = [{**common, **part} for part in outline_parts]
-                else:
-                    members = [{**common, "kind": kind,
-                        "part_ordinal": identity.block_index if identity and identity.block_index is not None else 0,
-                        "content_block_index": identity.block_index if identity else None,
-                        "tool_call_id": metadata[5], "tool_name": metadata[6] if kind == "tool_call" else None,
-                        "text": metadata[6] if kind == "text" else "", "truncated": False}]
-                activities[row[1]] = {"activity_items": members}
+                    "created_at": metadata[3], "status": metadata[2], "model_call_id": identity.model_call_id if identity else None,
+                    "message_group": {"message_group_id": metadata[7],
+                        "ordinal": manifest.projection_group.ordinal, "size": manifest.projection_group.size}
+                    if manifest.projection_group is not None else None}
+                activities[row[1]] = {"activity_items": [{**common, "kind": kind,
+                    "carrier_type": manifest.output_block_type,
+
+                    "content_block_index": identity.block_index if identity else None,
+                    "tool_call_id": metadata[5], "tool_name": metadata[6] if kind == "tool_call" else None,
+                    "text": metadata[6] if kind == "text" else "", "truncated": False}]}
         coordinates = {}
         for coordinate_execution in dict.fromkeys(row[2] for row in selected):
             coordinates.update(_response_coordinates(connection, view_id, coordinate_execution, snapshot_upper,
@@ -533,6 +532,9 @@ class InternalExecutionHistoryMixin:
             execution_id: read_terminal_result(connection, execution_id=execution_id, turn_id=None)
             for execution_id in dict.fromkeys(row[2] for row in selected)
         }
+        tool_results = read_tool_result_summaries(
+            connection, view_id, tuple(row[1] for row in selected), snapshot_upper=snapshot_upper,
+        )
         entries = tuple(
             InternalExecutionHistoryEntry(
                 execution_id=strict_text(
@@ -553,6 +555,8 @@ class InternalExecutionHistoryMixin:
                 elapsed_ms=0 if row[1] in items_by_id and items_by_id[row[1]].semantic_kind == "runtime_notice" else _item_elapsed_ms(
                     metadata_by_id[row[1]][3] if outline else items_by_id[row[1]].created_at, previous_times[row[1]]),
                 item=items_by_id.get(row[1]), activity=activities.get(row[1]), coordinates=coordinates.get(row[1]),
+                tool_execution=tool_results[row[1]].tool_execution if row[1] in tool_results else None,
+                tool_outcome=tool_results[row[1]].tool_outcome if row[1] in tool_results else None,
             )
             for row in selected
         )

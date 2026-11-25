@@ -75,9 +75,10 @@ def integration_workspace_config_path(
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     # 会话测试的 Gateway 装具登记本组唯一回放 Provider；不解析无关真实密钥。
-    config["llm"]["providers"] = {}
-    config["mcp"] = {"servers": {}}
-    runtime = config.setdefault("runtime", {})
+    workspace_settings = config["settings"]["workspace"]
+    workspace_settings["llm"]["providers"] = {}
+    workspace_settings["mcp"] = {"servers": {}}
+    runtime = workspace_settings.setdefault("runtime", {})
     runtime.setdefault("debug", {}).setdefault("launch_profiles", {})
     runtime.setdefault("gateway", {}).setdefault("connection", {})
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

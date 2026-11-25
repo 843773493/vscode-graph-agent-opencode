@@ -11,6 +11,7 @@ from typing import cast
 
 import pytest
 
+from app.agents.tools.testing import LARGE_TEST_TARGET_VALUE
 from app.core.workspace_identity import read_workspace_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
@@ -61,6 +62,7 @@ async def test_canonical_tool_result_opens_in_original_readonly_editor(
             completed = await asyncio.to_thread(subprocess.run, supervised_command, cwd=context.project_root,
                 env={**os.environ, **temporary, **replay.environment, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
                     "BOXTEAM_SOURCE_INTERACTIONS": json.dumps(interactions), "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
+                    "BOXTEAM_SOURCE_SEARCH_QUERY": LARGE_TEST_TARGET_VALUE,
                     "BOXTEAM_BROWSER_WORKSPACE_ID": workspace_id,
                     "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_BROWSER_SCREENSHOT_PATH": str(context.artifacts_dir / "failure.png")},
                 capture_output=True, text=True, timeout=210, check=False)
@@ -79,6 +81,7 @@ async def test_canonical_tool_result_opens_in_original_readonly_editor(
                     "toolArtifactReopen", "unsupportedSourceRejected", "noExecutionOrFileFallback",
                     "sourceReferenceCopied", "toolReferenceCopied", "fileReferenceCopiedWithoutOpen"):
             assert result[key], key
+        assert result["searchItemLocated"] and result["itemUriLocated"]
         assert result["pageErrors"] == []
     finally:
         await asyncio.to_thread(close_gateway_process, gateway)

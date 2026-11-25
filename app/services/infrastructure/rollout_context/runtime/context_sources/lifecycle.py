@@ -74,6 +74,8 @@ class SourceLifecycleMixin:
             self._persist_control_state(candidate, operation="observe")
             self._sources[state.source_id] = candidate
             self._queue_source(candidate)
+            self._publish_lifecycle_event(source_id=state.source_id, source_kind=state.source_kind,
+                                          kind="reconcile", revision=revision)
 
         def _source_observation_candidate(
             self, state: SourceState, content: str, revision: str,
@@ -284,8 +286,12 @@ class SourceLifecycleMixin:
             # 对齐最新基准并剔除抵消的变化；diff 和控制 CAS 只在本次冻结时生成。
             for source_id in tuple(self._pending):
                 self._queue_source(self._sources[source_id])
+            return self.read_sources()
+
+        def read_sources(self) -> PendingContextSourceBatch:
+            """只读已接受的来源与 pending；预算观察不刷新控制状态或消费队列。"""
             sources = []
-            for state in self._sources.values():
+            for state in tuple(self._sources.values()):
                 revision, content = state.latest_revision, state.latest_content
                 if not state.tracked and state.source_id not in self._pending:
                     # 停止追踪后的自动候选不是有效上下文；后续 ToolSet/root

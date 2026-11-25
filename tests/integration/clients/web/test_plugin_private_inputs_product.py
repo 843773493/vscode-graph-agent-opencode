@@ -120,7 +120,7 @@ async def test_plugin_private_inputs_gateway_and_workspace_product_flow(
     clear_test_provider_api_keys(config)
     ports = integration_ports_for_file(Path(request.node.fspath))
     port = ports.port(20)
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{port}"
+    config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{port}"
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     package_path = context.artifacts_dir / "private-input-probe.zip"
     _write_package(package_path)

@@ -4,7 +4,7 @@ import base64
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.internal_v2.turn import ContextNoticeAnchorDTO, TurnResponsePartDTO
+from app.schemas.internal_v2.turn import ContextNoticeAnchorDTO, TurnResponseItemDTO
 from app.services.infrastructure.rollout_context.checkpoint.reader import (
     ContextChain,
     RolloutContextReader,
@@ -64,7 +64,7 @@ def decode_context_cursor(token: str, snapshot: RolloutReadSnapshot, view_id: st
 def read_notice_parts(reader: RolloutContextReader, snapshot: RolloutReadSnapshot, chain: ContextChain, *,
                       turn_ids: list[str], execution_ids: list[str],
                       cursor: ContextNoticeCursor | None = None,
-                      anchor_context: ContextNoticeAnchorDTO | None = None) -> dict[str, list[TurnResponsePartDTO]]:
+                      anchor_context: ContextNoticeAnchorDTO | None = None) -> dict[str, list[TurnResponseItemDTO]]:
     anchor_context = cursor.anchor_context if cursor else anchor_context
     rows = reader.read_context_notices(snapshot, chain, turn_ids=turn_ids, execution_ids=execution_ids,
         after=(cursor.after_call, cursor.after_plan) if cursor else (0, -1),

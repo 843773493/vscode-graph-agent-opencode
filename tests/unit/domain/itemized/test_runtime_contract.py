@@ -9,7 +9,6 @@ import pytest
 
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.domain.itemized.parts import ContentPart
 from app.domain.itemized.records import ProducerRef
 from app.domain.itemized.runtime import (
     ExecutionRecord,
@@ -290,19 +289,3 @@ def test_provenance_edges_keep_distinct_producer_and_relation_identity(
     assert ProvenanceEdge(**json.loads(canonical_json_bytes(asdict(edge)))) == edge
     with pytest.raises(ItemSchemaError):
         replace(edge, source_ref="")
-
-
-def test_content_part_uses_the_parent_payload_value_for_hash(
-    hash_vectors: dict[str, object],
-) -> None:
-    content = hash_vectors["scenario"]["item"]["payload"]
-    part = ContentPart.create(
-        part_id="part-1",
-        part_ordinal=0,
-        part_semantic_kind="assistant_output",
-        content=content,
-    )
-    assert part.part_ordinal == 0
-    assert ContentPart(**json.loads(canonical_json_bytes(part.to_dict()))) == part
-    with pytest.raises(ItemSchemaError, match="hash"):
-        replace(part, content={"text": "changed"})

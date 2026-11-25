@@ -17,7 +17,7 @@ try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   run.addCleanup('Chromium', () => browser.close());
-  const context = await browser.newContext(); run.addCleanup('BrowserContext', () => context.close());
+  const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] }); run.addCleanup('BrowserContext', () => context.close());
   page = await context.newPage();
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('request', request => {
@@ -173,13 +173,20 @@ try {
   await input.fill('%textrecovery');
   await expect(quick).toContainText('textrecovery B original'); await idle();
   await expect(quick).toContainText('文件搜索失败：');
-  await expect(quick).toContainText('code: owner_http_error'); await expect(quick).toContainText('retryable: true');
+  await expect(quick).not.toContainText('code: owner_http_error');
   await expect(quick).not.toContainText('http_status:');
   await expect.poll(() => receipts('textrecovery').length).toBe(1);
   const failed = receipts('textrecovery')[0], failedBranch = failed.summary.branches.find(state => state.state === 'failed');
   expect(failedBranch.branch.owner).toEqual(a); expect(failedBranch.code).toBe('owner_http_error');
+  expect(failedBranch.retryable).toBe(true);
   expect(failed.summary.branches.find(state => state.branch.owner.workspace_id === b.workspace_id).state).toBe('complete');
-  await expect(quick).toContainText(`request_id: ${failed.requestId}`);
+  await failureRow('文件搜索失败：').hover();
+  await failureRow('文件搜索失败：').getByRole('button', { name: '复制安全诊断', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain(`request_id: ${failed.requestId}`);
+  const copiedDiagnostic = await page.evaluate(() => navigator.clipboard.readText());
+  expect(copiedDiagnostic).toContain('code: owner_http_error');
+  expect(copiedDiagnostic).toContain(failedBranch.message);
+  result.failureDiagnostic = copiedDiagnostic;
   await expect(quick).toContainText(a.workspace_id); result.failedKeepsSibling = true;
   await searchFault(page, 'textrecovery', 'release', ['file']);
   await failureRow('文件搜索失败：').hover();
@@ -205,11 +212,16 @@ try {
   await expect(quick).toContainText('textcancel B original'); await idle();
   await expect(quick).toContainText('文件搜索已取消：');
   await expect(quick).not.toContainText('文件搜索失败：');
-  await expect(quick).toContainText('code: cancelled'); await expect(quick).toContainText('retryable: true');
+  await expect(quick).not.toContainText('code: cancelled');
   await expect.poll(() => receipts('textcancel').length).toBe(1);
   const cancelled = receipts('textcancel')[0];
-  expect(cancelled.summary.branches.find(state => state.branch.owner.workspace_id === a.workspace_id).state).toBe('cancelled');
-  await expect(quick).toContainText(`request_id: ${cancelled.requestId}`); result.cancelledKeepsSibling = true;
+  const cancelledBranch = cancelled.summary.branches.find(state => state.branch.owner.workspace_id === a.workspace_id);
+  expect(cancelledBranch.state).toBe('cancelled'); expect(cancelledBranch.retryable).toBe(true);
+  await failureRow('文件搜索已取消：').hover();
+  await failureRow('文件搜索已取消：').getByRole('button', { name: '复制安全诊断', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain(`request_id: ${cancelled.requestId}`);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('code: cancelled');
+  result.cancelledKeepsSibling = true;
   await searchFault(page, 'textcancel', 'delay', ['file'], [a.workspace_id]);
   await failureRow('文件搜索已取消：').hover();
   await failureRow('文件搜索已取消：').getByRole('button', { name: '重新查询此文件分支', exact: true }).click();

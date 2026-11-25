@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { TraceNavigation } from "../../../hooks/runtime/useTraceNavigation";
@@ -410,7 +411,7 @@ export default function EventQueuePanel({
 
       {historyError ? (
         <div className="panel-feedback" role="alert">
-          <span>{historyError}</span>
+          <span className="failure-summary">{failureSummary(historyError)}</span>
           <button type="button" onClick={onRetryHistory}>{t("inspection.event.retry")}</button>
         </div>
       ) : null}
@@ -484,7 +485,7 @@ function LocatedTrace({ navigation, onClose }: { navigation: TraceNavigation; on
   return <section className="panel-view event-queue-panel" aria-label={t("inspection.event.locatedAria")}>
     <div className="panel-header"><span>Thread Trace · {navigation.match.reference?.event_id}</span>
       <button type="button" onClick={onClose}>{t("inspection.event.closeLocation")}</button></div>
-    {navigation.error ? <div className="empty-state error-state" role="alert">{t("inspection.event.matchFailed", navigation.error)}</div>
+    {navigation.error ? <div className="empty-state error-state failure-summary" role="alert">{failureSummary(t("inspection.event.matchFailed", navigation.error))}</div>
       : location ? <div className="panel-list">
         {source && <section aria-label={t("inspection.event.originalAria")}><p>{t("inspection.match.original", formatNumber(location.reference!.start_codepoint), formatNumber(location.reference!.end_codepoint))}</p>
           <pre>{source.hasBefore ? "…" : ""}{source.before}<mark ref={mark}>{source.match}</mark>{source.after}{source.hasAfter ? "…" : ""}</pre></section>}

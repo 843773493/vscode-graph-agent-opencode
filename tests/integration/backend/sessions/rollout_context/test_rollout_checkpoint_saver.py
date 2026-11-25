@@ -72,6 +72,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
+from configs.installer import install_workspace_configuration
 from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.session_catalog_owner import fixture_catalog_scope
 from tests.support.workspaces import prepare_default_test_workspace
@@ -996,7 +997,7 @@ def test_rollout_preserves_langchain_invalid_tool_calls_field(
         assert assistant_records[1]["payload"]["invalid_tool_calls"][0]["id"] == (
             "call-invalid"
         )
-        assert all(record["format_version"] == 2 for record in records)
+        assert all(record["format_version"] == 3 for record in records)
         assert all(record["record_type"] == "item" for record in records)
         assert all(
             "message" not in record and "role" not in record for record in records
@@ -1139,9 +1140,11 @@ def test_put_repairs_empty_message_channel_version(
 
         restored = saver.get_tuple(build_checkpoint_config(thread_id))
         assert restored is not None
-        assert restored.checkpoint["channel_versions"]["messages"].startswith(
-            "checkpoint:"
-        )
+        version = restored.checkpoint["channel_versions"]["messages"]
+        assert isinstance(version, str)
+        assert int(version.split(".")[0]) == 1
+        assert int(saver.get_next_version(version, None).split(".")[0]) == 2
+        assert [message.id for message in restored.checkpoint["channel_values"]["messages"]] == ["user-empty-version"]
 
 
 async def test_checkpoint_namespace_queries_do_not_cross_match(
@@ -2835,6 +2838,7 @@ def container_workspaces(integration_workspace_root_path: str) -> tuple[Path, Pa
         workspace_root=first / "other-workspace",
         template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
     )
+    install_workspace_configuration(workspace_root=second)
     return first, second
 
 
@@ -3129,8 +3133,9 @@ def test_read_rejects_storage_commit_with_incomplete_item_catalog(
             )
             connection.commit()
 
+        # 全历史提交数量属于显式完整诊断，普通 checkpoint 读取只核末尾边界。
         with pytest.raises(RuntimeError, match="item catalog 数量不一致"):
-            saver.get_tuple(build_checkpoint_config(thread_id))
+            saver._storage.storage.validate_index(SESSION_ID, thread_id)
 
 
 def test_read_rejects_catalog_locator_that_does_not_match_canonical_jsonl(
@@ -3164,7 +3169,7 @@ def test_read_rejects_catalog_locator_that_does_not_match_canonical_jsonl(
             connection.commit()
 
         # 摘要 snapshot 先校验 SQLite locator 边界，无需打开正文才发现少一个字节。
-        with pytest.raises(RuntimeError, match="committed_jsonl_offset.*不一致"):
+        with pytest.raises(RuntimeError, match="database_meta 与 item catalog 末尾边界不一致"):
             saver.get_tuple(build_checkpoint_config(thread_id))
 
 
@@ -3242,11 +3247,11 @@ def test_rollout_schema_exposes_all_authoritative_tables_and_core_constraints(
             "result_message_sequence",
         },
         "reasoning_blocks": {
-            "message_sequence",
-            "content_block_index",
-            "item_index",
+            "item_id",
+            "kind",
             "carrier_type",
-            "provider_id",
+            "reasoning_text",
+            "summary_text",
         },
         "checkpoints": {
             "checkpoint_id",

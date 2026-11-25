@@ -74,7 +74,7 @@ def validate_catalog_read_boundary(
 
 class RolloutCanonicalReadMixin:
     @staticmethod
-    def _read_v2_item_at(
+    def _read_item_at(
         connection: sqlite3.Connection,
         stream: BinaryIO,
         *,
@@ -189,7 +189,7 @@ class RolloutCanonicalReadMixin:
             thread_id=thread_id,
         )
         with jsonl_path.open("rb") as stream:
-            item = self._read_v2_item_at(
+            item = self._read_item_at(
                 connection, stream, sequence=sequence, offset=offset, length=length,
             )
         if item.item_id != item_id:
@@ -221,7 +221,12 @@ def inspect_item_metadata(connection: sqlite3.Connection, view_id: str, *, item_
         "WHERE (item.semantic_kind<>'runtime_notice' OR notice.model_call_id IS NOT NULL) "
         "AND EXISTS(SELECT 1 FROM context_view_items member WHERE member.view_id=? "
         "AND member.item_id=item.item_id AND member.visible=1 "
-        "AND (member.source_kind='canonical' OR (member.source_kind='display_only' AND item.turn_id IS NULL AND execution.execution_origin='internal') OR (item.semantic_kind='runtime_notice' AND notice.model_call_id IS NOT NULL)))",
+        "AND (member.source_kind='canonical' OR (((member.source_kind='display_only' AND item.turn_id IS NULL "
+        "AND execution.execution_origin='internal') OR (item.semantic_kind='runtime_notice' AND notice.model_call_id IS NOT NULL)) "
+        "AND NOT EXISTS (SELECT 1 FROM storage_commits admission "
+        "WHERE admission.commit_kind='execution_admission' AND admission.subject_id=execution.execution_id "
+        "AND admission.idempotency_key='internal-admission:'||execution.admission_idempotency_key "
+        "AND json_extract(admission.metadata_json,'$.request_input.kind')='derived_reference'))))",
         (item_id, message_id, view_id),
     ).fetchone()
     return tuple(row) if row is not None else None

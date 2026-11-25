@@ -90,7 +90,7 @@ def test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body(
     thread_id = storage.storage.main_thread_id(session_id)
     items = storage.storage.read_items(session_id, thread_id)
     assert len([item for item in items if item.semantic_kind == "user_input"]) == 128
-    assert all(item.format_version == 2 for item in items)
+    assert all(item.format_version == 3 for item in items)
     stored_results = [item for item in items if item.semantic_kind == "tool_result"]
     assert len(stored_results) == len(tool_bodies) == 16
     for body in tool_bodies.values():
@@ -136,7 +136,7 @@ def test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body(
 
     monkeypatch.setattr(storage.storage, "_connect", trace_connection)
     source_page = reader.load(session_id, thread_id, TurnHistoryLoadRequest(turn_ids=["deterministic-turn-0002"]))
-    notices = [part for part in source_page.items[0].response_parts if part.kind == "context_notice"]
+    notices = [part for part in source_page.items[0].response_items if part.kind == "context_notice"]
     assert len(notices) == 1 and notices[0].context_content_length > 300_000
     assert notices[0].text == ""
     assert all(source_by_sequence[seq].semantic_kind != "runtime_notice" for seq in accessed)

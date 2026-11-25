@@ -129,7 +129,7 @@ async def _plan_replies(
         assert main.status_code == 200, main.text
         thread_id = main.json()["data"]["thread_id"]
     config = commentjson.loads((node.workspace / ".boxteam/workspace.jsonc").read_text())
-    endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
+    endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
     interactions = [build_cassette(
         asset_id="fork-transfer", model="e2e-stub-model",
         url=endpoint + "/chat/completions",

@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
+from ssl import SSLContext
 from types import SimpleNamespace
 from typing import ClassVar, Self, cast
 
@@ -66,8 +67,10 @@ def federation_client_state(
     state = _FederationClientState(manifest={}, workspaces={}, requests=[])
 
     class FederationClient:
-        def __init__(self, *, timeout: float) -> None:
+        def __init__(self, *, timeout: float, trust_env: bool, verify: object) -> None:
             assert timeout == 10
+            assert trust_env is False
+            assert verify is not None
 
         async def __aenter__(self) -> Self:
             return self
@@ -1265,12 +1268,11 @@ async def test_workspace_dto_exposes_safe_remote_connection_summary(
     if expected_status == "offline":
         assert workspace.services["workspace_api"].error == (
             f"工作区健康检查失败: workspace_id={_WORKSPACE_ID}: stage=workspace_health, error=RuntimeError"
+            f", reason=Workspace 健康响应 backend UUID 不匹配: expected={_WORKSPACE_ID}"
         )
-        assert any(
-            record.exc_info and type(record.exc_info[1]) is RuntimeError
-            and "backend UUID 不匹配: expected=00000000-0000-4000-8000-000000000002" in str(record.exc_info[1])
-            for record in caplog.records
-        )
+        failure_record, = [record for record in caplog.records if record.name == "app.core.failures"]
+        assert f"RuntimeError: Workspace 健康响应 backend UUID 不匹配: expected={_WORKSPACE_ID}" in failure_record.getMessage()
+        assert "validate_workspace_health_identity" in failure_record.getMessage()
         assert f"actual='{health_workspace_id}'" in caplog.text
     [remote_summary] = workspace.remote_gateways
     assert remote_summary.gateway_id == _REMOTE_GATEWAY_ID
@@ -1583,11 +1585,12 @@ async def test_remote_restart_is_delegated_with_request_id(
         projections=tuple(projections), activate=True,
     )
     captured: dict[str, object] = {}
-    client_options: list[tuple[int, bool | None]] = []
+    client_options: list[tuple[int, bool]] = []
 
     class RemoteRestartClient:
-        def __init__(self, *, timeout: int, trust_env: bool | None = None) -> None:
-            assert timeout in {2, 40}
+        def __init__(self, *, timeout: int, trust_env: bool, verify: SSLContext) -> None:
+            assert timeout == 40
+            assert isinstance(verify, SSLContext)
             client_options.append((timeout, trust_env))
 
         async def __aenter__(self) -> Self:
@@ -1644,7 +1647,7 @@ async def test_remote_restart_is_delegated_with_request_id(
                 expected_workspace_ids=workspace_ids, desired_workspace_ids=workspace_ids,
             ),
         )
-        assert (2, False) in client_options
+        assert client_options == [(40, False)]
         assert (result.gateway_id, result.workspace_id) == (_REMOTE_GATEWAY_ID, _WORKSPACE_ID)
         assert result.status == status
         assert result.backend_generation == generation

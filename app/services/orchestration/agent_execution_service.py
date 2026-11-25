@@ -21,6 +21,7 @@ from app.agents.checkpoint_recovery import (
     persisted_pending_tool_candidate,
 )
 from app.agents.graph_binding import (
+    GraphBinding,
     GraphBindingOwnerKey,
     GraphBindingStorePort,
     resolve_graph_binding,
@@ -185,6 +186,8 @@ class AgentExecutionService(JobStepExecutor):
             session_id, thread_id, items,
         )
         self._background_mailbox.acknowledge_tool_results(session_id, thread_id, items)
+        if any(item.status == "completed" for item in items):
+            self._dependency_provider.get_summarization_compactor().observe_committed(MutationIntentOwner(session_id, thread_id))
 
     def _resolve_control_inbox_state_path(
         self, session_id: str, turn_stream_id: str
@@ -206,6 +209,7 @@ class AgentExecutionService(JobStepExecutor):
         *,
         session_id: str,
         thread_id: str,
+        graph_binding: GraphBinding,
         agent_id: str,
         execution_overrides: Mapping[str, bool],
         model_visibility_overrides: Mapping[str, bool],
@@ -240,7 +244,7 @@ class AgentExecutionService(JobStepExecutor):
             workspace_file_resource_registry=self._workspace_file_resource_registry,
             reactor_lifetime_scope=lifetime_scope,
             skill_catalog=skill_catalog,
-            graph_binding_store=self._graph_binding_store,
+            graph_binding=graph_binding,
             workspace_root=self._workspace_root,
             include_team_tools=include_team_tools,
         )
@@ -258,7 +262,8 @@ class AgentExecutionService(JobStepExecutor):
         """只有真实准入可物化 runtime；代 key 与 builder 均不保留该 admission。"""
         self._check_owner_open()
         pair = MutationIntentOwner(admission.session_id, admission.thread_id)
-        binding = resolve_graph_binding(
+        binding = await asyncio.to_thread(
+            resolve_graph_binding,
             store=self._graph_binding_store,
             owner=GraphBindingOwnerKey(pair.session_id, pair.thread_id),
         )
@@ -269,9 +274,7 @@ class AgentExecutionService(JobStepExecutor):
                 agent_id, preferred_model
             )
             runtime_providers = self._config_service.get_agent_runtime_config(agent_id, preferred_model=selected_model)["models"]
-            credentials = await self._config_service.prepare_llm_credentials(runtime_providers) if any(
-                str(provider.get("api_key", "")).startswith("secret:") for provider in runtime_providers
-            ) else {}
+            credentials = await self._config_service.prepare_llm_credentials(runtime_providers)
         mcp_owner = self._dependency_provider.get_mcp_catalog_owner()
         publication = mcp_owner.publication_snapshot()
         mcp_tools = tuple(publication.tools.values())
@@ -284,6 +287,7 @@ class AgentExecutionService(JobStepExecutor):
         generation_key = (
             binding.selector_fields(),
             snapshot.revision,
+            snapshot.network_revision,
             tuple(sorted((key, value.revision) for key, value in credentials.items())),
             agent_id,
             # MCP target 的开关由 dispatch 读取，固定信封不因此重新编译。
@@ -332,6 +336,7 @@ class AgentExecutionService(JobStepExecutor):
                     agent = self._assemble_agent(
                         session_id=session_id,
                         thread_id=thread_id,
+                        graph_binding=binding,
                         agent_id=agent_id,
                         execution_overrides=execution_overrides,
                         model_visibility_overrides=model_visibility_overrides,
@@ -347,6 +352,9 @@ class AgentExecutionService(JobStepExecutor):
                     return StepAgentRuntime(cast(AgentEventSource, agent), resource_activation), skill_catalog, resource_registry
 
             runtime, skill_catalog, resource_registry = await asyncio.to_thread(compile_agent)
+            self._dependency_provider.get_summarization_compactor().bind_observation(
+                MutationIntentOwner(session_id, thread_id), scope,
+            )
             start_workspace_skill_catalog_publication(
                 skill_catalog, registry=resource_registry,
                 file_registry=file_registry,

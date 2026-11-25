@@ -14,7 +14,6 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     BaseMessage,
-    HumanMessage,
     ToolMessage,
 )
 from langgraph.types import Command
@@ -22,10 +21,6 @@ from langgraph.types import Command
 from app.agents import model_call_execution
 from app.agents.model_call_execution import ModelCallExecution
 from app.core.identifier import uuid7_datetime_from_hex
-from app.core.model_request_context import (
-    SummaryCandidateScope,
-    summary_candidate_scope,
-)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -277,9 +272,8 @@ async def test_failed_connection_qualification_prevents_model_sending(bridge, re
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["sync", "async"])
-@pytest.mark.parametrize("summary", [False, True])
 async def test_request_tool_result_phase_precedes_preparation(
-    bridge, response_dispatch, monkeypatch, mode, summary,
+    bridge, response_dispatch, monkeypatch, mode,
 ):
     model_call_id, _dispatch = response_dispatch
     call = {"id": "call-queued", "name": "read_file", "args": {"path": "README.md"}}
@@ -287,8 +281,7 @@ async def test_request_tool_result_phase_precedes_preparation(
         AIMessage(content="", id=f"lc_run--{model_call_id}", tool_calls=[call]),
         ToolMessage(content="真实 README", tool_call_id=call["id"]),
     ]
-    request = ModelRequest(model=MagicMock(), messages=[HumanMessage(content="仅摘要早期历史")] if summary else messages)
-    candidate = SummaryCandidateScope(0, "initial", True, False, canonical_messages=tuple(messages))
+    request = ModelRequest(model=MagicMock(), messages=messages)
     observed = []
     phases = []
     sync_projection = bridge._prepare_projection.return_value
@@ -323,15 +316,14 @@ async def test_request_tool_result_phase_precedes_preparation(
         model_call_execution, "get_current_model_delta_sink",
         lambda: SimpleNamespace(complete_tool_from_message=reconcile),
     )
-    with summary_candidate_scope(candidate) if summary else nullcontext():
-        if mode == "sync":
-            bridge.execute(request)
-            assert phases == ["observe", "prepare"]
-            reconcile.assert_not_awaited()
-        else:
-            await bridge.aexecute(request)
-            reconcile.assert_awaited_once_with(messages[1], model_call_id=model_call_id)
-            assert phases == ["observe", "reconcile", "prepare"]
+    if mode == "sync":
+        bridge.execute(request)
+        assert phases == ["observe", "prepare"]
+        reconcile.assert_not_awaited()
+    else:
+        await bridge.aexecute(request)
+        reconcile.assert_awaited_once_with(messages[1], model_call_id=model_call_id)
+        assert phases == ["observe", "reconcile", "prepare"]
     assert observed == [(f"{model_call_id}:tool-call:call-queued", "canonical.tool_result.before_commit")]
     assert LangChainMessageCodec().tool_result_call_ids([
         messages[0], messages[1],
@@ -428,9 +420,11 @@ async def test_request_preparation_failure_preserves_reconciled_tool_completion(
         return {"type": event_type, "payload": payload, "kwargs": kwargs}
 
     writer.commit = AsyncMock(side_effect=commit)
-    tool_result_sink = AsyncMock(
-        side_effect=lambda _completion: events.append("tool_result_sink")
-    )
+    def commit_result(completion):
+        events.append("tool_result_sink")
+        return SimpleNamespace(tool_execution=completion.tool_execution)
+
+    tool_result_sink = AsyncMock(side_effect=commit_result)
     runtime = MessageStreamRuntime(
         writer,
         canonical_item_sink=AsyncMock(),
@@ -574,7 +568,7 @@ def preparation_bridge(bridge):
     bridge._frozen_preparation = MagicMock(return_value=(None, frozen))
     bridge._resource_activation = SimpleNamespace(capture_model_call=AsyncMock(return_value=frozen), commit_model_call=AsyncMock(return_value=frozen))
     bridge._checkpointer = SimpleNamespace(prepare_model_call_boundary=MagicMock(return_value=(None, None)))
-    bridge._complete_preparation = MagicMock(side_effect=lambda *_args: _args[-1])
+    bridge._complete_preparation = MagicMock(side_effect=lambda *_args, **_kwargs: _args[-1])
     return bridge
 
 

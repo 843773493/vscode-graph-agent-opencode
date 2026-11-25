@@ -300,7 +300,7 @@ class HistoryCursorMixin:
             "item_sequence" in cursor_payload
             or "item_read_upper_bound" in cursor_payload
         ):
-            raise InvalidTurnCursorError("v2 历史游标不得使用物理 item sequence 坐标")
+            raise InvalidTurnCursorError("v3 历史游标不得使用物理 item sequence 坐标")
         if (
             cursor_payload.get("session_id") != session_id
             or cursor_payload.get("thread_id") != thread_id
@@ -458,6 +458,6 @@ class HistoryCursorMixin:
         if not isinstance(value, dict):
             raise InvalidTurnCursorError("历史游标不是 JSON object")
         version = value.get("version")
-        if isinstance(version, bool) or version != 2:
+        if type(version) is not int or version != 3:
             raise InvalidTurnCursorError("历史游标版本不受支持")
         return value

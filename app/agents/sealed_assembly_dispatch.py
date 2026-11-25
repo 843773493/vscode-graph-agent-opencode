@@ -27,7 +27,7 @@ from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.serialization import normalize_wire_request
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 
-ProviderInvocationPurpose = Literal["agent", "tool_test", "model_test"]
+ProviderInvocationPurpose = Literal["agent", "derived", "compaction", "tool_test", "model_test"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,10 +124,12 @@ def _require_dispatch(
         if value is not None:
             raise ValueError(f"source-mismatch: {invocation_purpose} 调用不得消费 Agent assembly binding")
         return None
-    if invocation_purpose != "agent":
+    if invocation_purpose not in {"agent", "derived", "compaction"}:
         raise ValueError("source-mismatch: Provider invocation_purpose 非法")
     if value is None:
         raise ValueError("source-mismatch: Agent Provider 发送缺少 sealed assembly binding")
+    if invocation_purpose in {"derived", "compaction"} and (value.reference.turn_id is not None or value.snapshot.selection_policy != "derived_request"):
+        raise ValueError("source-mismatch: 派生 Provider 只能发送独立派生请求")
     # scope 入口已完整校验并私有复制，对外读取只返回副本；内部校验不暴露封存值。
     # 读取时只联校当前执行归属，避免每个 callback、日志和发送步骤重复计算完整历史 hash。
     admission = require_current_execution_admission(langgraph_thread_id=value.reference.thread_id)

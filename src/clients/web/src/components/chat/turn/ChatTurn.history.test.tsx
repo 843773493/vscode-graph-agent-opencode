@@ -6,13 +6,13 @@ import ChatTurn from "./ChatTurn";
 import { TurnActivitySummary } from "./TurnActivitySummary";
 import { chatTurnProps, conversation } from "./chatTurnTestFixtures";
 import { TranscriptTestView } from "../../../tests/fixtures/transcriptView";
-import type { TurnResponsePart } from "../../../types/backend";
+import type { TurnResponseItem } from "../../../types/backend";
 import { MessageSearchLocationContext } from "../messageSearchLocation";
 import type { ThreadItemLocationDTO } from "../../../types/protocol_generated/boxteam/workspace/v2/public";
 
-function reasoning(id: string, ordinal: number): TurnResponsePart {
-  return {part_id:id, kind:"reasoning", projection:"detail", status:"completed", text:`正文 ${id}`,
-    source:{item_id:id, item_sequence:ordinal, logical_item_ordinal:ordinal, message_sequence:ordinal, part_ordinal:0}};
+function reasoning(id: string, ordinal: number): TurnResponseItem {
+  return {id:id, kind:"reasoning", projection:"detail", status:"completed", text:`正文 ${id}`,
+    source:{item_id:id, item_sequence:ordinal, logical_item_ordinal:ordinal, message_sequence:ordinal, }};
 }
 function processButton(renderer: ReactTestRenderer) {
   return renderer.root.findAllByType("button").find(node => {
@@ -23,6 +23,31 @@ function processButton(renderer: ReactTestRenderer) {
 async function click(button: ReactTestInstance) { await act(async () => button.props.onClick()); }
 
 describe("ChatTurn 历史的三层过程", () => {
+  test("只有final且过程计数为零时，也能在折叠之外续读更早Item", async () => {
+    let value: ReturnType<typeof conversation> = {...conversation("done"), activityStats:{duration_ms:100,item_count:0},
+      activityOutline:undefined, historyTruncated:true};
+    const calls: Parameters<NonNullable<ReturnType<typeof chatTurnProps>["onLoadTurnDetails"]>>[] = [];
+    const render = () => <TranscriptTestView><ChatTurn {...chatTurnProps(value)}
+      onLoadTurnDetails={async (...args) => { calls.push(args); }} /></TranscriptTestView>;
+    const renderer = create(render());
+    const more = () => renderer.root.findAllByType("button").find(button =>
+      button.children.includes("加载更早内容"));
+    expect(processButton(renderer).props.disabled).toBe(true);
+    expect(more()).toBeDefined();
+    await click(more()!);
+    expect(calls[0]![5]).toEqual({sourceViewId:"view_fixture",sourceViewRevision:1,executionId:undefined,beforeCursor:undefined});
+    expect(calls[0]![3]).toEqual(["activity_outline","assistant_text"]);
+    value = {...value,activityOutline:{beforeCursor:"older-final"}};
+    await act(async () => renderer.update(render()));
+    await click(more()!);
+    expect(calls[1]![5]?.beforeCursor).toBe("older-final");
+    value = {...value,activityOutline:{beforeCursor:null}};
+    await act(async () => renderer.update(render()));
+    expect(more()).toBeUndefined();
+    expect(JSON.stringify(renderer.toJSON())).toContain("原始回答");
+    renderer.unmount();
+  });
+
   test("摘要使用结构化用量，未报告用量不伪造零", () => {
     const value = conversation("done");
     value.activityStats = {duration_ms:16000,item_count:1};
@@ -42,7 +67,7 @@ describe("ChatTurn 历史的三层过程", () => {
 
   test("过程、连续活动组和单项逐层展开，迟到数据不重开已关闭的层", async () => {
     let value = conversation("done");
-    value.responseParts = [reasoning("item_reasoning",2),...value.responseParts!];
+    value.responseItems = [reasoning("item_reasoning",2),...value.responseItems!];
     const render = () => <TranscriptTestView><ChatTurn {...chatTurnProps(value)} /></TranscriptTestView>;
     const renderer = create(render());
     expect(renderer.root.findAllByProps({className:"chat-activity-group"})).toHaveLength(0);
@@ -54,18 +79,18 @@ describe("ChatTurn 历史的三层过程", () => {
     await click(item.findByType("button"));
     expect(JSON.stringify(renderer.toJSON())).toContain("正文 item_reasoning");
     await click(item.findByType("button"));
-    value = {...value,responseParts:[{...value.responseParts![0],text:"迟到的正文"},...value.responseParts!.slice(1)]};
+    value = {...value,responseItems:[{...value.responseItems![0],text:"迟到的正文"},...value.responseItems!.slice(1)]};
     await act(async () => renderer.update(render()));
     expect(JSON.stringify(renderer.toJSON())).not.toContain("迟到的正文");
     renderer.unmount();
   });
 
-  test("第一层只请求轻轮廓，单个工具才携 binding 定点补读输入和结果", async () => {
+  test("交错回执合行后只补读该工具的输入和结果，并保留结果独立定位", async () => {
     const value = conversation("done");
-    const call: TurnResponsePart = {part_id:"call",kind:"tool_call",projection:"summary",status:"completed",tool_name:"read_file",tool_call_id:"tool_1",
-      source:{item_id:"item_call",item_sequence:2,message_sequence:2,part_ordinal:0,call_index:0,assistant_message_sequence:2}};
-    const result: TurnResponsePart = {...call,part_id:"result",kind:"tool_result",source:{...call.source,item_id:"item_result",item_sequence:3,message_sequence:3}};
-    value.responseParts = [call,result,...value.responseParts!];
+    const call: TurnResponseItem = {id:"call",kind:"tool_call",projection:"summary",status:"completed",tool_name:"read_file",tool_call_id:"tool_1",
+      source:{item_id:"item_call",item_sequence:2,message_sequence:2,call_index:0,assistant_message_sequence:2}};
+    const result: TurnResponseItem = {...call,id:"result",kind:"tool_result",source:{...call.source,item_id:"item_result",item_sequence:3,message_sequence:3}};
+    value.responseItems = [call,reasoning("item_between",3),result,...value.responseItems!];
     value.activityOutline = undefined;
     const calls: Parameters<NonNullable<ReturnType<typeof chatTurnProps>["onLoadTurnDetails"]>>[] = [];
     const renderer = create(<TranscriptTestView><ChatTurn {...chatTurnProps(value)} onLoadTurnDetails={async (...args) => {calls.push(args);}} /></TranscriptTestView>);
@@ -80,8 +105,8 @@ describe("ChatTurn 历史的三层过程", () => {
     expect(calls[1]![3]).toContain("tool_result");
     const toolNodes = renderer.root.findAll(node => node.type === "div" && node.props["data-transcript-node"])
       .map(node => JSON.parse(node.props["data-transcript-node"]));
-    expect(toolNodes).toContainEqual({source_ref:{kind:"item",id:"item_call",part:0},slot:"tool_input"});
-    expect(toolNodes).toContainEqual({source_ref:{kind:"item",id:"item_result",part:0},slot:"tool_output"});
+    expect(toolNodes).toContainEqual({source_ref:{kind:"item",id:"item_call"},slot:"tool_input"});
+    expect(toolNodes).toContainEqual({source_ref:{kind:"item",id:"item_result"},slot:"tool_output"});
     await click(processButton(renderer));
     expect(renderer.root.findAllByProps({className:"chat-tool-summary"})).toHaveLength(0);
     renderer.unmount();
@@ -89,15 +114,15 @@ describe("ChatTurn 历史的三层过程", () => {
 
   test("中间文本、压缩、活动组保留 canonical 顺序，final 始终独立", async () => {
     const value = conversation("done");
-    value.responseParts![0] = {...value.responseParts![0],source:{...value.responseParts![0].source,item_id:"final"}};
-    value.responseParts = [reasoning("before",2),
+    value.responseItems![0] = {...value.responseItems![0],source:{...value.responseItems![0].source,item_id:"final"}};
+    value.responseItems = [reasoning("before",2),
       {...reasoning("middle",3),kind:"text",text:"普通中间文本"},
       {...reasoning("compaction",4),kind:"compaction_summary",text:"压缩正文"},
-      reasoning("after",5),...value.responseParts!];
+      reasoning("after",5),...value.responseItems!];
     const renderer = create(<TranscriptTestView><ChatTurn {...chatTurnProps(value)} /></TranscriptTestView>);
     const members = JSON.parse(processButton(renderer).props["data-transcript-members"]);
-    expect(members).toContainEqual({kind:"item",id:"compaction",part:0});
-    expect(members).not.toContainEqual({kind:"item",id:"final",part:0});
+    expect(members).toContainEqual({source_ref:{kind:"item",id:"compaction"},slot:"body"});
+    expect(members.some((member: {source_ref:{id:string}}) => member.source_ref.id === "final")).toBe(false);
     expect(JSON.stringify(renderer.toJSON())).toContain("原始回答");
     expect(JSON.stringify(renderer.toJSON())).not.toContain("普通中间文本");
     await click(processButton(renderer));
@@ -108,20 +133,24 @@ describe("ChatTurn 历史的三层过程", () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("普通中间文本");
     expect(JSON.stringify(renderer.toJSON())).not.toContain("正文 before");
     const compactionHeader = renderer.root.findByProps({className:"chat-compaction-summary"}).findByType("button");
-    expect(JSON.parse(compactionHeader.props["data-transcript-members"])).toEqual([{kind:"item",id:"compaction",part:0}]);
+    expect(JSON.parse(compactionHeader.props["data-transcript-members"])).toEqual([
+      {source_ref:{kind:"item",id:"compaction"},slot:"body"}, {source_ref:{kind:"item",id:"compaction"},slot:"header"},
+    ]);
     await click(renderer.root.findAllByProps({className:"chat-activity-group"})[0].findByType("button"));
     const reasoningHeader = renderer.root.findAllByProps({className:"chat-activity-item"})[0].findByType("button");
-    expect(JSON.parse(reasoningHeader.props["data-transcript-members"])).toEqual([{kind:"item",id:"before",part:0}]);
+    expect(JSON.parse(reasoningHeader.props["data-transcript-members"])).toEqual([
+      {source_ref:{kind:"item",id:"before"},slot:"body"}, {source_ref:{kind:"item",id:"before"},slot:"header"},
+    ]);
     expect(renderer.root.findAllByProps({"aria-label":"模型回复"})).toHaveLength(2);
     renderer.unmount();
   });
 
   test.each(["process", "group", "reasoning", "tool", "compaction"] as const)("显式定位后手动收起 %s，迟到数据和重新挂载不重开，新定位仍可打开", async layer => {
     let value = conversation("done");
-    const part: TurnResponsePart = {...reasoning("target",2),
+    const part: TurnResponseItem = {...reasoning("target",2),
       ...(layer === "compaction" ? {kind:"compaction_summary" as const}
         : layer === "tool" ? {kind:"tool_call" as const,tool_name:"read_file",tool_call_id:"tool-1",arguments:'{"path":"a.ts"}'} : {})};
-    value.responseParts = [part,...value.responseParts!];
+    value.responseItems = [part,...value.responseItems!];
     const location: ThreadItemLocationDTO = {item_id:"target",semantic_kind:layer === "tool" ? "tool_call" : "assistant_output",
       turn_id:"turn_fixture",execution_id:"exec",content_hash:"hash",byte_length:12};
     let navigate!: (target: ThreadItemLocationDTO) => void;
@@ -145,7 +174,7 @@ describe("ChatTurn 历史的三层过程", () => {
     await click(header());
     expect(closed).toBe(1);
     expect(header().props["aria-expanded"]).toBe(false);
-    value = {...value,responseParts:value.responseParts!.map(entry => ({...entry,text:"迟到正文"}))};
+    value = {...value,responseItems:value.responseItems!.map(entry => ({...entry,text:"迟到正文"}))};
     await act(async () => renderer.update(<Harness />));
     expect(header().props["aria-expanded"]).toBe(false);
     childKey = "remounted";
@@ -158,7 +187,7 @@ describe("ChatTurn 历史的三层过程", () => {
 
   test("定位独立 final 不打开无关过程", async () => {
     const value = conversation("done");
-    value.responseParts = [reasoning("thinking",2),{...value.responseParts![0],source:{message_sequence:3,item_id:"final",part_ordinal:0}}];
+    value.responseItems = [reasoning("thinking",2),{...value.responseItems![0],source:{message_sequence:3,item_id:"final",}}];
     const location: ThreadItemLocationDTO = {item_id:"final",semantic_kind:"assistant_output",turn_id:"turn_fixture",
       execution_id:"exec",content_hash:"hash",byte_length:12};
     let renderer!: ReactTestRenderer;
@@ -173,7 +202,7 @@ describe("ChatTurn 历史的三层过程", () => {
     let value = conversation("running", "job_completed");
     value.displayMode = "live";
     value.messageStream = {connectionStatus:"connected",streamStatus:"open",lastEventSeq:1,failure:null,resumable:true};
-    value.responseParts = [reasoning("running_reasoning",2)];
+    value.responseItems = [reasoning("running_reasoning",2)];
     const render = () => <TranscriptTestView><ChatTurn {...chatTurnProps(value)} /></TranscriptTestView>;
     const renderer = create(render());
     expect(processButton(renderer).props["aria-expanded"]).toBe(true);
@@ -196,7 +225,7 @@ describe("ChatTurn 历史的三层过程", () => {
     const renderer = create(render());
     expect(processButton(renderer).props.disabled).toBe(true);
     expect(renderer.root.findAllByProps({className:"chat-thinking-body"})).toHaveLength(0);
-    value = {...value,responseParts:[{...reasoning("encrypted",2),kind:"reasoning_encrypted",text:""}]};
+    value = {...value,responseItems:[{...reasoning("encrypted",2),kind:"reasoning_encrypted",text:""}]};
     await act(async () => renderer.update(render()));
     await click(processButton(renderer));
     await click(renderer.root.findByProps({className:"chat-activity-group"}).findByType("button"));
@@ -207,7 +236,7 @@ describe("ChatTurn 历史的三层过程", () => {
 
   test("失败、超时、中断保留真实原因，工具失败不升级为整轮失败", () => {
     const value = conversation("done");
-    value.responseParts = [{...reasoning("tool",2),kind:"tool_call",status:"failed",tool_call_id:"call",tool_name:"read_file",text:"Permission denied"}];
+    value.responseItems = [{...reasoning("tool",2),kind:"tool_call",status:"failed",tool_call_id:"call",tool_name:"read_file",text:"Permission denied"}];
     const render = () => renderToStaticMarkup(<TranscriptTestView><ChatTurn {...chatTurnProps(value)} /></TranscriptTestView>);
     expect(render()).not.toContain('data-status-kind="turn-failed"');
     value.turnStatus = "failed";
@@ -217,7 +246,7 @@ describe("ChatTurn 历史的三层过程", () => {
     value.turnStatus = "timed_out";
     expect(render()).toContain('data-status-kind="turn-timed-out"');
     value.turnStatus = "cancelled";
-    value.responseParts = [{...reasoning("partial",2),kind:"text",partial:true,completion_reason:"user_interrupt"}];
+    value.responseItems = [{...reasoning("partial",2),kind:"text",partial:true,completion_reason:"user_interrupt"}];
     expect(render()).toContain('data-status-kind="user-interrupted"');
     expect(render()).not.toContain("重试失败轮次");
   });

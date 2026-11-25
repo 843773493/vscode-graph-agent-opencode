@@ -8,6 +8,7 @@ import type {
 import { formatDateTime } from "../../../utils/format";
 import type { ResourceThreadRef } from "../../../api/workspaceResources";
 import { resourceThreadAssociations } from "../../../state/display/workspaceResourceDisplay";
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import {
   actionLabel,
   kindLabel,
@@ -202,7 +203,7 @@ export default function ResourceTreeRow({
             </span>)}
             {canAttachCurrent && onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "attach")}>{t("resources.attach")}</button> : null}
             {typeof resource.metadata.reclaim_at === "string" ? <span>{t("resources.reclaim", formatDateTime(resource.metadata.reclaim_at))}</span> : null}
-            {resource.metadata.error ? <span role="alert">{String(resource.metadata.error)}</span> : null}
+            {typeof resource.metadata.error === "string" && resource.metadata.error ? <span className="failure-summary" role="alert">{failureSummary(resource.metadata.error)}</span> : null}
           </div> : null}
           {metadataRows.length > 0 ? (
             <details className="resource-details">

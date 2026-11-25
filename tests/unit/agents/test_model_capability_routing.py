@@ -11,17 +11,15 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agents.model_capability_routing import (
     CapabilityRoutingMiddleware,
+    ProviderCapabilityError,
     ProviderModelCandidate,
+    require_provider_capabilities,
 )
 from app.agents.provider_capabilities import (
     detect_required_capabilities_from_messages,
     parse_provider_capabilities,
 )
 from app.core.failures import is_provider_failure, mark_provider_failure
-from app.core.model_request_context import (
-    SummaryCandidateScope,
-    summary_candidate_scope,
-)
 from app.core.turn_execution_scope import ScopeCancelledError
 from app.domain.context_compaction import (
     ContextBudget,
@@ -32,7 +30,9 @@ from app.domain.context_compaction import (
 
 
 def _model() -> BaseChatModel:
-    return MagicMock(spec=BaseChatModel)
+    model = MagicMock(spec=BaseChatModel)
+    model.profile = {}
+    return model
 
 
 def _candidate(
@@ -247,6 +247,51 @@ def test_message_capability_scan_ignores_unknown_blocks_and_keeps_media_requirem
     assert capabilities == expected
 
 
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("retained_media", [False, True])
+async def test_routing_checks_projected_request_and_preserves_new_media_requirement(monkeypatch, mode, retained_media):
+    primary, fallback = _model(), _model()
+    middleware = CapabilityRoutingMiddleware([
+        _candidate("text", primary), _candidate("vision", fallback, "image_input"),
+    ])
+    media = HumanMessage(content=[{"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}}])
+    physical = [media, HumanMessage(content="当前问题")]
+    projected = physical if retained_media else [HumanMessage(content="已采用的纯文本摘要"), physical[-1]]
+    prepared, sent = [], []
+
+    def unexpected_event(*_args, **_kwargs):
+        pytest.fail("实际请求能力不足属于本地候选拒绝，不发布上游失败")
+
+    monkeypatch.setattr("app.agents.model_capability_routing.dispatch_custom_event", unexpected_event)
+    monkeypatch.setattr("app.agents.model_capability_routing.adispatch_custom_event", unexpected_event)
+
+    def handle(request):
+        prepared.append(request.model)
+        require_provider_capabilities(request.model, projected)
+        sent.append(request.model)
+        return ModelResponse(result=[AIMessage(content="完整回答")])
+
+    async def ahandle(request):
+        return handle(request)
+
+    request = ModelRequest(model=primary, messages=physical)
+    result = middleware.wrap_model_call(request, handle) if mode == "sync" else await middleware.awrap_model_call(request, ahandle)
+    assert result.result[0].text == "完整回答"
+    assert prepared == ([primary, fallback] if retained_media else [primary])
+    assert sent == ([fallback] if retained_media else [primary])
+    assert request.messages == physical
+
+
+def test_nonrouting_capabilities_use_frozen_model_profile():
+    model = _model()
+    image = [{"role": "user", "content": [{"type": "input_image", "image_url": "data:image/png;base64,eA=="}]}]
+    with pytest.raises(ProviderCapabilityError, match="image_input") as failure:
+        require_provider_capabilities(model, image)
+    assert not is_provider_failure(failure.value)
+    model.profile = {"image_inputs": True}
+    require_provider_capabilities(model, image)
+
+
 @pytest.mark.asyncio
 async def test_direct_image_attachment_skips_text_only_model() -> None:
     text_model = _model()
@@ -260,6 +305,7 @@ async def test_direct_image_attachment_skips_text_only_model() -> None:
     requested_models: list[BaseChatModel] = []
 
     async def handler(request: ModelRequest) -> AIMessage:
+        require_provider_capabilities(request.model, request.messages)
         requested_models.append(request.model)
         return AIMessage(content="ok")
 
@@ -296,6 +342,7 @@ async def test_tool_returned_image_uses_same_context_capability_routing() -> Non
     requested_models: list[BaseChatModel] = []
 
     async def handler(request: ModelRequest) -> AIMessage:
+        require_provider_capabilities(request.model, request.messages)
         requested_models.append(request.model)
         return AIMessage(content="ok")
 
@@ -423,44 +470,6 @@ async def test_reasoning_only_response_falls_back_to_next_provider(
     ]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("provider_failure", [False, True])
-async def test_summary_reasoning_response_reaches_summary_owner(
-    monkeypatch: pytest.MonkeyPatch, asynchronous: bool, provider_failure: bool,
-) -> None:
-    primary, fallback = _model(), _model()
-    middleware = CapabilityRoutingMiddleware([
-        _candidate("primary", primary), _candidate("fallback", fallback),
-    ])
-    response = ModelResponse(result=[AIMessage(content=[{"type": "reasoning", "reasoning": "内部推理"}])])
-    requested: list[BaseChatModel] = []
-    failed_events: list[str] = []
-
-    def record_failure(name: str, _data: dict[str, str]) -> None:
-        failed_events.append(name)
-
-    async def arecord_failure(name: str, data: dict[str, str]) -> None:
-        record_failure(name, data)
-
-    monkeypatch.setattr("app.agents.model_capability_routing.dispatch_custom_event", record_failure)
-    monkeypatch.setattr("app.agents.model_capability_routing.adispatch_custom_event", arecord_failure)
-
-    def handler(request: ModelRequest) -> ModelResponse:
-        requested.append(request.model)
-        if provider_failure and request.model is primary:
-            raise mark_provider_failure(RuntimeError("上游请求失败"))
-        return response
-
-    async def ahandler(request: ModelRequest) -> ModelResponse:
-        return handler(request)
-
-    request = ModelRequest(model=primary, messages=[HumanMessage(content="生成摘要")])
-    with summary_candidate_scope(SummaryCandidateScope(0, "initial", True, False, canonical_messages=tuple(request.messages))):
-        actual = await middleware.awrap_model_call(request, ahandler) if asynchronous else middleware.wrap_model_call(request, handler)
-    assert actual is response
-    assert requested == ([primary, fallback] if provider_failure else [primary])
-    assert failed_events == (["boxteam_model_failed"] if provider_failure else [])
 
 
 @pytest.mark.asyncio
@@ -598,6 +607,7 @@ async def test_missing_context_capability_fails_before_model_request() -> None:
 
     async def handler(request: ModelRequest) -> AIMessage:
         nonlocal handler_called
+        require_provider_capabilities(request.model, request.messages)
         handler_called = True
         return AIMessage(content="unexpected")
 
@@ -617,7 +627,7 @@ async def test_missing_context_capability_fails_before_model_request() -> None:
         ],
     )
 
-    with pytest.raises(RuntimeError, match="image_input"):
+    with pytest.raises(ProviderCapabilityError, match="image_input"):
         await middleware.awrap_model_call(request, handler)
 
     assert handler_called is False

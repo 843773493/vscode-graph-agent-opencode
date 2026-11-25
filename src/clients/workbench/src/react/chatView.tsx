@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../shared/core/failurePresentation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { t } from '../../../shared/core/i18n/index.js';
 import { useTraceNavigation } from '../../../web/src/hooks/runtime/useTraceNavigation.js';
@@ -289,7 +290,7 @@ function ChatView({ input, initialSession, initialWorkspaces, active, editors, g
       <span className="codicon codicon-layout-sidebar-right" aria-hidden="true" />
     </button>
   </header>;
-  return <div className="thread-history-host panel-feedback-host">{cacheError ? <p className="panel-feedback" role="alert">{cacheError}</p> : null}
+  return <div className="thread-history-host panel-feedback-host">{cacheError ? <p className="panel-feedback" role="alert">{failureSummary(cacheError)}</p> : null}
     {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} groupId={groupId} commands={commands} onPickModel={onPickModel} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} onViewportReady={onViewportReady} onDraftReady={onDraftReady} onPositionChange={onPositionChange} onCloseNavigation={onCloseNavigation} toolbar={toolbar} />
       : <div className="native-thread-conversation">{toolbar}{cached ? <CachedThreadHistory owner={owner} timeline={cached} error={error ? t('thread.host.syncFailed', error) : null} onRetry={retry} />
         : error ? <p role="alert">{t('thread.host.initializeFailed', error)}</p> : <p role="status">{t('thread.host.restoring')}</p>}</div>}</div>;

@@ -33,9 +33,6 @@ from app.services.infrastructure.rollout_context.storage.catalog.item_reader imp
 from app.services.infrastructure.rollout_context.storage.catalog.items import (
     RolloutItemsMixin,
 )
-from app.services.infrastructure.rollout_context.storage.catalog.parts import (
-    RolloutPartsMixin,
-)
 from app.services.infrastructure.rollout_context.storage.catalog.projections import (
     RolloutProjectionMixin,
 )
@@ -88,7 +85,6 @@ class RolloutStorage(
     RolloutItemsMixin,
     RolloutViewMembershipMixin,
     InternalExecutionHistoryMixin,
-    RolloutPartsMixin,
     RolloutSerializationMixin,
     RolloutTransactionProjectionMixin,
     RolloutProjectionMixin,
@@ -242,7 +238,7 @@ class RolloutStorage(
             if not index.exists() or index.stat().st_size == 0:
                 self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
             with self._connect(thread_id, checkpoint_ns, session_id=session_id) as connection:
-                self._require_v2_runtime(connection)
+                self._require_current_rollout_format(connection)
                 self._validate_schema_state(connection)
                 self._validate_reasoning_projection_connection(connection)
                 meta = connection.execute(
@@ -291,7 +287,7 @@ class RolloutStorage(
                 raise ValueError("read snapshot 与目标 rollout 不一致")
             yield self._snapshot_connection(snapshot)
         elif connection is not None:
-            self._require_v2_runtime(connection)
+            self._require_current_rollout_format(connection)
             owner = connection.execute(
                 "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
             ).fetchone()
@@ -350,8 +346,8 @@ class RolloutStorage(
     def _validate_schema_state(self, connection: sqlite3.Connection) -> None:
         return self._maintenance_owner._validate_schema_state(connection)
 
-    def _validate_v2_commit_offsets(self, connection: sqlite3.Connection, jsonl_path: Path, *, validate_jsonl_items: bool=True) -> None:
-        return self._maintenance_owner._validate_v2_commit_offsets(connection, jsonl_path, validate_jsonl_items=validate_jsonl_items, cache=self._catalog_body_validation_cache)
+    def _validate_commit_offsets(self, connection: sqlite3.Connection, jsonl_path: Path, *, validate_jsonl_items: bool=True) -> None:
+        return self._maintenance_owner._validate_commit_offsets(connection, jsonl_path, validate_jsonl_items=validate_jsonl_items, cache=self._catalog_body_validation_cache)
 
     def read_lock(self, session_id: str, thread_id: str, checkpoint_ns: str='') -> _RolloutFileLock:
         return self._maintenance_owner.read_lock(session_id, thread_id, checkpoint_ns)

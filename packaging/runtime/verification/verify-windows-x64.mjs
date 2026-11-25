@@ -386,6 +386,7 @@ async function main() {
     "gateway_local.jsonc",
     "gateway_schema.jsonc",
     "workspace.jsonc",
+    "workspace_local.jsonc",
     "workspace_schema.jsonc",
   ]) {
     const configPath = path.join(boxteamHome, "config", name);
@@ -519,6 +520,7 @@ async function main() {
     "gateway_local.jsonc",
     "gateway_schema.jsonc",
     "workspace.jsonc",
+    "workspace_local.jsonc",
     "workspace_schema.jsonc",
   ]) {
     const configPath = path.join(standaloneBoxteamHome, "config", name);

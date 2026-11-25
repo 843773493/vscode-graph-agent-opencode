@@ -7,12 +7,76 @@ import sqlite3
 from collections.abc import Callable, Sequence
 from typing import BinaryIO
 
+from app.domain.itemized.identity.item_projection import ItemProjectionManifest
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.storage.serialization import (
+    canonical_json_text,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
 )
 
 MessageLocator = tuple[int, str | None, str, int, int]
+
+
+def count_uncompacted_messages(
+    connection: sqlite3.Connection, item_ids: Sequence[str], *, checkpoint_ns: str,
+) -> int | None:
+    """只展开实际消息选集的扁平摘要 provenance，按原 canonical group 计数。"""
+    selected = tuple(item_ids)
+    if not selected or len(selected) != len(set(selected)):
+        raise ValueError("原消息计数要求非空且不重复的真实 canonical anchor")
+    rows = connection.execute(
+        "SELECT item_id,semantic_kind,projection_manifest_json FROM item_catalog "
+        "WHERE item_id IN (SELECT value FROM json_each(?))", (canonical_json_text(selected),),
+    ).fetchall()
+    if len(rows) != len(selected):
+        raise ValueError("detail-unavailable: 原消息计数缺少实际选集中的 canonical anchor")
+    originals: set[str] = set()
+    for item_id, kind, manifest_json in rows:
+        if kind != "compaction_summary":
+            originals.add(item_id)
+            continue
+        manifest = ItemProjectionManifest.from_dict(json.loads(manifest_json))
+        origins = [relation.to_dict() for relation in manifest.provenance_relations
+                   if relation.relation == "derived_from" and relation.target_kind == "canonical_item"]
+        if not origins:
+            raise ValueError("compaction-coverage-mismatch: 摘要缺少扁平 canonical provenance")
+        # provenance 还包含派生输出；只有实际采用时登记的原文范围属于原消息计数。
+        coverage = connection.execute(
+            "SELECT history.item_id FROM json_each(?) origin JOIN compaction_history_ranges history "
+            "ON history.item_id=json_extract(origin.value,'$.target_id') "
+            "AND json_extract(history.ref_json,'$.session_id')=json_extract(origin.value,'$.target_session_id') "
+            "AND json_extract(history.ref_json,'$.thread_id')=json_extract(origin.value,'$.target_thread_id') "
+            "WHERE history.checkpoint_ns=?",
+            (canonical_json_text(origins), checkpoint_ns),
+        ).fetchall()
+        if not coverage:
+            raise ValueError("compaction-coverage-mismatch: 摘要缺少原采用事件的消息范围")
+        originals.update(row[0] for row in coverage)
+        if connection.execute(
+            "SELECT 1 FROM json_each(?) origin JOIN item_catalog item "
+            "ON item.item_id=json_extract(origin.value,'$.target_id') "
+            "WHERE item.semantic_kind='compaction_summary' LIMIT 1", (canonical_json_text(origins),),
+        ).fetchone() is not None:
+            raise ValueError("compaction-coverage-mismatch: 摘要 provenance 必须扁平到原 canonical Item")
+    count, present, nested = connection.execute(
+        "SELECT COUNT(DISTINCT CASE WHEN NOT EXISTS (SELECT 1 FROM storage_commits admission "
+        "WHERE admission.subject_id=item.execution_id AND admission.commit_kind='execution_admission' "
+        "AND admission.status='committed' AND json_extract(admission.metadata_json,'$.request_input.kind')='derived_reference') "
+        "AND (EXISTS (SELECT 1 FROM messages message WHERE message.jsonl_offset=item.jsonl_offset AND message.jsonl_length=item.jsonl_length) "
+        "OR item.message_group_id IS NOT NULL AND EXISTS (SELECT 1 FROM item_catalog anchor JOIN messages message "
+        "ON message.jsonl_offset=anchor.jsonl_offset AND message.jsonl_length=anchor.jsonl_length "
+        "WHERE anchor.message_group_id=item.message_group_id)) THEN COALESCE(item.message_group_id,item.item_id) END),"
+        "COUNT(*),COALESCE(SUM(item.semantic_kind='compaction_summary'),0) FROM item_catalog item "
+        "WHERE item.item_id IN (SELECT value FROM json_each(?))", (canonical_json_text(sorted(originals)),),
+    ).fetchone()
+    if nested:
+        raise ValueError("compaction-coverage-mismatch: 摘要 provenance 必须扁平到原 canonical Item")
+    if present != len(originals):
+        # summary-only fork 合法保留摘要而不复制原消息组；不可得的计数不能阻断当前选集。
+        return None
+    return count
 
 
 def find_message_locator(
@@ -86,20 +150,3 @@ def read_message_group(
     if items[-1].item_id != anchor.item_id:
         raise RuntimeError("message locator 没有指向 canonical group anchor")
     return items
-
-
-def read_response_outline(connection: sqlite3.Connection, item_id: str) -> list[dict[str, object]]:
-    """通过显式消息组的末成员找到唯一投影；分组内的前项没有独立 message 行。"""
-    row = connection.execute(
-        "SELECT projection.response_outline_json FROM item_catalog item "
-        "JOIN item_catalog anchor ON anchor.item_id=COALESCE(("
-        "SELECT tail.item_id FROM item_catalog tail WHERE tail.message_group_id=item.message_group_id "
-        "AND json_extract(tail.projection_manifest_json,'$.projection_group.ordinal')="
-        "json_extract(tail.projection_manifest_json,'$.projection_group.size')-1),item.item_id) "
-        "JOIN messages message ON message.jsonl_offset=anchor.jsonl_offset AND message.jsonl_length=anchor.jsonl_length "
-        "JOIN message_projections projection ON projection.message_sequence=message.message_sequence "
-        "WHERE item.item_id=?", (item_id,),
-    ).fetchone()
-    if row is None:
-        raise RuntimeError(f"结构化 Item 缺少已提交 Part 索引: {item_id}")
-    return json.loads(row[0])[item_id]

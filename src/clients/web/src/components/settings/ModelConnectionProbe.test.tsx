@@ -301,3 +301,34 @@ test('失败和取消的测试不推荐应用模式，只有成功结果可以�
   }
   expect(fixture.onApplyMode).not.toHaveBeenCalled();
 });
+
+test('批量正常返回的失败保留逐项结果和完整原因，默认摘要不混诊断关联', async () => {
+  const reason = '上游拒绝当前模型；'.repeat(60) + '原因末尾';
+  const calls: string[] = [];
+  respond(async (_url, init) => {
+    const input = JSON.parse(String(init.body)); calls.push(input.model_id);
+    const response = modelTestResponse(input, { source: 'none' }, input.model_id === 'main' ? 'failed' : 'passed');
+    const text = await response.text();
+    return new Response(input.model_id === 'main' ? text.replace('"error":null', JSON.stringify({ error: {
+      category: 'provider', field: 'model', message: reason,
+    } }).slice(1, -1)) : text, { headers: response.headers });
+  });
+  const fixture = setup();
+  const choices = view!.root.findAllByType('input').filter(item => item.props.type === 'checkbox').slice(1, 3);
+  act(() => { for (const choice of choices) choice.props.onChange({ target: { checked: true } }); });
+  await click('configuration.probe.testSelected');
+  expect(calls).toEqual(['main', 'backup']);
+  const rows = view!.root.findAllByProps({ className: 'configuration-probe-result' });
+  expect(rows).toHaveLength(2);
+  const failed = rows.find(row => row.props['data-probe-model'] === 'main')!;
+  const summary = failed.findByProps({ role: 'alert' }).children.join('');
+  expect(Array.from(summary).length).toBeLessThanOrEqual(160);
+  expect(summary).toContain('上游拒绝当前模型');
+  expect(summary).not.toContain('probe-test');
+  expect(JSON.stringify(failed.findAllByType('pre').map(item => item.children))).toContain('原因末尾');
+  const passed = rows.find(row => row.props['data-probe-model'] === 'backup')!;
+  expect(passed.findAllByProps({ role: 'alert' })).toHaveLength(0);
+  expect(passed.findAllByType('button').some(item => item.children.includes(t('configuration.probe.applyMode')))).toBe(true);
+  expect(fixture.onApplyMode).not.toHaveBeenCalled();
+  expect(fixture.editor.jsonc).toBe('// 当前来源原文\n{}');
+});

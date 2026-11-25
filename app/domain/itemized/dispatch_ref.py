@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from uuid import UUID
 
@@ -9,6 +10,7 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.prefix_epoch import EpochReason
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.refs import ToolSetRef
+from app.domain.itemized.serde.registry import parse_tool_set_ref
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +38,27 @@ class SealedContextDispatchRef:
     tool_set_refs: tuple[ToolSetRef, ...]
     tool_policy_hash: str
     reference_hash: str
+
+    def to_dict(self) -> dict[str, object]:
+        payload = {field.name: getattr(self, field.name) for field in fields(self)}
+        payload["tool_set_refs"] = [ref.to_dict() for ref in self.tool_set_refs]
+        payload["frame_hashes"] = list(self.frame_hashes)
+        return payload
+
+    @classmethod
+    def from_dict(cls, value: object) -> SealedContextDispatchRef:
+        if not isinstance(value, Mapping) or set(value) != {field.name for field in fields(cls)}:
+            raise ValueError("sealed-assembly binding violation: dispatch reference manifest 非法")
+        payload = dict(value)
+        payload["tool_set_refs"] = tuple(parse_tool_set_ref(ref) for ref in payload["tool_set_refs"])
+        payload["frame_hashes"] = tuple(payload["frame_hashes"])
+        payload["epoch_reason"] = EpochReason(payload["epoch_reason"])
+        reference = cls(**payload)
+        preimage = reference.to_dict()
+        preimage.pop("reference_hash")
+        if sha256_jcs(preimage) != reference.reference_hash:
+            raise ValueError("sealed-assembly binding violation: dispatch reference hash 不一致")
+        return reference
 
     @classmethod
     def from_snapshot(

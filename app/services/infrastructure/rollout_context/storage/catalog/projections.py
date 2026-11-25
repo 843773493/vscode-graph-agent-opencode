@@ -28,8 +28,8 @@ def _preview_text_parts(value: object) -> Iterator[str]:
     """从 canonical payload 逐段提取可见文本。
 
     这是 storage 自己的有界索引投影，不是 LangChain/provider 映射。完整
-    payload 仍只由 JSONL 保存；这里不依赖 ``MessageCodec``，使一次性
-    legacy import 在没有 checkpoint 适配器时也能原子建立 v2 item projection。
+    payload 仍只由 JSONL 保存；这里不依赖 ``MessageCodec``，索引只消费
+    canonical Item，不在存储层重建 LangChain/Provider 消息。
     """
     if isinstance(value, str):
         yield value

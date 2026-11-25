@@ -24,8 +24,10 @@ from app.core.job_context import get_active_tool_name, get_interruptible_phase
 from app.core.job_event_bus import EventType
 from app.core.model_delta_context import (
     AgentRunLifecycleCallbackHandler,
+    AgentToolExecutionCallbackHandler,
     model_tool_invocation_scope,
 )
+from app.core.path_utils import workspace_context
 from app.core.resource_uri import resource_display_uri
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.turn_execution_scope import (
@@ -35,11 +37,10 @@ from app.core.turn_execution_scope import (
     get_current_turn_execution_scope,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.protocol.codecs.message_stream import (
-    message_stream_to_json,
-    message_stream_to_proto,
-)
 from app.schemas.event import ModelTokenUsagePayload
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
 from app.services.infrastructure.workspace_files.text_journal import (
     write_text_mutation_journal,
 )
@@ -62,9 +63,10 @@ from app.services.orchestration.message_stream.trace_observer import (
 
 
 @pytest.fixture
-def workspace_root(empty_workspace_scope: tuple[str, Path]) -> Path:
-    """返回注入了当前工作区上下文的空工作区根目录。"""
-    return empty_workspace_scope[1]
+def workspace_root(tmp_path: Path):
+    """在正式测试输出中的隔离工作区显式绑定当前 owner。"""
+    with workspace_context(load_or_create_workspace_id(tmp_path), tmp_path):
+        yield tmp_path
 
 
 @pytest.fixture
@@ -74,6 +76,10 @@ async def cancellation_signal() -> AsyncIterator[CancellationSignal]:
         yield CancellationSignal(lifetime_scope=scope)
     finally:
         await scope.close()
+
+
+
+
 
 
 class FakeAgent:
@@ -113,10 +119,21 @@ class FakeAgent:
                         if isinstance(handler, AgentRunLifecycleCallbackHandler)
                     )
                     with model_tool_invocation_scope(model_call_id, provider_id):
+                        timing = next(
+                            handler for handler in config["callbacks"]
+                            if isinstance(handler, AgentToolExecutionCallbackHandler)
+                        )
+                        timing.on_tool_start({}, "", run_id=event["run_id"], tool_call_id=provider_id)
                         callback = asyncio.create_task(lifecycle.on_tool_start(
                             {}, "", run_id=event["run_id"], tool_call_id=provider_id,
                         ))
                     callbacks.append(callback)
+                elif event["event"] in {"on_tool_end", "on_tool_error"}:
+                    timing = next(
+                        handler for handler in config["callbacks"]
+                        if isinstance(handler, AgentToolExecutionCallbackHandler)
+                    )
+                    timing.on_tool_end(run_id=event["run_id"])
                 yield {
                     **event,
                     "metadata": {**config_metadata, **event_metadata},
@@ -537,14 +554,15 @@ async def test_active_model_stream_is_not_cancelled_by_fixed_model_scope_deadlin
 
 @pytest.fixture
 async def dispatch_watchdog_case(
+    stream_writer,
+    tool_result_sink,
     request: pytest.FixtureRequest,
     workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ):
     count = getattr(request, "param", 3)
-    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_dispatch_progress")
+    writer = stream_writer(turn_stream_id="stream_dispatch_progress")
     sink = AsyncMock()
-    tool_result_sink = AsyncMock()
     runtime = MessageStreamRuntime(
         writer,
         canonical_item_sink=sink,
@@ -816,9 +834,10 @@ async def test_user_cancellation_after_dispatch_progress_keeps_user_reason(
 
 @pytest.mark.asyncio
 async def test_tool_dispatch_timeout_does_not_escape_as_agent_cancellation(
+    stream_writer,
     workspace_root: Path,
 ) -> None:
-    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_dispatch_timeout")
+    writer = stream_writer(turn_stream_id="stream_dispatch_timeout")
     runtime = MessageStreamRuntime(writer)
     await runtime.start_model("model_dispatch_timeout", "backup_3")
     await runtime.accept_message_chunk(
@@ -989,12 +1008,13 @@ def schema_send_tool() -> BaseTool:
 
 @pytest.mark.asyncio
 async def test_parallel_schema_errors_keep_original_provider_arguments_and_claims(
+    stream_writer,
+    tool_result_sink,
     workspace_root: Path,
     schema_send_tool: BaseTool,
 ) -> None:
-    writer = SimpleNamespace(commit=AsyncMock())
+    writer = stream_writer()
     canonical_sink = AsyncMock()
-    tool_result_sink = AsyncMock()
     runtime = MessageStreamRuntime(
         writer,
         canonical_item_sink=canonical_sink,
@@ -1089,11 +1109,12 @@ async def test_parallel_schema_errors_keep_original_provider_arguments_and_claim
 
 @pytest.mark.asyncio
 async def test_custom_tool_execution_keeps_provider_tool_call_identity(
+    stream_writer,
+    tool_result_sink,
     workspace_root: Path,
 ) -> None:
-    writer = SimpleNamespace(commit=AsyncMock())
+    writer = stream_writer()
     canonical_sink = AsyncMock()
-    tool_result_sink = AsyncMock()
     runtime = MessageStreamRuntime(
         writer,
         canonical_item_sink=canonical_sink,
@@ -1201,8 +1222,8 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
 
 
 @pytest.mark.asyncio
-async def test_envelope_tool_claim_uses_exact_provider_id_and_rejects_missing_call() -> None:
-    writer = SimpleNamespace(commit=AsyncMock())
+async def test_envelope_tool_claim_uses_exact_provider_id_and_rejects_missing_call(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
     await runtime.start_model("model_envelope_claim", "primary")
     await runtime.accept_message_chunk(
@@ -1272,7 +1293,7 @@ def test_last_model_token_usage_keeps_last_execution_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_failed_custom_event_is_published_to_trace(workspace_root: Path) -> None:
+async def test_model_failed_custom_event_is_published_to_trace(workspace_root: Path, stream_writer) -> None:
     events = [
         {
             "event": "on_chat_model_start",
@@ -1297,7 +1318,7 @@ async def test_model_failed_custom_event_is_published_to_trace(workspace_root: P
     async def publish(event_type: str, payload: dict[str, Any]) -> None:
         published.append((event_type, payload))
 
-    writer = SimpleNamespace(commit=AsyncMock())
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
     await process_agent_event_stream(
         agent=FakeAgent(events),
@@ -1483,9 +1504,13 @@ async def test_agent_stream_starts_with_isolated_callbacks_and_business_identity
 
     assert len(agent.received_configs) == 1
     stream_config = agent.received_configs[0]
-    assert len(stream_config["callbacks"]) == 1
+    assert len(stream_config["callbacks"]) == 2
     assert isinstance(
         stream_config["callbacks"][0],
+        AgentToolExecutionCallbackHandler,
+    )
+    assert isinstance(
+        stream_config["callbacks"][1],
         AgentRunLifecycleCallbackHandler,
     )
     assert stream_config["metadata"]["boxteam_session_id"] == "ses_isolated"
@@ -1520,9 +1545,13 @@ async def test_agent_stream_does_not_inherit_sender_callback_context(
         var_child_runnable_config.reset(context_token)
 
     assert len(agent.resolved_configs) == 1
-    assert len(agent.resolved_configs[0]["callbacks"]) == 1
+    assert len(agent.resolved_configs[0]["callbacks"]) == 2
     assert isinstance(
         agent.resolved_configs[0]["callbacks"][0],
+        AgentToolExecutionCallbackHandler,
+    )
+    assert isinstance(
+        agent.resolved_configs[0]["callbacks"][1],
         AgentRunLifecycleCallbackHandler,
     )
 
@@ -2147,6 +2176,7 @@ async def test_small_model_chunks_only_feed_final_text_aggregation(
 
 @pytest.mark.asyncio
 async def test_model_end_output_recovers_text_missing_from_stream_callback(
+    stream_writer,
     workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
@@ -2173,7 +2203,7 @@ async def test_model_end_output_recovers_text_missing_from_stream_callback(
     async def publish(event_type: str, payload: dict[str, Any]) -> None:
         published.append((event_type, payload))
 
-    writer = SimpleNamespace(commit=AsyncMock())
+    writer = stream_writer()
     runtime = MessageStreamRuntime(
         writer,
         normalized_block_observer=MessageStreamTraceObserver(publish).observe,
@@ -2213,100 +2243,51 @@ async def test_model_end_output_recovers_text_missing_from_stream_callback(
 
 
 @pytest.mark.asyncio
-async def test_summary_candidate_completion_uses_public_outcome_and_hides_candidate_text(
-    workspace_root: Path,
-    session_changes_service: FakeSessionChangesService,
-) -> None:
-    model_call_id = "model_summary_candidate"
-    candidate_text = "仅供压缩中间件校验的摘要候选"
-    events = [
-        {
-            "event": "on_chat_model_start",
-            "run_id": model_call_id,
-            "name": "BoxteamLiteLLMChatModel",
-            "data": {},
-            "metadata": {},
-        },
-        {
-            "event": "on_chat_model_end",
-            "run_id": model_call_id,
-            "name": "BoxteamLiteLLMChatModel",
-            "data": {"output": AIMessage(content=candidate_text)},
-            "metadata": {},
-        },
-    ]
-    writer = SimpleNamespace(
-        commit=AsyncMock(),
-        turn_stream_id="stream_summary_candidate",
-    )
-    published: list[tuple[str, dict[str, Any]]] = []
+@pytest.mark.parametrize("carrier", ["message", "chat_result", "mapping"])
+async def test_final_source_survives_model_switch(
+    stream_writer, workspace_root, session_changes_service, carrier,
+):
+    from langchain_core.outputs import ChatGeneration, ChatResult
 
-    async def publish(event_type: str, payload: dict[str, Any]) -> None:
-        published.append((event_type, payload))
-
-    runtime = MessageStreamRuntime(
-        writer,
-        normalized_block_observer=MessageStreamTraceObserver(publish).observe,
-    )
-    runtime.register_summary_candidate(model_call_id)
-
+    original = AIMessage(id="lc_run--final", content="最终回复")
+    output = {
+        "message": original,
+        "chat_result": ChatResult(generations=[ChatGeneration(message=original)]),
+        "mapping": {"generations": [{"message": original}]},
+    }[carrier]
+    events = []
+    for run_id, model_output in (
+        ("previous", AIMessage(id="lc_run--previous", content="")),
+        ("final", output),
+    ):
+        base = {"name": "ChatOpenAI", "run_id": run_id, "metadata": {}}
+        events.extend([
+            {**base, "event": "on_chat_model_start", "data": {}},
+            {**base, "event": "on_chat_model_end", "data": {"output": model_output}},
+        ])
+    runtime = MessageStreamRuntime(stream_writer())
     result = await process_agent_event_stream(
-        agent=FakeAgent(events),
-        input_payload={"messages": []},
-        config={},
-        session_id="ses_019bef80066f7038ae8e88ccb2e5e2ea", thread_id="thr_stream",
-        job_id="job_summary_candidate",
-        turn_id="turn_summary_candidate",
-        agent_id="default",
-        extension_skill_names_resolver=None,
-        publish=publish,
-        session_changes_service=session_changes_service,
-        workspace_root=workspace_root,
+        agent=FakeAgent(events), input_payload={"messages": []}, config={},
+        session_id="ses_final_source", thread_id="thr_stream", job_id="job_final_source",
+        turn_id="turn_final_source", agent_id="default", extension_skill_names_resolver=None,
+        publish=lambda *_args, **_kwargs: _async_noop(),
+        session_changes_service=session_changes_service, workspace_root=workspace_root,
         message_stream_runtime=runtime,
     )
+    assert result.final_message_id == original.id
+    assert result.final_text == "最终回复"
+    assert [block["text"] for block in result.latest_model_content_blocks] == ["最终回复"]
 
-    committed = [call.args for call in writer.commit.await_args_list]
-    assert [event_type for event_type, _payload in committed] == [
-        "model.started",
-        "model.completed",
-    ]
-    completed_payload = committed[-1][1]
-    assert completed_payload == {
-        "model_call_id": model_call_id,
-        "attempt": 1,
-        "outcome": "accepted",
-        "reason": "摘要候选传输完成；正文是否可用由压缩中间件校验",
-    }
 
-    encoded = message_stream_to_proto(
-        {
-            "event_id": "evt_summary_candidate_completed",
-            "session_id": "ses_019bef80066f7038ae8e88ccb2e5e2ea",
-            "thread_id": "thr_00000000400070008000000000000002",
-            "turn_id": "turn_summary_candidate",
-            "turn_stream_id": "stream_summary_candidate",
-            "event_seq": 2,
-            "type": "model.completed",
-            "model_call_id": model_call_id,
-            "payload": completed_payload,
-        }
-    )
-    public_event = message_stream_to_json(encoded)
-    assert public_event["payload"]["outcome"] == "accepted"
-    assert public_event["payload"]["reason"] == completed_payload["reason"]
-
-    assert candidate_text not in result.final_text
-    assert not any(event_type.startswith("block.") for event_type, _payload in committed)
-    assert not any(event_type.startswith("block.") for event_type, _payload in published)
-    assert all(candidate_text not in repr(payload) for _event_type, payload in committed)
 
 
 @pytest.mark.asyncio
 async def test_model_end_does_not_replay_text_already_committed_by_provider_hook(
+    stream_writer,
     workspace_root: Path,
     session_changes_service: FakeSessionChangesService,
 ) -> None:
-    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_end_dedup")
+    writer = stream_writer(turn_stream_id="stream_end_dedup")
     published: list[tuple[str, dict[str, Any]]] = []
 
     async def trace_publish(event_type: str, payload: dict[str, Any]) -> None:
@@ -2389,6 +2370,97 @@ async def test_model_end_does_not_replay_text_already_committed_by_provider_hook
         if call.args and call.args[0] == "block.delta"
         for payload in [call.args[1]]
     ] == ["已经提交的正文"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery", ["end_only", "text_then_media", "media_snapshots"])
+async def test_model_media_survives_stream_and_end_without_duplicate_items(
+    delivery: str,
+    stream_writer,
+    workspace_root: Path,
+    session_changes_service: FakeSessionChangesService,
+) -> None:
+    writer = stream_writer()
+    sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer, canonical_item_sink=sink, canonical_turn_id="turn-media",
+    )
+    text = {"type": "text", "id": "text-1", "index": 0, "text": "生成结果"}
+    image = {
+        "type": "image_url", "id": "image-1", "index": 1,
+        "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+    }
+    content = [text, image] if delivery == "text_then_media" else [image]
+
+    class MediaAgent:
+        async def astream_events(
+            self, _input_payload, *, config, version, durability,
+        ):
+            assert durability == "sync"
+            metadata = config["metadata"]
+            base = {"run_id": "model-media", "name": "BoxteamLiteLLMChatModel", "metadata": metadata}
+            yield {**base, "event": "on_chat_model_start", "data": {}}
+            chunks = (
+                [text] if delivery == "text_then_media"
+                else [{**image, "temporary_preview": "obsolete"}, image] if delivery == "media_snapshots" else []
+            )
+            for block in chunks:
+                chunk = AIMessageChunk(content=[block])
+                # 与真实 Provider hook 一样，先提交运行时，再交付 LangChain 事件。
+                await runtime.accept_message_chunk(chunk, model_call_id="model-media")
+                yield {**base, "event": "on_chat_model_stream", "data": {"chunk": chunk}}
+            yield {**base, "event": "on_chat_model_end", "data": {"output": AIMessage(content=content)}}
+
+    result = await process_agent_event_stream(
+        agent=MediaAgent(), input_payload={"messages": []}, config={},
+        session_id="ses_media", thread_id="thr_stream", job_id="job-media", turn_id="turn-media",
+        agent_id="default", extension_skill_names_resolver=None, publish=AsyncMock(),
+        session_changes_service=session_changes_service, workspace_root=workspace_root,
+        message_stream_runtime=runtime,
+    )
+
+    assert result.final_text == ("生成结果" if delivery == "text_then_media" else "")
+    assert list(result.latest_model_content_blocks) == content
+    sink.assert_awaited_once()
+    items = sink.await_args.args[0]
+    assert len(items) == len(content)
+    assert all(item.semantic_kind == "assistant_output" for item in items)
+    assert items[-1].payload_kind == "structured_content"
+    assert items[-1].payload == [image]
+    assert len({item.item_id for item in items}) == len(items)
+
+
+@pytest.mark.asyncio
+async def test_runtime_preserves_protected_carriers_without_publishing_secrets(stream_writer) -> None:
+    writer = stream_writer()
+    sink = AsyncMock()
+    runtime = MessageStreamRuntime(writer, canonical_item_sink=sink, canonical_turn_id="turn-protection")
+    await runtime.start_model("model-protection", "primary")
+    chunks = [
+        {"type": "thinking", "id": "thinking-1", "index": 0, "thinking": "先", "signature": "sig-"},
+        {"type": "thinking", "id": "thinking-1", "index": 0, "thinking": "后", "signature": "tail"},
+        {"type": "redacted_thinking", "id": "redacted-1", "index": 1, "data": "sealed-secret"},
+        {"type": "reasoning_items", "id": "reasoning-1", "index": 2, "reasoning_items": [
+            {"type": "reasoning", "id": "provider-reasoning-1", "encrypted_content": "encrypted-secret",
+             "summary": [{"type": "summary_text", "text": "安全摘要"}]},
+        ]},
+    ]
+    for block in chunks:
+        await runtime.accept_message_chunk(AIMessageChunk(content=[block]), model_call_id="model-protection")
+    await runtime.finish_model()
+    sink.assert_awaited_once()
+    items = sink.await_args.args[0]
+    codec = LangChainMessageCodec()
+    restored = codec.project_message(items)["data"]["content"]
+    assert restored == [
+        {**chunks[0], "thinking": "先后", "signature": "sig-tail"},
+        chunks[2], chunks[3],
+    ]
+    assert all(item.semantic_kind == "reasoning" for item in items)
+    public_payloads = repr(writer.commit.await_args_list)
+    for secret in ("sig-", "tail", "sealed-secret", "encrypted-secret", "source_content"):
+        assert secret not in public_payloads
+    assert "安全摘要" in public_payloads
 
 
 @pytest.mark.asyncio
@@ -2665,9 +2737,10 @@ async def test_native_thinking_deltas_preserve_signature_and_provider_fields(
 
 @pytest.mark.asyncio
 async def test_task_tool_is_projected_as_subagent_activity(
+    stream_writer,
     workspace_root: Path,
 ) -> None:
-    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_subagent")
+    writer = stream_writer(turn_stream_id="stream_subagent")
     message_stream_runtime = MessageStreamRuntime(writer)
     await message_stream_runtime.start_model("model_subagent", "primary")
     await message_stream_runtime.accept_message_chunk(
@@ -2743,9 +2816,10 @@ async def test_task_tool_is_projected_as_subagent_activity(
 
 @pytest.mark.asyncio
 async def test_resource_tool_is_projected_as_resource_activity(
+    stream_writer,
     workspace_root: Path,
 ) -> None:
-    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_resource")
+    writer = stream_writer(turn_stream_id="stream_resource")
     message_stream_runtime = MessageStreamRuntime(writer)
     await message_stream_runtime.start_model("model_resource", "primary")
     await message_stream_runtime.accept_message_chunk(
@@ -2846,9 +2920,10 @@ def test_retryable_resource_failure_projects_recovery_metadata() -> None:
 
 @pytest.mark.asyncio
 async def test_retryable_resource_failure_does_not_abort_event_stream(
+    stream_writer,
     workspace_root: Path,
 ) -> None:
-    writer = SimpleNamespace(commit=AsyncMock(), turn_stream_id="stream_resource_error")
+    writer = stream_writer(turn_stream_id="stream_resource_error")
     message_stream_runtime = MessageStreamRuntime(writer)
     await message_stream_runtime.start_model("model_resource_error", "primary")
     await message_stream_runtime.accept_message_chunk(

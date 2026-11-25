@@ -18,7 +18,7 @@ async def test_cold_internal_history_survives_restart_while_user_execution_exclu
     notice = case.saver.accepted_internal_message(
         case.session, thread_id=case.thread, job_id="job-cold-history",
         message_id=intent.message_id, intent=intent,
-    )
+    )[1]
     response = AIMessage(content="已完成的内部回复", id="cold-internal-response",
                          response_metadata={"model_call_id": prepared.model_call_id})
     checkpoint = empty_checkpoint()

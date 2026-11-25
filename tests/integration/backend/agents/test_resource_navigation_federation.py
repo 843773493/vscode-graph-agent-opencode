@@ -452,7 +452,7 @@ async def test_model_remote_text_mutations_preserve_owner_versions_and_source_ch
     assert before.status_code == 200, before.text
     config_path = target.gateway_home / "config/gateway.jsonc"
     config = commentjson.loads(config_path.read_text())
-    config.setdefault("permissions", {}).setdefault("federation", {}).setdefault("rules", []).append({
+    config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {}).setdefault("federation", {}).setdefault("rules", []).append({
         "capability": "file_write", "effect": "deny", "origin_gateway_id": source.gateway_id,
     })
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
@@ -487,8 +487,9 @@ def _prepare_media_workspace(context, model_port, gateway_port):
     workspace = _prepare_workspace(context, model_port, gateway_port)
     config_path = workspace / ".boxteam/workspace.jsonc"
     config = commentjson.loads(config_path.read_text())
-    for provider in config["llm"]["providers"]:
-        provider["api_mode"]["model_info"]["supports_vision"] = True
+    for provider in config["settings"]["workspace"]["llm"]["providers"].values():
+        profile_name = provider["config_ref"].removeprefix("#/profiles/")
+        config["profiles"][profile_name]["settings"]["model_options"]["api_mode"]["model_info"]["supports_vision"] = True
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     return workspace
 

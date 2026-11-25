@@ -33,14 +33,16 @@ from tests.support.terminal_plugin import (
 
 def _source_interaction(workspace: Path) -> dict[str, object]:
     config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-    primary = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
+    primary = config["settings"]["workspace"]["llm"]["providers"]["primary"]
+    model = primary["models"]["default"]["model"]
+    endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
     cassette = build_cassette(
         asset_id="session-fork-actions",
-        model=primary["model"],
-        url=f"{primary['endpoint'].rstrip('/')}/chat/completions",
+        model=model,
+        url=f"{endpoint.rstrip('/')}/chat/completions",
         frames=chat_completion_frames(
             response_id="session-fork-actions",
-            model=primary["model"],
+            model=model,
             deltas=[{"role": "assistant", "content": "用于分支验收的来源消息。"}],
             finish_reason="stop",
         ),
@@ -59,7 +61,7 @@ async def _configure_gateway_url(
     loaded.raise_for_status()
     document = loaded.json()["data"]
     config = commentjson.loads(document["jsonc"])
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+    config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
         "url"
     ] = str(client.base_url).rstrip("/")
     saved = await client.put(source_path, headers=headers, json={

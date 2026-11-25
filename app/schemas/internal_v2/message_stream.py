@@ -19,6 +19,7 @@ ToolExecutionOutcome = Literal[
     "provider_error",
     "execution_lost",
     "outcome_unknown",
+    "cancelled",
 ]
 ActivityStatus = Literal[
     "running",
@@ -47,9 +48,9 @@ class MessageStreamFailureDTO(_MessageStreamDTO):
     details: dict[str, JsonValue] | None = None
     after_interrupt_requested: bool | None = None
     resumable: bool | None = None
-
     terminal_commit_id: int | None = Field(default=None, ge=1)
     terminal_outcome: str | None = None
+
 
 class MessageStreamBlockSnapshotDTO(_MessageStreamDTO):
     block_id: str = Field(min_length=1)
@@ -89,6 +90,8 @@ class MessageStreamToolExecutionSnapshotDTO(_MessageStreamDTO):
     started_at: str | None = None
     updated_at: str | None = None
     completed_at: str | None = None
+    # 真实完成观察，区别于完成事件的 completed_at 镜像发布时间。
+    execution_completed_at: str | None = None
     tool_invocation_id: str | None = None
     # 当前与 tool_execution_id 相同，用于关联这次执行；不是模型调用序号或重试计数。
     tool_attempt_id: str | None = None
@@ -112,6 +115,8 @@ class MessageStreamToolCallDTO(_MessageStreamDTO):
     # 若投影提供此关联标识，表示对应工具执行；当前执行事件将它写成执行 ID，
     # 不用它表示模型调用序号或工具重试次数。
     tool_attempt_id: str | None = None
+    provider_call_index: int | None = Field(default=None, ge=0)
+    model_call_id: str | None = Field(default=None, min_length=1)
 
 
 class MessageStreamModelCallSnapshotDTO(_MessageStreamDTO):

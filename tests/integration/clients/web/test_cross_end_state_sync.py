@@ -40,11 +40,13 @@ def _prepare_workspace(context: TestRunContext, model_port: int, gateway_port: i
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
     )
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
-    provider = config["llm"]["providers"]["primary"]
-    provider["defaults"].update({"endpoint": f"http://127.0.0.1:{model_port}/v1", "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}"})
+    workspace_settings = config["settings"]["workspace"]
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
+    provider = workspace_settings["llm"]["providers"]["primary"]
+    config["profiles"]["provider.primary"]["settings"]["model_options"].update(
+        {"endpoint": f"http://127.0.0.1:{model_port}/v1", "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}"})
     provider["models"]["default"]["model"] = "e2e-stub-model"
-    for agent in config["agents"].values():
+    for agent in workspace_settings["agents"].values():
         agent["model"]["primary"] = {"provider_id": "primary", "model_id": "default"}
         agent["model"]["fallbacks"] = []
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -86,7 +88,7 @@ async def test_cross_end_state_sync_through_two_gateways(
             source, target = nodes["a"], nodes["b"]
             assert source.gateway is not None and target.gateway is not None
             configuration = commentjson.loads((target.workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-            endpoint = configuration["llm"]["providers"]["primary"]["defaults"]["endpoint"]
+            endpoint = configuration["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
             interactions = build_cassette(
                 asset_id="cross-end-state-sync", model="e2e-stub-model", url=endpoint + "/chat/completions",
                 frames=chat_completion_frames(

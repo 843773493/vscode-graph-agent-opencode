@@ -1,26 +1,23 @@
-"""compact_conversation 工具的缓存优先压缩中间件。"""
+"""压缩工具只登记原后台任务；原文读取只进入同 Thread 的 canonical owner。"""
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import Annotated
+import asyncio
+from typing import TYPE_CHECKING, Annotated
 
-from deepagents.backends.protocol import BackendProtocol, ReadResult
-from deepagents.backends.utils import format_content_with_line_numbers
-from deepagents.middleware.summarization import SummarizationToolMiddleware
+from langchain.agents.middleware import AgentMiddleware
 from langchain.tools import ToolRuntime
-from langchain_core.messages import (
-    AnyMessage,
-    ToolMessage,
-)
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool, ToolException
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
-from app.agents.summarization.planning import build_safe_compaction_partition
-from app.agents.summarization.state import CachePreservingPartition
-from app.core.failures import failure_detail
+from app.core.shielded_cleanup import run_sync_shielded
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+
+if TYPE_CHECKING:
+    from app.runtime.context_compaction import AgentSummarizationCompactor
+    from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 
 
 class CompactConversationInput(BaseModel):
@@ -33,163 +30,53 @@ class ReadCompactionHistoryInput(CompactConversationInput):
     limit: Annotated[int, Field(ge=1, le=2000)] = 200
 
 
-# 声明本身没有可调用实现；目录和执行共用同一参数模型与描述。
 COMPACT_CONVERSATION_TOOL = StructuredTool(
     name="compact_conversation",
-    description=(
-        "Compact the conversation by summarizing older messages "
-        "into a concise summary. Use this proactively when the "
-        "conversation is getting long to free up context window "
-        "space. This tool takes no arguments."
-    ),
+    description="安排当前 Thread 的历史摘要；后台完整生成后，在下一次模型请求通过预算核验时采用。无需参数。",
     args_schema=CompactConversationInput,
 )
 READ_COMPACTION_HISTORY_TOOL = StructuredTool(
     name="read_compaction_history",
-    description=(
-        "读取当前会话精确 thread 的压缩归档原文，包含已从模型上下文移除的消息。"
-        "line_offset 从1开始，limit 是行数；返回带行号的原文，可按下一行继续读取。"
-        "不接受路径、Session ID 或 Thread ID。"
-    ),
+    description=("读取当前精确 Thread 已实际采用摘要对应的历史原文。line_offset从1开始，limit是行数，"
+                 "默认200；返回带行号的有界原文，不接受路径、Session或Thread参数。"),
     args_schema=ReadCompactionHistoryInput,
     handle_tool_error=True,
 )
 
 
-def create_compact_conversation_tool(
-    run: Callable[[ToolRuntime], Command],
-    arun: Callable[[ToolRuntime], Awaitable[Command]],
-) -> BaseTool:
-    def sync_compact(runtime: ToolRuntime) -> Command:
-        return run(runtime)
+class CompactionToolsMiddleware(AgentMiddleware):
+    """两个工具共用一个无本地业务状态的运行端口。"""
 
-    async def async_compact(runtime: ToolRuntime) -> Command:
-        return await arun(runtime)
+    def __init__(self, *, compactor: AgentSummarizationCompactor | None,
+                 owner: MutationIntentOwner, agent_id: str, preferred_model: ModelReferenceDTO | None = None) -> None:
+        self._compactor, self._owner, self._agent_id = compactor, owner, agent_id
+        self._preferred_model = preferred_model
+        self.tools: list[BaseTool] = [
+            COMPACT_CONVERSATION_TOOL.model_copy(update={"func": self._run_compact, "coroutine": self._arun_compact}),
+            READ_COMPACTION_HISTORY_TOOL.model_copy(update={"func": self._read_history, "coroutine": self._aread_history}),
+        ]
 
-    return COMPACT_CONVERSATION_TOOL.model_copy(update={
-        "func": sync_compact, "coroutine": async_compact,
-    })
-
-
-def create_read_compaction_history_tool(
-    history_path: Callable[[], str], resolve_backend: Callable[[ToolRuntime], BackendProtocol],
-) -> BaseTool:
-    def content(result: ReadResult, line_offset: int) -> str:
-        if result.error:
-            cause = RuntimeError(result.error)
-            failure_detail(cause, stage="compaction-history-read", label="压缩历史 backend 读取失败")
-            raise ToolException(
-                "detail-unavailable: 当前 thread 的压缩归档不可读取；"
-                f"line_offset={line_offset}。归档缺失或读取失败时不会改读其它 thread。"
-            ) from cause
-        if result.file_data is None or result.file_data["encoding"] != "utf-8":
-            raise RuntimeError("压缩历史必须返回 UTF-8 正文")
-        return format_content_with_line_numbers(
-            result.file_data["content"], start_line=line_offset,
-        )
-
-    def read_history(
-        runtime: ToolRuntime,
-        line_offset: Annotated[int, Field(ge=1)] = 1,
-        limit: Annotated[int, Field(ge=1, le=2000)] = 200,
-    ) -> str:
-        # 路径只在本次调用栈推导；模型不能选择其它 SessionThread。
-        path = history_path()
-        result = resolve_backend(runtime).read(path, offset=line_offset - 1, limit=limit)
-        return content(result, line_offset)
-
-    async def aread_history(
-        runtime: ToolRuntime,
-        line_offset: Annotated[int, Field(ge=1)] = 1,
-        limit: Annotated[int, Field(ge=1, le=2000)] = 200,
-    ) -> str:
-        path = history_path()
-        result = await resolve_backend(runtime).aread(path, offset=line_offset - 1, limit=limit)
-        return content(result, line_offset)
-
-    return READ_COMPACTION_HISTORY_TOOL.model_copy(update={
-        "func": read_history, "coroutine": aread_history,
-    })
-
-
-class CachePreservingSummarizationToolMiddleware(SummarizationToolMiddleware):
-    """让 compact_conversation 工具使用与自动压缩相同的缓存优先策略。"""
-
-    def __init__(
-        self,
-        summarization: CachePreservingSummarizationMiddleware,
-        *,
-        system_prompt: str | None = None,
-    ) -> None:
-        super().__init__(summarization, system_prompt=system_prompt)
-        self.tools.append(create_read_compaction_history_tool(
-            summarization._get_history_path, self._resolve_backend,
-        ))
-
-    def _create_compact_tool(self) -> BaseTool:
-        return create_compact_conversation_tool(self._run_compact, self._arun_compact)
-
-    def _partition_for_tool(
-        self,
-        runtime: ToolRuntime,
-    ) -> tuple[CachePreservingPartition, object, list[AnyMessage]] | None:
-        summarization = self._summarization
-        messages = runtime.state.get("messages", [])
-        event = runtime.state.get("_summarization_event")
-        effective = summarization._apply_event_to_messages(messages, event)
-        if not self._is_eligible_for_compaction(effective):
-            return None
-        partition = build_safe_compaction_partition(
-            effective,
-            event,
-            summarize_end=summarization._determine_cutoff_index(effective),
-        )
-        if partition is None:
-            return None
-        return partition, event, effective
+    def _require_compactor(self) -> AgentSummarizationCompactor:
+        if self._compactor is None:
+            raise RuntimeError("compaction-owner-unavailable: 压缩工具未绑定 durable owner")
+        return self._compactor
 
     def _run_compact(self, runtime: ToolRuntime) -> Command:
-        prepared = self._partition_for_tool(runtime)
-        if prepared is None:
-            return self._schedule_result(runtime, summarized_count=0)
-        partition, _, _ = prepared
-        return self._schedule_result(
-            runtime,
-            summarized_count=len(partition.messages_to_summarize),
-        )
+        return asyncio.run(self._arun_compact(runtime))
 
     async def _arun_compact(self, runtime: ToolRuntime) -> Command:
-        prepared = self._partition_for_tool(runtime)
-        if prepared is None:
-            return self._schedule_result(runtime, summarized_count=0)
-        partition, _, _ = prepared
-        return self._schedule_result(
-            runtime,
-            summarized_count=len(partition.messages_to_summarize),
+        handle = await self._require_compactor().request(
+            self._owner, agent_id=self._agent_id, preferred_model=self._preferred_model, manual=True,
         )
+        content = ("当前没有可安全压缩的历史，未创建摘要任务。" if handle is None else
+                   f"历史摘要已安排，task_id={handle.task_id}。这只表示任务已受理，尚未切换当前上下文。")
+        return Command(update={"messages": [ToolMessage(content=content, tool_call_id=runtime.tool_call_id or "")]})
 
-    @staticmethod
-    def _schedule_result(
-        runtime: ToolRuntime,
-        *,
-        summarized_count: int,
-    ) -> Command:
-        if summarized_count > 0:
-            content = (
-                "Conversation compaction scheduled. The next model call will create "
-                f"a summary of {summarized_count} messages, preserving the prompt "
-                "cache when a safe stable prefix exists."
-            )
-        else:
-            content = "Conversation does not contain enough history to compact."
-        return Command(
-            update={
-                "_force_cache_compaction": summarized_count > 0,
-                "messages": [
-                    ToolMessage(
-                        content=content,
-                        tool_call_id=runtime.tool_call_id or "",
-                    )
-                ],
-            }
-        )
+    def _read_history(self, runtime: ToolRuntime, line_offset: int = 1, limit: int = 200) -> str:
+        try:
+            return self._require_compactor().read_history(self._owner, line_offset=line_offset, limit=limit)
+        except ValueError as error:
+            raise ToolException(str(error)) from error
+
+    async def _aread_history(self, runtime: ToolRuntime, line_offset: int = 1, limit: int = 200) -> str:
+        return await run_sync_shielded(self._read_history, runtime, line_offset, limit)

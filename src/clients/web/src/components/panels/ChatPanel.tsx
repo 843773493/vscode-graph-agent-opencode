@@ -1,7 +1,8 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { TranscriptViewContext, useTranscriptView } from "../chat/TranscriptViewContext";
 import { ProcessActivity } from "../chat/turn/TurnActivitySummary";
 import { buildRenderGroups } from "../../state/timeline/chatResponseGroups";
-import { responsePartsToTimelineItems } from "../../state/timeline/responseParts";
+import { responseItemsToTimelineItems } from "../../state/timeline/responseItems";
 import { childExecutionStatusLabel } from "../../state/childThreadDisplay";
 import { t } from "../../../../shared/core/i18n/index.js";
 import type { LoadAroundTurn, TurnNavigationTarget } from "../../api/session/sessionTurnHistory";
@@ -102,8 +103,8 @@ function ChatPanelFooter({
 }): React.ReactNode {
   const { pendingActionError } = currentChatPanelRenderState(context);
   return <div className="chat-history-page-footer">{pendingActionError ? (
-    <div className="chat-turn-action-error" role="alert">
-      {pendingActionError}
+    <div className="chat-turn-action-error failure-summary" role="alert">
+      {failureSummary(pendingActionError)}
     </div>
   ) : null}</div>;
 }
@@ -135,7 +136,7 @@ const renderChatPanelItem: ItemContent<
     return <ChatItemOwnerContext.Provider value={state.sessionId && state.threadId ? {sessionId:state.sessionId,threadId:state.threadId}:null}>
       <div className="chat-virtual-item" data-execution-id={item.executionId}>
         <ProcessActivity process={{kind:"execution",id:item.executionId}} segment={item.kind === "execution_response" ? item.itemId : undefined}
-          groups={item.kind === "execution_response" ? buildRenderGroups(responsePartsToTimelineItems(item.parts,
+          groups={item.kind === "execution_response" ? buildRenderGroups(responseItemsToTimelineItems(item.parts,
             {terminalFailure:settled && !interrupted && (!!execution.failure || uncertain),terminalCancellation:settled && interrupted})) : []}
           settled={settled}
           showRawDetails={state.expandDetails} loadDetails={state.onLoadTurnDetails}

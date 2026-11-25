@@ -224,6 +224,7 @@ export enum ToolExecutionOutcome {
   TOOL_EXECUTION_OUTCOME_PROVIDER_ERROR = 2,
   TOOL_EXECUTION_OUTCOME_EXECUTION_LOST = 3,
   TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN = 4,
+  TOOL_EXECUTION_OUTCOME_CANCELLED = 5,
   UNRECOGNIZED = -1,
 }
 
@@ -244,6 +245,9 @@ export function toolExecutionOutcomeFromJSON(object: any): ToolExecutionOutcome 
     case 4:
     case "TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN":
       return ToolExecutionOutcome.TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN;
+    case 5:
+    case "TOOL_EXECUTION_OUTCOME_CANCELLED":
+      return ToolExecutionOutcome.TOOL_EXECUTION_OUTCOME_CANCELLED;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -263,6 +267,8 @@ export function toolExecutionOutcomeToJSON(object: ToolExecutionOutcome): string
       return "TOOL_EXECUTION_OUTCOME_EXECUTION_LOST";
     case ToolExecutionOutcome.TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN:
       return "TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN";
+    case ToolExecutionOutcome.TOOL_EXECUTION_OUTCOME_CANCELLED:
+      return "TOOL_EXECUTION_OUTCOME_CANCELLED";
     case ToolExecutionOutcome.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -463,7 +469,12 @@ export interface ToolCall {
   updated_at: string | undefined;
   completed_at: string | undefined;
   tool_invocation_id?: string | undefined;
-  tool_attempt_id?: string | undefined;
+  tool_attempt_id?:
+    | string
+    | undefined;
+  /** 仅为 Provider 调用数组的来源顺序，不是 Item 身份或消息组 ordinal。 */
+  provider_call_index?: number | undefined;
+  model_call_id?: string | undefined;
 }
 
 export interface ToolCallDelta {
@@ -474,6 +485,7 @@ export interface ToolCallDelta {
   arguments_complete?: boolean | undefined;
   tool_invocation_id?: string | undefined;
   tool_attempt_id?: string | undefined;
+  provider_call_index?: number | undefined;
 }
 
 export interface ToolCallCompleted {
@@ -491,7 +503,11 @@ export interface ToolStarted {
   tool_call_id: string;
   tool_name: string;
   tool_invocation_id?: string | undefined;
-  tool_attempt_id?: string | undefined;
+  tool_attempt_id?:
+    | string
+    | undefined;
+  /** 原工具 callback 的开始观察；缺来源时不以镜像时间补造。 */
+  started_at: string | undefined;
 }
 
 export interface ToolCompleted {
@@ -504,7 +520,11 @@ export interface ToolCompleted {
   outcome: ToolExecutionOutcome;
   completion_reason: string;
   tool_invocation_id?: string | undefined;
-  tool_attempt_id?: string | undefined;
+  tool_attempt_id?:
+    | string
+    | undefined;
+  /** 原 owner 的真实完成观察，不是本事件的 emitted_at。 */
+  execution_completed_at: string | undefined;
 }
 
 export interface InterruptRequested {
@@ -577,6 +597,7 @@ export interface ToolExecutionSnapshot {
   completed_at: string | undefined;
   tool_invocation_id?: string | undefined;
   tool_attempt_id?: string | undefined;
+  execution_completed_at: string | undefined;
 }
 
 export interface ModelCallSnapshot {
@@ -1120,6 +1141,8 @@ function createBaseToolCall(): ToolCall {
     completed_at: undefined,
     tool_invocation_id: undefined,
     tool_attempt_id: undefined,
+    provider_call_index: undefined,
+    model_call_id: undefined,
   };
 }
 
@@ -1140,6 +1163,10 @@ export const ToolCall: MessageFns<ToolCall> = {
       completed_at: isSet(object.completed_at) ? globalThis.String(object.completed_at) : undefined,
       tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
       tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
+      provider_call_index: isSet(object.provider_call_index)
+        ? globalThis.Number(object.provider_call_index)
+        : undefined,
+      model_call_id: isSet(object.model_call_id) ? globalThis.String(object.model_call_id) : undefined,
     };
   },
 
@@ -1187,6 +1214,12 @@ export const ToolCall: MessageFns<ToolCall> = {
     if (message.tool_attempt_id !== undefined) {
       obj.tool_attempt_id = message.tool_attempt_id;
     }
+    if (message.provider_call_index !== undefined) {
+      obj.provider_call_index = Math.round(message.provider_call_index);
+    }
+    if (message.model_call_id !== undefined) {
+      obj.model_call_id = message.model_call_id;
+    }
     return obj;
   },
 
@@ -1209,6 +1242,8 @@ export const ToolCall: MessageFns<ToolCall> = {
     message.completed_at = object.completed_at ?? undefined;
     message.tool_invocation_id = object.tool_invocation_id ?? undefined;
     message.tool_attempt_id = object.tool_attempt_id ?? undefined;
+    message.provider_call_index = object.provider_call_index ?? undefined;
+    message.model_call_id = object.model_call_id ?? undefined;
     return message;
   },
 };
@@ -1222,6 +1257,7 @@ function createBaseToolCallDelta(): ToolCallDelta {
     arguments_complete: undefined,
     tool_invocation_id: undefined,
     tool_attempt_id: undefined,
+    provider_call_index: undefined,
   };
 }
 
@@ -1235,6 +1271,9 @@ export const ToolCallDelta: MessageFns<ToolCallDelta> = {
       arguments_complete: isSet(object.arguments_complete) ? globalThis.Boolean(object.arguments_complete) : undefined,
       tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
       tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
+      provider_call_index: isSet(object.provider_call_index)
+        ? globalThis.Number(object.provider_call_index)
+        : undefined,
     };
   },
 
@@ -1261,6 +1300,9 @@ export const ToolCallDelta: MessageFns<ToolCallDelta> = {
     if (message.tool_attempt_id !== undefined) {
       obj.tool_attempt_id = message.tool_attempt_id;
     }
+    if (message.provider_call_index !== undefined) {
+      obj.provider_call_index = Math.round(message.provider_call_index);
+    }
     return obj;
   },
 
@@ -1276,6 +1318,7 @@ export const ToolCallDelta: MessageFns<ToolCallDelta> = {
     message.arguments_complete = object.arguments_complete ?? undefined;
     message.tool_invocation_id = object.tool_invocation_id ?? undefined;
     message.tool_attempt_id = object.tool_attempt_id ?? undefined;
+    message.provider_call_index = object.provider_call_index ?? undefined;
     return message;
   },
 };
@@ -1354,6 +1397,7 @@ function createBaseToolStarted(): ToolStarted {
     tool_name: "",
     tool_invocation_id: undefined,
     tool_attempt_id: undefined,
+    started_at: undefined,
   };
 }
 
@@ -1365,6 +1409,7 @@ export const ToolStarted: MessageFns<ToolStarted> = {
       tool_name: isSet(object.tool_name) ? globalThis.String(object.tool_name) : "",
       tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
       tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
+      started_at: isSet(object.started_at) ? globalThis.String(object.started_at) : undefined,
     };
   },
 
@@ -1385,6 +1430,9 @@ export const ToolStarted: MessageFns<ToolStarted> = {
     if (message.tool_attempt_id !== undefined) {
       obj.tool_attempt_id = message.tool_attempt_id;
     }
+    if (message.started_at !== undefined) {
+      obj.started_at = message.started_at;
+    }
     return obj;
   },
 
@@ -1398,6 +1446,7 @@ export const ToolStarted: MessageFns<ToolStarted> = {
     message.tool_name = object.tool_name ?? "";
     message.tool_invocation_id = object.tool_invocation_id ?? undefined;
     message.tool_attempt_id = object.tool_attempt_id ?? undefined;
+    message.started_at = object.started_at ?? undefined;
     return message;
   },
 };
@@ -1414,6 +1463,7 @@ function createBaseToolCompleted(): ToolCompleted {
     completion_reason: "",
     tool_invocation_id: undefined,
     tool_attempt_id: undefined,
+    execution_completed_at: undefined,
   };
 }
 
@@ -1430,6 +1480,9 @@ export const ToolCompleted: MessageFns<ToolCompleted> = {
       completion_reason: isSet(object.completion_reason) ? globalThis.String(object.completion_reason) : "",
       tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
       tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
+      execution_completed_at: isSet(object.execution_completed_at)
+        ? globalThis.String(object.execution_completed_at)
+        : undefined,
     };
   },
 
@@ -1465,6 +1518,9 @@ export const ToolCompleted: MessageFns<ToolCompleted> = {
     if (message.tool_attempt_id !== undefined) {
       obj.tool_attempt_id = message.tool_attempt_id;
     }
+    if (message.execution_completed_at !== undefined) {
+      obj.execution_completed_at = message.execution_completed_at;
+    }
     return obj;
   },
 
@@ -1483,6 +1539,7 @@ export const ToolCompleted: MessageFns<ToolCompleted> = {
     message.completion_reason = object.completion_reason ?? "";
     message.tool_invocation_id = object.tool_invocation_id ?? undefined;
     message.tool_attempt_id = object.tool_attempt_id ?? undefined;
+    message.execution_completed_at = object.execution_completed_at ?? undefined;
     return message;
   },
 };
@@ -1852,6 +1909,7 @@ function createBaseToolExecutionSnapshot(): ToolExecutionSnapshot {
     completed_at: undefined,
     tool_invocation_id: undefined,
     tool_attempt_id: undefined,
+    execution_completed_at: undefined,
   };
 }
 
@@ -1874,6 +1932,9 @@ export const ToolExecutionSnapshot: MessageFns<ToolExecutionSnapshot> = {
       completed_at: isSet(object.completed_at) ? globalThis.String(object.completed_at) : undefined,
       tool_invocation_id: isSet(object.tool_invocation_id) ? globalThis.String(object.tool_invocation_id) : undefined,
       tool_attempt_id: isSet(object.tool_attempt_id) ? globalThis.String(object.tool_attempt_id) : undefined,
+      execution_completed_at: isSet(object.execution_completed_at)
+        ? globalThis.String(object.execution_completed_at)
+        : undefined,
     };
   },
 
@@ -1927,6 +1988,9 @@ export const ToolExecutionSnapshot: MessageFns<ToolExecutionSnapshot> = {
     if (message.tool_attempt_id !== undefined) {
       obj.tool_attempt_id = message.tool_attempt_id;
     }
+    if (message.execution_completed_at !== undefined) {
+      obj.execution_completed_at = message.execution_completed_at;
+    }
     return obj;
   },
 
@@ -1951,6 +2015,7 @@ export const ToolExecutionSnapshot: MessageFns<ToolExecutionSnapshot> = {
     message.completed_at = object.completed_at ?? undefined;
     message.tool_invocation_id = object.tool_invocation_id ?? undefined;
     message.tool_attempt_id = object.tool_attempt_id ?? undefined;
+    message.execution_completed_at = object.execution_completed_at ?? undefined;
     return message;
   },
 };

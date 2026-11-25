@@ -2,9 +2,35 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import httpx
 
 from app.core import failures
+
+
+def is_context_overflow(error: Exception) -> bool:
+    """仅识别原 Provider 边界确认的 SDK 容量错误，不匹配任意错误正文。"""
+    if not failures.is_provider_failure(error):
+        return False
+    from openai import BadRequestError
+
+    from app.runtime.litellm_runtime import litellm
+
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, litellm.ContextWindowExceededError):
+            return True
+        if isinstance(current, (litellm.BadRequestError, BadRequestError)):
+            body = current.body
+            if isinstance(body, Mapping):
+                detail = body.get("error", body)
+                if isinstance(detail, Mapping) and detail.get("code") == "context_length_exceeded":
+                    return True
+        current = current.__cause__
+    return False
 
 
 def is_transient_provider_error(error: Exception) -> bool:

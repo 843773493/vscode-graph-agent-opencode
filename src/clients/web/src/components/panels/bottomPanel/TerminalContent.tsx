@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import type { PanelToolbarControl, RenderPanelToolbar } from "./PanelToolbar";
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../../../../shared/core/i18n/index.js";
@@ -234,8 +235,8 @@ export function TerminalContent({
               </details>
             ) : null}
             {terminalErrorMessage ? (
-              <div role="alert" title={terminalErrorMessage}>
-                {terminalErrorMessage}
+              <div className="failure-summary" role="alert">
+                {failureSummary(terminalErrorMessage)}
               </div>
             ) : null}
           </div>

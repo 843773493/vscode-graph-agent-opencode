@@ -115,9 +115,16 @@ async def _wait_job(client: httpx.AsyncClient, job_id: str) -> dict:
 
 def _configure_model(config_path: Path, endpoint: str) -> None:
     config = commentjson.loads(config_path.read_text())
-    config["llm"]["providers"] = {
+    workspace_settings = config["settings"]["workspace"]
+    workspace_settings["llm"]["providers"] = {
         "gateway-skill-test": {
-            "defaults": {
+            "config_ref": "#/profiles/provider.gateway-skill-test",
+            "models": {"default": {"model": "gateway-skill-test-model", "config_ref": "context:provider/gateway-skill-test"}},
+        }
+    }
+    config["profiles"]["provider.gateway-skill-test"] = {
+        "extends": "context:workspace",
+        "settings": {"model_options": {
                 "endpoint": endpoint,
                 "api_key": "",
                 "custom_llm_provider": "openai",
@@ -130,15 +137,13 @@ def _configure_model(config_path: Path, endpoint: str) -> None:
                     "supports_reasoning": {"reasoning_content": False},
                 },
             },
-            "models": {"default": {"model": "gateway-skill-test-model"}},
-        }
-    }
-    for agent in config["agents"].values():
+        }}
+    for agent in workspace_settings["agents"].values():
         if "model" in agent:
             agent["model"] = {'primary': {'provider_id': 'gateway-skill-test', 'model_id': 'default'}, 'fallbacks': []}
         # 只保留内置工具，移除与来源闭包无关的外部 Provider 引用。
         agent["tools"]["custom"] = []
-    config.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {"timeout_seconds": 2}
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {"timeout_seconds": 2}
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
 
 
@@ -218,7 +223,7 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
                     assert initial_status.status_code == 200, initial_status.text
                     before = initial_status.json()["data"]
                     config = commentjson.loads(config_path.read_text())
-                    config.setdefault("resources", {}).setdefault("skill_sources", {})["gateway_updates"] = {
+                    config["settings"]["workspace"].setdefault("resources", {}).setdefault("skill_sources", {})["gateway_updates"] = {
                         "mode": mode, "poll_interval": interval,
                     }
                     candidate = config_path.with_suffix(".candidate")

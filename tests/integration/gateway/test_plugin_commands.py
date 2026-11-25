@@ -195,7 +195,7 @@ def test_workspace_commands_release_removed_target_without_changing_sibling(
         path = f"/api/v1/workspaces/{target['workspace_id']}/config/sources/workspace_root_mutable_override"
         document = exchange("GET", path).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
-        source["plugins"] = {
+        source["settings"]["workspace"]["plugins"] = {
             "runtime": {"entries": [] if version is None else [
                 {"package_id": "proof.commands", "plugin_id": runtime, "package_version": version, "enabled": True}
                 for runtime in ("python", "node")
@@ -250,7 +250,7 @@ def test_workspace_commands_release_removed_target_without_changing_sibling(
                 config_path=Path("configs/tests/workspace/default.jsonc"), schema_path=Path("configs/workspace_schema.jsonc"))
             configuration = commentjson.loads(path.read_text())
             clear_test_provider_api_keys(configuration)
-            configuration.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = str(client.base_url).rstrip("/")
+            configuration["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = str(client.base_url).rstrip("/")
             path.write_text(json.dumps(configuration), encoding="utf-8")
             registered = exchange("POST", "/api/gateway/managed-workspaces", {
                 "root_path": str(workspace), "name": name, "create_directory": False,
@@ -330,7 +330,7 @@ def test_workspace_commands_release_removed_target_without_changing_sibling(
             "gateway_id": gateway_id, "package_id": "proof.commands", "package_version": "2.0.0"}).raise_for_status()
         assert not (context.boxteam_home_for_node(request.node.nodeid) / "plugins/packages/proof.commands").exists()
         retained = exchange("GET", f"/api/v1/workspaces/{target_b['workspace_id']}/config/sources/workspace_root_mutable_override").raise_for_status().json()["data"]
-        assert commentjson.loads(retained["jsonc"])["plugins"]["configuration"]["values"]["proof.commands"]["python"]["prefix"] == target_b["workspace_id"] + ":"
+        assert commentjson.loads(retained["jsonc"])["settings"]["workspace"]["plugins"]["configuration"]["values"]["proof.commands"]["python"]["prefix"] == target_b["workspace_id"] + ":"
     finally:
         (context.artifacts_dir / "workspace-command-release.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
 

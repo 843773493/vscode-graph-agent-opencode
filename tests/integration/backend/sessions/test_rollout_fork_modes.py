@@ -44,8 +44,7 @@ from app.abstractions.workspace_resources import ResourceKind
 from app.abstractions.workspace_resources import (
     ResourceSnapshot as RuntimeResourceSnapshot,
 )
-from app.agents.summarization.planning import build_cache_preserving_event
-from app.agents.summarization.state import CachePreservingPartition
+from app.agents.summarization.generation import CompactionGenerator, SummaryCallBudget
 from app.container import AppContainer, WorkspaceContainerRegistry
 from app.core import session_subtree_delete
 from app.core.checkpoint_config import build_checkpoint_config
@@ -85,6 +84,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
 )
 from app.core.workspace_identity import bind_workspace_id, load_or_create_workspace_id
+from app.domain.itemized.compaction import ApplyCompactionCandidateIntent
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -107,7 +107,6 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
-    ItemProvenanceRelation,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.plans.contributions import ContextContribution
@@ -143,6 +142,7 @@ from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_context_query.resources import (
+    session_resource_identity,
     workspace_session_inventory_uri,
 )
 from app.services.business.session_service import SessionService
@@ -164,6 +164,9 @@ from app.services.infrastructure.resource_platform.derivation.types import (
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
+)
+from app.services.infrastructure.rollout_context.activation.body import (
+    ResourceActivationBodyStore,
 )
 from app.services.infrastructure.rollout_context.activation.common import (
     HASH_MISMATCH_CODE,
@@ -235,12 +238,16 @@ from app.services.infrastructure.rollout_history.reader import RolloutHistoryRea
 from app.services.mapping.itemized.resource_activation import (
     project_sealed_resource_refs,
 )
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.fork_execution_source import (
     fork_execution_message as fork_execution_message,  # noqa: PLC0414
 )
 from tests.integration.backend.sessions.fork_execution_source import (
     fork_execution_source as fork_execution_source,  # noqa: PLC0414 - 产品执行生成来源历史
+)
+from tests.integration.backend.sessions.rollout_context.test_derived_summary_request import (
+    summary_model as summary_model,  # noqa: PLC0414 - 复用确定性 Provider cassette
 )
 from tests.integration.backend.sessions.rollout_test_workspace import (
     prepare_rollout_workspace,
@@ -255,8 +262,10 @@ from tests.support.fork_deadline import (
     ForkDeadlineRegistry,
     ForkOperationDeadline,
 )
-from tests.support.messages import compaction_summary_message
 from tests.support.node_debug_dependencies import node_debug_binding_snapshot
+from tests.support.rollout.compaction_application import (
+    generate_and_adopt_compaction_candidate,
+)
 from tests.support.rollout.fixture_output import commit_fixture_output
 from tests.support.rollout.view_mutations import mutate_view_members
 from tests.support.session_navigation.catalog_intents import (
@@ -351,6 +360,32 @@ def fork_provider_prepare(
             )
             return prepared
     return prepare
+
+
+async def _apply_real_fork_compaction(context: ForkIntegrationContext, *, admission, config, candidate, model):
+    saver = context.saver
+    activation = ResourceActivationCoordinator(
+        registry=ResourceRegistry(), saver=saver,
+        body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store),
+    )
+    result = await CompactionGenerator(saver=saver, model=model, activation=activation).generate(
+        candidate, budget=SummaryCallBudget(time.time() + 60),
+    )
+    with saver._storage.storage.read_connection(candidate.session_id, candidate.thread_id) as connection:
+        expected_view, = connection.execute(
+            "SELECT branch.head_view_id FROM checkpoint_namespace_state namespace "
+            "JOIN branches branch ON branch.branch_id=namespace.active_branch_id "
+            "WHERE namespace.checkpoint_ns='' AND branch.status='active'",
+        ).fetchone()
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(candidate.session_id, candidate.thread_id),
+            langgraph_thread_id=candidate.thread_id,
+        ),
+        execution_admission_scope(admission, langgraph_thread_id=candidate.thread_id),
+    ):
+        applied = saver.adopt_candidate(config, ApplyCompactionCandidateIntent(candidate, expected_view))
+    return applied, result
 
 
 @pytest.fixture
@@ -1631,7 +1666,7 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
         job_id = identity.job_id
         frozen = context.saver.accepted_user_message(
             source.session_id, thread_id=source_thread, job_id=job_id, message_id=message.message_id,
-        )
+        )[1]
     else:
         intent = InternalExecutionIntent(
             message_id=message.message_id, execution_id=create_uuid_hex(namespace="execution"),
@@ -1647,7 +1682,7 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
         messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
         frozen = context.saver.accepted_internal_message(
             source.session_id, thread_id=source_thread, job_id=job_id, message_id=message.message_id, intent=intent,
-        )
+        )[1]
     source_admission = context.saver.execution_admission_for_job(source.session_id, thread_id=source_thread, job_id=job_id)
     with (session_thread_owner_scope(MutationIntentOwner(source.session_id, source_thread), langgraph_thread_id=source_thread),
           execution_admission_scope(source_admission, langgraph_thread_id=source_thread)):
@@ -1792,7 +1827,7 @@ async def test_fork_settlement_retries_retained_upload_pin_without_restart(
     ))
     admission = container.message_service.execution_admission_for_job(source.session_id, thread_id=source_thread, job_id=identity.job_id)
     frozen = context.saver.accepted_user_message(source.session_id, thread_id=source_thread,
-        job_id=identity.job_id, message_id=message.message_id)
+        job_id=identity.job_id, message_id=message.message_id)[1]
     with (session_thread_owner_scope(MutationIntentOwner(source.session_id, source_thread), langgraph_thread_id=source_thread),
           execution_admission_scope(admission, langgraph_thread_id=source_thread)):
         await context.saver.aput(build_checkpoint_config(source_thread), _checkpoint("pin-source-cp", [frozen]),
@@ -3361,7 +3396,7 @@ async def test_first_fork_click_preserves_prefix_after_unrelated_tail_append(
         page.source_view_id, page.source_view_revision,
     )
     selection = {"turn_id": displayed.turn_id} if click == "user_root" else {
-        "item_id": next(part.source.item_id for part in displayed.response_parts if part.final),
+        "item_id": next(part.source.item_id for part in displayed.response_items if part.final),
     }
     if click == "assistant_item":
         automatic = await fork_context.forks.source_point(
@@ -3749,7 +3784,7 @@ async def test_cold_clicked_prefix_history_excludes_backing_final(
     latest, _, _ = reader.bootstrap(result.session.session_id, result.thread_id)
     assert latest is not None and latest.turn_id == "turn-retry"
     assert "检查完成" not in latest.response_preview and "结果已确认" not in latest.response_preview
-    assert all(part.source.item_id != final_item_id for part in latest.response_parts)
+    assert all(part.source.item_id != final_item_id for part in latest.response_items)
     page = reader.load(result.session.session_id, result.thread_id, TurnHistoryLoadRequest(
         direction="tail", include=["user", "assistant", "tool_summary", "tool_call", "tool_result", "internal"],
     ))
@@ -3764,7 +3799,7 @@ async def test_cold_clicked_prefix_history_excludes_backing_final(
         assert connection.execute(
             "SELECT status, final_item_id FROM turn_records WHERE turn_id='turn-retry'",
         ).fetchone() == ("completed", final_item_id)
-    assert all(part.source.item_id != final_item_id for part in page.items[0].response_parts)
+    assert all(part.source.item_id != final_item_id for part in page.items[0].response_items)
 
 
 @pytest.mark.asyncio
@@ -3818,7 +3853,7 @@ async def test_clicked_prefix_successor_checkpoint_keeps_source_final_hidden(
         page = cold.load_history(source.session_id, fork.thread_id, TurnHistoryLoadRequest(direction="tail"))
         assert [turn.turn_id for turn in page.items] == ["turn-retry", accepted["turn_id"]]
         assert [turn.final_response for turn in page.items] == ["", "分支新回答"]
-        assert all(part.source.item_id != final_item_id for turn in page.items for part in turn.response_parts)
+        assert all(part.source.item_id != final_item_id for turn in page.items for part in turn.response_items)
         with sqlite3.connect(cold._storage.storage.index_path(source.session_id, thread_id=fork.thread_id)) as connection:
             assert connection.execute(
                 "SELECT status, final_item_id FROM turn_records WHERE turn_id='turn-retry'",
@@ -3998,10 +4033,12 @@ async def test_view_prefix_click_keeps_exact_completed_turn_root_or_middle_item(
     ("before_provider", "view_prefix_fork"),
     ("before_provider", "last_completed_turn_fork"),
 ])
+@pytest.mark.parametrize("summary_model", [("basic-text", "chat_completions", "openai", "/chat/completions")], indirect=True)
 async def test_compaction_fork_keeps_only_required_body_backing(
     fork_context: ForkIntegrationContext, fork_provider_prepare,
     fork_gateway_request_context: None,
-    mode: SessionForkMode, compaction_order: str,
+    production_fork_container: AppContainer,
+    mode: SessionForkMode, compaction_order: str, summary_model,
 ) -> None:
     saver = fork_context.saver
     source = await fork_context.sessions.create(SessionCreateRequest(title="真实压缩来源"))
@@ -4061,13 +4098,11 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     admitted_root = next(item for item in saver._storage.storage.read_items(source.session_id, source_thread)
                          if item.item_id == "compaction-source-root")
     user = messages_from_dict([LangChainMessageCodec().project_message((admitted_root,))])[0]
-    summary = compaction_summary_message(content="旧上下文摘要", id="compaction-summary", response_metadata={
-        "provenance_relations": [ItemProvenanceRelation(
-            relation="derived_from", target_kind="canonical_item", target_id="compaction-old-root",
-            target_session_id=source.session_id, target_thread_id=source_thread,
-            target_turn_id=str(old["turn_id"]),
-        ).to_dict()],
-    })
+    source_items = saver._storage.storage.read_items(source.session_id, source_thread)
+    old_root_item = next(item for item in source_items if item.item_id == "compaction-old-root")
+    old_final_item = next(item for item in source_items
+                          if item.projection_identity is not None
+                          and item.projection_identity.projection_message_id == "compaction-old-final")
     if compaction_order == "after_provider":
         produced = fork_provider_prepare(
             fork_context, source.session_id, admission.execution_id, manager,
@@ -4076,43 +4111,53 @@ async def test_compaction_fork_keeps_only_required_body_backing(
         final = AIMessage(content=[{"type": "text", "text": "新回答"}, {"type": "text", "text": "结束"}],
                           id="compaction-source-final", response_metadata={"model_call_id": produced["snapshot"].model_call_id})
         expanded_checkpoint = _checkpoint("compaction-expanded-checkpoint", [*old_messages, user, final])
-        expanded_checkpoint["channel_versions"] = {"messages": "5", "counter": "5"}
+        frozen_state = {"false_flag": False, "zero_count": 0, "empty_map": {}, "empty_list": [], "none_value": None}
+        frozen_versions = {name: f"frozen-{name}" for name in frozen_state}
+        expanded_checkpoint["channel_values"].update(frozen_state)
+        expanded_checkpoint["channel_versions"].update({"messages": "5", "counter": "5", **frozen_versions})
+        expanded_checkpoint["updated_channels"].extend(frozen_state)
+        expanded_checkpoint["versions_seen"] = {"historical-node": frozen_versions}
+        expanded_checkpoint["pending_sends"] = [{"node": "source-only-pending", "attempt": 3}]
+        pending_sends = expanded_checkpoint["pending_sends"]
         with (session_thread_owner_scope(source_owner, langgraph_thread_id=source_thread),
               execution_admission_scope(admission, langgraph_thread_id=source_thread)):
             commit_fixture_output(saver, messages=[*old_messages, user, final])
-            await saver.aput(
+            compaction_config = await saver.aput(
                 build_checkpoint_config(source_thread),
                 expanded_checkpoint,
                 {"source": "loop", "step": 2, "parents": {}}, {"messages": "5", "counter": "5"},
             )
-        retained = [final]
-        summarized = [*old_messages, user]
     else:
-        retained = [user]
-        summarized = old_messages
-    event = build_cache_preserving_event(
-        CachePreservingPartition(prefix_messages=[], messages_to_summarize=summarized,
-                                 preserved_messages=retained, state_cutoff=len(summarized)),
-        summary_message=summary,
+        compacted = _checkpoint("compaction-selected-checkpoint", [*old_messages, user])
+        frozen_state = {"false_flag": False, "zero_count": 0, "empty_map": {}, "empty_list": [], "none_value": None}
+        frozen_versions = {name: f"frozen-{name}" for name in frozen_state}
+        compacted["channel_values"].update(frozen_state)
+        compacted["channel_versions"].update({"messages": "6", "counter": "6", **frozen_versions})
+        compacted["updated_channels"].extend(frozen_state)
+        compacted["versions_seen"] = {"historical-node": frozen_versions}
+        compacted["pending_sends"] = [{"node": "source-only-pending", "attempt": 3}]
+        pending_sends = compacted["pending_sends"]
+        with (session_thread_owner_scope(source_owner, langgraph_thread_id=source_thread),
+              execution_admission_scope(admission, langgraph_thread_id=source_thread)):
+            compaction_config = await saver.aput(
+                build_checkpoint_config(source_thread), compacted,
+                {"source": "loop", "step": 3, "parents": {}},
+                {"messages": "6", "counter": "6", **frozen_versions},
+            )
+
+    candidate_item_ids = [old_root_item.item_id, old_final_item.item_id]
+    if compaction_order == "after_provider":
+        candidate_item_ids.append(admitted_root.item_id)
+    frozen_candidate = saver._storage.compactions.freeze(
+        source.session_id, source_thread, candidate_id="compaction-fork-candidate", task_id="compaction-fork-task",
+        item_ids=candidate_item_ids, model_config_hash=sha256_jcs({"test": "fork"}),
     )
-    compacted = _checkpoint("compaction-selected-checkpoint", [*summarized, *retained])
-    frozen_state = {"false_flag": False, "zero_count": 0, "empty_map": {}, "empty_list": [], "none_value": None}
-    frozen_versions = {name: f"frozen-{name}" for name in frozen_state}
-    compacted["channel_values"].update(frozen_state)
-    compacted["channel_versions"].update({"messages": "6", "counter": "6", **frozen_versions})
-    compacted["updated_channels"].extend(frozen_state)
-    compacted["versions_seen"] = {"historical-node": frozen_versions}
-    compacted["pending_sends"] = [{"node": "source-only-pending", "attempt": 3}]
-    compacted["channel_values"]["_summarization_event"] = event
-    compacted["channel_versions"]["_summarization_event"] = "1"
-    compacted["updated_channels"].append("_summarization_event")
-    with (session_thread_owner_scope(source_owner, langgraph_thread_id=source_thread),
-          execution_admission_scope(admission, langgraph_thread_id=source_thread)):
-        await saver.aput(
-            build_checkpoint_config(source_thread), compacted,
-            {"source": "compaction", "step": 3, "parents": {}},
-            {"messages": "6", "counter": "6", "_summarization_event": "1", **frozen_versions},
-        )
+    applied, summary_result = await _apply_real_fork_compaction(
+        fork_context, admission=admission, config=compaction_config,
+        candidate=frozen_candidate, model=summary_model[0],
+    )
+    summary, = [message for message in applied.checkpoint["channel_values"]["messages"]
+                if message.response_metadata.get("structured_prompt_kind") == "compaction_summary"]
     if compaction_order == "before_provider":
         produced = fork_provider_prepare(
             fork_context, source.session_id, admission.execution_id, manager,
@@ -4125,12 +4170,12 @@ async def test_compaction_fork_keeps_only_required_body_backing(
         final_checkpoint["channel_versions"].update({"messages": "7", "counter": "7", **frozen_versions})
         final_checkpoint["updated_channels"].extend(frozen_state)
         final_checkpoint["versions_seen"] = {"historical-node": frozen_versions}
-        final_checkpoint["pending_sends"] = compacted["pending_sends"]
+        final_checkpoint["pending_sends"] = pending_sends
         with (session_thread_owner_scope(source_owner, langgraph_thread_id=source_thread),
               execution_admission_scope(admission, langgraph_thread_id=source_thread)):
             commit_fixture_output(saver, messages=[summary, user, final])
             await saver.aput(
-                build_checkpoint_config(source_thread), final_checkpoint,
+                applied.config, final_checkpoint,
                 {"source": "loop", "step": 4, "parents": {}},
                 {"messages": "7", "counter": "7", **frozen_versions},
             )
@@ -4142,7 +4187,8 @@ async def test_compaction_fork_keeps_only_required_body_backing(
                    and item.projection_identity.projection_message_id == "compaction-source-final"]
     assert len(final_items) == 1
     assert final_items[0].projection_identity.model_call_id == produced["snapshot"].model_call_id
-    assert messages_from_dict([LangChainMessageCodec().project_message(tuple(final_items))])[0].content == final.content
+    final_group = [item for item in source_items if item.message_group_id == final_items[0].message_group_id]
+    assert messages_from_dict([LangChainMessageCodec().project_message(tuple(final_group))])[0].content == final.content
     with saver._storage.storage.read_connection(source.session_id, source_thread) as connection:
         anchor = connection.execute(
             "SELECT member.item_id FROM checkpoint_namespace_state namespace "
@@ -4159,7 +4205,7 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     )
     source_prepared = fork_provider_prepare(
         fork_context, source.session_id, str(probe["initial_execution_id"]), manager,
-        "compaction-probe", attempt=1,
+        "compaction-probe", attempt=1, outcome="completed_empty",
     )
     request = await _fork_request(
         fork_context, source.session_id, mode=mode, creation_kind="new_session_main", item_id=anchor[0],
@@ -4199,26 +4245,42 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     result = await fork_context.forks.fork(request)
     target, target_thread = result.session, result.thread_id
     cold = RolloutCheckpointSaver(fork_context.sessions.path_resolver.sessions_root)
+    cold._storage.storage.initialize(target.session_id, thread_id=target_thread)
+    with cold._storage.storage.read_connection(target.session_id, target_thread) as connection:
+        assert connection.execute(
+            "SELECT 1 FROM context_view_turns turn LEFT JOIN context_view_items member "
+            "ON member.view_id=turn.view_id AND member.item_id=turn.root_input_item_id "
+            "WHERE member.item_id IS NULL LIMIT 1",
+        ).fetchone() is None
     restored = await _get_tuple(fork_context, target.session_id, saver=cold)
     assert restored is not None
-    assert "_summarization_event" not in restored.checkpoint["channel_values"]
     assert {name: restored.checkpoint["channel_values"][name] for name in frozen_state} == frozen_state
     assert restored.checkpoint["channel_values"]["counter"] == selected_checkpoint.checkpoint["channel_values"]["counter"]
-    assert restored.checkpoint["channel_versions"] == {
-        name: version for name, version in selected_checkpoint.checkpoint["channel_versions"].items()
-        if name not in {"_summarization_event", "_force_cache_compaction", "_compaction_continuation"}
-    }
+    assert restored.checkpoint["channel_versions"] == selected_checkpoint.checkpoint["channel_versions"]
     assert restored.checkpoint["versions_seen"] == selected_checkpoint.checkpoint["versions_seen"]
     assert restored.checkpoint["pending_sends"] == [] and restored.pending_writes == []
-    target_messages = restored.checkpoint["channel_values"]["messages"]
+    target_messages = await acheckpoint_messages(cold, restored)
     assert [(message.type, message.id, message.content) for message in target_messages] == [
         (message.type, message.id, message.content) for message in expected_messages
     ]
     assert [message.response_metadata.get("canonical_item_manifests") for message in target_messages] == expected_manifest_groups
-    summary_messages = [message for message in target_messages if message.id == "compaction-summary"]
+    summary_messages = [
+        message for message in target_messages
+        if message.response_metadata.get("structured_prompt_kind") == "compaction_summary"
+    ]
     assert len(summary_messages) == 1
-    assert summary_messages[0].content == summary.content
+    assert summary_messages[0].id == f"summary-{frozen_candidate.candidate_id}"
+    assert summary_result.text in summary_messages[0].content
     assert summary_messages[0].response_metadata["structured_prompt_kind"] == "compaction_summary"
+    assert cold._storage.compactions.current_status(target.session_id, target_thread) is None
+    assert cold._storage.compactions.latest_ready(target.session_id, target_thread) is None
+    if compaction_order == "before_provider":
+        with pytest.raises(ValueError, match="detail-unavailable"):
+            cold._storage.compactions.read_history(target.session_id, target_thread)
+    else:
+        assert "需要压缩的旧问题" in cold._storage.compactions.read_history(target.session_id, target_thread)
+    assert cold._storage.compactions.read(source.session_id, source_thread, frozen_candidate.candidate_id) == frozen_candidate
+    assert cold._storage.compactions.read_result(source.session_id, source_thread, frozen_candidate.candidate_id) == summary_result
     source_checkpoint_id = selected_checkpoint.checkpoint["id"]
     source_restored = await _get_tuple(
         fork_context, source.session_id, saver=cold, checkpoint_id=source_checkpoint_id,
@@ -4227,6 +4289,12 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     assert source_restored == selected_checkpoint
     imported = cold._storage.storage.read_items(target.session_id, target_thread)
     imported_by_id = {item.item_id: item.to_dict() for item in imported}
+    source_summary = next(item for item in source_items if item.item_id == f"item-summary-{frozen_candidate.candidate_id}")
+    imported_summary = imported_by_id[source_summary.item_id]
+    assert imported_summary["payload"] == source_summary.payload
+    assert imported_summary["provenance_relations"] == [
+        relation.to_dict() for relation in source_summary.provenance_relations
+    ]
     with cold._storage.storage.read_connection(target.session_id, target_thread) as connection:
         target_view = cold._storage.storage._active_context_view_id(connection, "")
         visible = connection.execute(
@@ -4259,7 +4327,7 @@ async def test_compaction_fork_keeps_only_required_body_backing(
         assert [message.content for message in page.items[0].user_messages] == (
             [] if compaction_order == "after_provider" else ["压缩期间的新问题"]
         )
-        assert {part.source.item_id for turn in page.items for part in turn.response_parts} == {
+        assert {part.source.item_id for turn in page.items for part in turn.response_items} == {
             item.item_id for item in selected_items if item.semantic_kind != "user_input"
         }
     latest, _, _ = reader.bootstrap(target.session_id, target_thread)
@@ -4323,6 +4391,144 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     assert not old_item_ids & {entry.ref.ref_id for entry in prepared["snapshot"].selection
                                if entry.included and entry.ref.ref_type == "canonical_item"}
 
+    with cold._storage.storage.read_connection(target.session_id, target_thread) as connection:
+        original_ranges = connection.execute(
+            "SELECT item_id,source_revision,ref_json,line_start,line_count FROM compaction_history_ranges ORDER BY line_start",
+        ).fetchall()
+        assert original_ranges
+        assert connection.execute("SELECT candidate_id FROM context_compaction_candidates").fetchall() == []
+    target_owner = MutationIntentOwner(target.session_id, target_thread)
+    target_context = replace(fork_context, saver=cold)
+    target_manager = ContextSourceManager(
+        owner=ContextSourceOwnerKey(target.session_id, target_thread), control_state_port=cold,
+    )
+    message_service = MessageService(
+        main_thread_resolver=fork_context.sessions.path_resolver.main_thread_id, checkpointer=cold,
+    )
+    target_config = restored.config
+    predecessor = None
+    previous_result = None
+    local_summary_ids: set[str] = set()
+    expected_count = None
+    for ordinal in (1, 2):
+        target_admission = cold.execution_admission(
+            target.session_id, thread_id=target_thread, execution_id=str(next_input["initial_execution_id"]),
+        )
+        root = cold.read_canonical_items(
+            target.session_id, target_thread, item_ids=(next_input["root_input_item_id"],),
+        )[0]
+        target_user = messages_from_dict([codec.project_message((root,))])[0]
+        target_final = AIMessage(
+            id=f"compaction-target-final-{ordinal}", content=f"目标闭合历史{ordinal}：" + "只保留已核验的目标事实。" * 30,
+            response_metadata={"model_call_id": prepared["snapshot"].model_call_id},
+        )
+        target_messages = [*target_messages, target_user, target_final]
+        target_checkpoint = _checkpoint(f"compaction-target-parent-{ordinal}", target_messages)
+        with (session_thread_owner_scope(target_owner, langgraph_thread_id=target_thread),
+              execution_admission_scope(target_admission, langgraph_thread_id=target_thread)):
+            commit_fixture_output(cold, messages=target_messages)
+            target_config = await cold.aput(
+                target_config, target_checkpoint, {"source": "loop", "step": ordinal},
+                target_checkpoint["channel_versions"],
+            )
+        frozen, target_result, adopted = await generate_and_adopt_compaction_candidate(
+            cold, session_id=target.session_id, thread_id=target_thread,
+            checkpoint_config=target_config, admission=target_admission, model=summary_model[0],
+            candidate_id=f"compaction-target-candidate-{ordinal}", task_id=f"compaction-target-task-{ordinal}",
+            predecessor_candidate_id=None if predecessor is None else predecessor.candidate_id,
+        )
+        assert target_result.coverage == frozen.refs
+        assert source_summary.item_id in {ref.ref_id for ref in frozen.refs}
+        if predecessor is None:
+            assert frozen.predecessor is None
+        else:
+            assert frozen.predecessor.candidate_id == predecessor.candidate_id
+            assert frozen.refs[:len(predecessor.refs)] == predecessor.refs
+            assert cold._storage.compactions.predecessor_result(frozen) == previous_result
+        local_summary_id = f"item-summary-{frozen.candidate_id}"
+        local_summary_ids.add(local_summary_id)
+        target_summary = cold.read_canonical_items(
+            target.session_id, target_thread, item_ids=(local_summary_id,),
+        )[0]
+        assert set(source_summary.provenance_relations) <= set(target_summary.provenance_relations)
+        assert not {source_summary.item_id, *local_summary_ids} & {
+            relation.target_id for relation in target_summary.provenance_relations
+            if relation.relation == "derived_from" and relation.target_kind == "canonical_item"
+        }
+        with cold._storage.storage.read_connection(target.session_id, target_thread) as connection:
+            ranges = connection.execute(
+                "SELECT item_id,source_revision,ref_json,line_start,line_count FROM compaction_history_ranges ORDER BY line_start",
+            ).fetchall()
+            assert ranges[:len(original_ranges)] == original_ranges
+            indexed = {row[0] for row in ranges}
+            assert not {source_summary.item_id, *local_summary_ids} & indexed
+            assert {ref.ref_id for ref in frozen.refs if ref.semantic_kind != "compaction_summary"} <= indexed
+            assert connection.execute(
+                "SELECT candidate_id FROM context_compaction_candidates ORDER BY created_at,rowid",
+            ).fetchall() == [(f"compaction-target-candidate-{index}",) for index in range(1, ordinal + 1)]
+            if compaction_order == "before_provider":
+                assert not old_item_ids & {row[0] for row in connection.execute("SELECT item_id FROM item_catalog")}
+        if compaction_order == "before_provider":
+            with pytest.raises(ValueError, match="detail-unavailable"):
+                cold._storage.compactions.read_history(target.session_id, target_thread)
+        else:
+            assert "需要压缩的旧问题" in cold._storage.compactions.read_history(target.session_id, target_thread)
+        expected_count = None if compaction_order == "before_provider" else len(old_messages) + 2 + ordinal * 2
+        context_state = await message_service.get_agent_context_state(target.session_id, target_thread)
+        assert context_state["compacted"] is True
+        assert context_state["raw_message_count"] == expected_count
+        assert len(context_state["records"]) == 1 and target_result.text in str(context_state["records"])
+        if ordinal == 1:
+            with session_thread_owner_scope(target_owner, langgraph_thread_id=target_thread):
+                plan = cold.plan_pruning(target_thread)
+                assert plan.candidates
+                cold.execute_pruning(target_thread, plan)
+            with cold._storage.storage.read_connection(target.session_id, target_thread) as connection:
+                assert connection.execute(
+                    "SELECT item_id,source_revision,ref_json,line_start,line_count FROM compaction_history_ranges ORDER BY line_start",
+                ).fetchall() == ranges
+            next_input = cold.accept_turn(
+                target.session_id, thread_id=target_thread, accepted_ingress_id="compaction-target-successor-user",
+                acceptance_idempotency_key="compaction-target-successor-accept", job_id="compaction-target-successor-job",
+                admission_idempotency_key="compaction-target-successor-admission", payload="继续目标本地的后继历史",
+                root_item_id="compaction-target-successor-root",
+            )
+            prepared = fork_provider_prepare(
+                target_context, target.session_id, str(next_input["initial_execution_id"]), target_manager,
+                "compaction-target-successor", attempt=1,
+            )
+        target_messages = list(adopted.checkpoint["channel_values"]["messages"])
+        target_config = adopted.config
+        predecessor, previous_result = frozen, target_result
+
+    # 前缀核对 probe 没有输出，进入真实 lifespan 前通过执行 owner 明确结清。
+    saver.converge_execution(
+        source.session_id, thread_id=source_thread, turn_id=str(probe["turn_id"]),
+        execution_id=str(probe["initial_execution_id"]), outcome="completed_empty", turn_status="completed_empty",
+    )
+    async with main.lifespan(main.app) as lifespan, httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
+        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": production_fork_container.workspace_id,
+                 "X-BoxTeam-Gateway-Id": get_current_gateway_id(), "X-Request-ID": "compaction-target-context"},
+    ) as client:
+        await lifespan["after_http_startup"]()
+        response = await client.post("/api/v1/context/read", json={
+            "resource_identity": session_resource_identity(production_fork_container.workspace_id, target.session_id),
+            "uri": target.uri, "scope": "workspace", "view": "records",
+            "include": ["visible_text", "raw_record"], "limit": 1, "max_chars": 4096,
+        })
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "compaction-target-context"
+        context_page = response.json()["data"]
+        assert context_page["raw_message_count"] == expected_count
+        assert context_page["items"] and target_result.text in str(context_page["items"])
+        assert context_page["returned_chars"] <= 4096
+        if compaction_order == "before_provider":
+            assert len(context_page["partial_errors"]) == 1
+            assert "detail-unavailable" in context_page["partial_errors"][0]["error"]
+        else:
+            assert context_page["partial_errors"] == []
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["last_completed_turn_fork", "view_prefix_fork"])
@@ -4379,21 +4585,6 @@ async def test_fork_rejects_orphan_tool_result_before_publication(
     )
     admission = saver.execution_admission(source.session_id, thread_id=thread,
                                          execution_id=str(accepted["initial_execution_id"]))
-    root = next(item for item in saver._storage.storage.read_items(source.session_id, thread)
-                if item.item_id == "queue-new-root")
-    user = messages_from_dict([LangChainMessageCodec().project_message((root,))])[0]
-    retained = [result, final, user]
-    summarized = [message for message in old_messages if message.id not in {"queue-tool-result", "queue-tool-final"}]
-    summary = compaction_summary_message(content="已压缩的前置说明", id="queue-summary")
-    event = build_cache_preserving_event(
-        CachePreservingPartition(prefix_messages=[], messages_to_summarize=summarized,
-                                 preserved_messages=retained, state_cutoff=len(summarized)),
-        summary_message=summary,
-    )
-    compacted = _checkpoint("queue-compacted", [*summarized, *retained])
-    compacted["channel_values"]["_summarization_event"] = event
-    compacted["channel_versions"]["_summarization_event"] = "1"
-    compacted["updated_channels"].append("_summarization_event")
     source_items = tuple(item.to_dict() for item in saver._storage.storage.read_items(source.session_id, thread))
     checkpoint_before = await _get_tuple(fork_context, source.session_id)
     source_index = saver._storage.storage.root(source.session_id, thread_id=thread) / "index.sqlite"
@@ -4404,9 +4595,11 @@ async def test_fork_rejects_orphan_tool_result_before_publication(
         with (session_thread_owner_scope(owner, langgraph_thread_id=thread),
               execution_admission_scope(admission, langgraph_thread_id=thread),
               pytest.raises(ToolProtocolBoundaryConflict, match="tool-protocol-boundary-conflict")):
-            await saver.aput(
-                build_checkpoint_config(thread), compacted, {"source": "compaction", "step": 5, "parents": {}},
-                compacted["channel_versions"],
+            saver._storage.compactions.freeze(
+                source.session_id, thread, candidate_id="queue-tool-boundary-candidate",
+                task_id="queue-tool-boundary-task", item_ids=[item.item_id for item in original_items
+                                                               if item.item_id not in {"queue-tool-result", "queue-tool-final"}],
+                model_config_hash=sha256_jcs({"test": "tool-boundary"}),
             )
         after_compaction = _fork_intent_state(fork_context)
         assert after_compaction == before_compaction, (
@@ -4678,32 +4871,6 @@ async def test_full_copy_cancelled_historical_is_not_resumable_but_new_replay_is
         root_item_id="item-cancelled-source",
         initial_execution_id="execution-cancelled-source",
     )
-    source_root = _main_thread_node(fork_context, source.session_id)
-    with sqlite3.connect(source_root / "rollout" / "index.sqlite") as connection:
-        item_offset, item_length = connection.execute(
-            "SELECT jsonl_offset, jsonl_length FROM item_catalog WHERE item_id = ?",
-            ("item-cancelled-source",),
-        ).fetchone()
-        item_line = (source_root / "rollout" / "rollout.jsonl").read_bytes()[
-            item_offset : item_offset + item_length
-        ]
-        connection.execute(
-            "INSERT INTO item_parts(item_id, part_id, part_ordinal, part_semantic_kind, "
-            "content_prefix_hash, content_hash, locator_json, line_hash, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                "item-cancelled-source",
-                "part-cancelled-source",
-                0,
-                "text",
-                None,
-                "sha256:jcs:v1:part-placeholder",
-                '{"json_pointer":"/payload"}',
-                hashlib.sha256(item_line).hexdigest(),
-                "2026-08-15T00:00:00+00:00",
-            ),
-        )
-        connection.commit()
     fork_context.saver.converge_execution(
         source.session_id,
         thread_id=fork_context.saver._storage.storage.main_thread_id(source.session_id), turn_id="turn-cancelled-source",
@@ -4740,8 +4907,8 @@ async def test_full_copy_cancelled_historical_is_not_resumable_but_new_replay_is
             "SELECT execution_id FROM executions WHERE turn_id = ?",
             (target_turn_id,),
         ).fetchall()
-        part_row = connection.execute(
-            "SELECT item_id, part_id, part_ordinal FROM item_parts"
+        target_item_id, target_locator = connection.execute(
+            "SELECT item_id,projection_manifest_json FROM item_catalog WHERE item_id=?", (target_root_id,),
         ).fetchone()
     assert target_turn_id == "turn-cancelled-source"
     assert target_root_id == "item-cancelled-source"
@@ -4749,9 +4916,10 @@ async def test_full_copy_cancelled_historical_is_not_resumable_but_new_replay_is
     assert _turn_history_clocks(fork_context, child.session_id)[target_turn_id] == source_clocks["turn-cancelled-source"]
     assert _turn_history_clocks(fork_context, source.session_id) == source_clocks
     assert execution_ids
-    assert part_row[0] == "item-cancelled-source"
-    assert part_row[1] == "part-cancelled-source"
-    assert part_row[2] == 0
+    assert target_item_id == "item-cancelled-source"
+    assert json.loads(target_locator) == fork_context.saver._storage.storage.read_items(
+        child.session_id, child_thread_id, item_ids=[target_root_id],
+    )[0].projection_manifest()
 
     with pytest.raises(ValueError, match="turn_not_resumable"):
         fork_context.saver.resume_turn(
@@ -7617,10 +7785,10 @@ async def test_fork_preserves_stream_member_time_across_checkpoint_carriers(
     request = TurnHistoryLoadRequest(include=["user", "reasoning_detail", "final_response"])
     original = context.saver.load_history(source.session_id, owner.thread_id, request).items[0]
     assert original.activity_stats.item_count == (2 if reverse_membership else 1)
-    assert original.response_parts[0].source.item_id.endswith(
+    assert original.response_items[0].source.item_id.endswith(
         "block:stream-second-reasoning" if reverse_membership else "block:stream-reasoning"
     )
-    assert original.response_parts[0].source.created_at != original.response_parts[-1].source.created_at
+    assert original.response_items[0].source.created_at != original.response_items[-1].source.created_at
     child = (await context.forks.fork(await _fork_request(context, source.session_id, creation_kind="new_session_main", mode=mode))).session
     target_owner = context.saver.forks.source.resolve_main_thread_owner(child.session_id)
     restarted = RolloutCheckpointSaver(context.sessions.path_resolver.sessions_root)
@@ -7630,12 +7798,12 @@ async def test_fork_preserves_stream_member_time_across_checkpoint_carriers(
         assert (copied.activity_stats.duration_ms, copied.activity_stats.item_count) == (
             original.activity_stats.duration_ms, original.activity_stats.item_count,
         )
-        assert [(part.source.item_id, part.source.part_ordinal, part.kind, part.source.created_at, part.source.elapsed_ms)
-                for part in copied.response_parts] == [
-            (part.source.item_id, part.source.part_ordinal, part.kind, part.source.created_at, part.source.elapsed_ms)
-            for part in original.response_parts
+        assert [(part.source.item_id, part.kind, part.source.created_at, part.source.elapsed_ms)
+                for part in copied.response_items] == [
+            (part.source.item_id, part.kind, part.source.created_at, part.source.elapsed_ms)
+            for part in original.response_items
         ]
-        activity = [part for part in copied.response_parts if part.kind != "final_text"]
+        activity = [part for part in copied.response_items if part.kind != "final_text"]
         assert copied.activity_stats.first_item_sequence == min(part.source.item_sequence for part in activity)
         assert copied.activity_stats.last_item_sequence == max(part.source.item_sequence for part in activity)
 
@@ -9069,10 +9237,11 @@ async def test_full_copy_missing_selected_attachment_aborts_without_publication(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("resource_case", ["empty", "omit", "unavailable", "missing", "reuse"])
+@pytest.mark.parametrize("summary_model", [("basic-text", "chat_completions", "openai", "/chat/completions")], indirect=True)
 async def test_http_published_fork_without_attachment_claim_rejects_deleting_target(
     fork_provider_prepare, production_fork_container: AppContainer,
     monkeypatch: pytest.MonkeyPatch, resource_case: str, fork_gateway_request_context: None,
-    fork_execution_message,
+    fork_execution_message, summary_model,
 ) -> None:
     """无 claim 的空资源、历史缺正文、omit 和引用复用仍受真实删除 gate 约束。"""
     context = _production_fork_context(production_fork_container)
@@ -9099,27 +9268,30 @@ async def test_http_published_fork_without_attachment_claim_rejects_deleting_tar
         admitted = next(item for item in context.saver._storage.storage.read_items(source.session_id, thread_id)
                         if item.item_id == "unclaimed-copy-root")
         user = messages_from_dict([LangChainMessageCodec().project_message((admitted,))])[0]
-        summary = compaction_summary_message(content="旧附件的检查已经完成", id="unclaimed-copy-summary", response_metadata={
-            "provenance_relations": [ItemProvenanceRelation(
-                relation="derived_from", target_kind="canonical_item", target_id="item-retry-user",
-                target_session_id=source.session_id, target_thread_id=thread_id, target_turn_id="turn-retry",
-            ).to_dict()],
-        })
-        event = build_cache_preserving_event(
-            CachePreservingPartition(prefix_messages=[], messages_to_summarize=old_messages,
-                                     preserved_messages=[user], state_cutoff=len(old_messages)),
-            summary_message=summary,
-        )
-        compacted = _checkpoint("cp-unclaimed-copy-compaction", [*old_messages, user])
-        compacted["channel_values"]["_summarization_event"] = event
-        compacted["channel_versions"]["_summarization_event"] = "1"
-        compacted["updated_channels"].append("_summarization_event")
         with (session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
               execution_admission_scope(admission, langgraph_thread_id=thread_id)):
-            await context.saver.aput(
-                build_checkpoint_config(thread_id), compacted, {"source": "compaction", "step": 4, "parents": {}},
-                {"messages": "6", "counter": "6", "_summarization_event": "1"},
+            compaction_config = await context.saver.aput(
+                build_checkpoint_config(thread_id), _checkpoint("cp-unclaimed-copy-compaction", [*old_messages, user]),
+                {"source": "loop", "step": 4, "parents": {}}, {"messages": "6", "counter": "6"},
             )
+        with context.saver._storage.storage.read_connection(source.session_id, thread_id) as connection:
+            selected_item_ids = [row[0] for row in connection.execute(
+                "SELECT member.item_id FROM checkpoint_namespace_state namespace "
+                "JOIN branches branch ON branch.branch_id=namespace.active_branch_id "
+                "JOIN context_view_items member ON member.view_id=branch.head_view_id "
+                "WHERE namespace.checkpoint_ns='' AND member.visible=1 AND member.context_selected=1 "
+                "ORDER BY member.context_ordinal",
+            )]
+        candidate_item_ids = [item_id for item_id in selected_item_ids if item_id != admitted.item_id]
+        candidate = context.saver._storage.compactions.freeze(
+            source.session_id, thread_id, candidate_id="unclaimed-copy-compaction",
+            task_id="unclaimed-copy-compaction-task", item_ids=candidate_item_ids,
+            model_config_hash=sha256_jcs({"model": "basic-text"}),
+        )
+        await _apply_real_fork_compaction(
+            context, admission=admission, config=compaction_config,
+            candidate=candidate, model=summary_model[0],
+        )
         prepared = fork_provider_prepare(
             context, source.session_id, admission.execution_id,
             ContextSourceManager(owner=ContextSourceOwnerKey(source.session_id, thread_id), control_state_port=context.saver),
@@ -9386,6 +9558,36 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
     assert [message.tool_call_id for message in source_messages if isinstance(message, ToolMessage)] == source_calls
     assert all("fork-source-body" in str(message.content) for message in source_messages if isinstance(message, ToolMessage))
     source_items = context.saver._storage.storage.read_items(source.session_id, source_owner.thread_id)
+    tool_history_request = TurnHistoryLoadRequest(direction="tail", include=["metadata", "tool_summary"])
+    source_history = context.saver.load_history(source.session_id, source_owner.thread_id, tool_history_request)
+    source_tool_calls = [item for turn in source_history.items for item in turn.response_items if item.kind == "tool_call"]
+    assert len(source_tool_calls) == 3
+    groups = [item.source.message_group for item in source_tool_calls]
+    assert groups[0] is not None and groups[1] is not None
+    assert groups[0].message_group_id == groups[1].message_group_id
+    assert [(group.ordinal, group.size) for group in groups[:2]] == [(0, 2), (1, 2)]
+    assert groups[2] is None  # 单成员的原子载体不强造消息组。
+    assert source_tool_calls[0].source.model_call_id != source_tool_calls[2].source.model_call_id
+    assert all(item.tool_execution is not None and item.tool_execution.outcome == "success" for item in source_tool_calls)
+    assert all((item.tool_execution.session_id, item.tool_execution.thread_id) == (
+        source.session_id, source_owner.thread_id,
+    ) for item in source_tool_calls)
+    def tool_facts(history: TurnHistoryPageDTO) -> list[tuple[object, ...]]:
+        calls = [item for turn in history.items for item in turn.response_items if item.kind == "tool_call"]
+        # fork 选择有效上下文，允许排除源 view 中未选中的 stream shadow；
+        # 展示位置／carrier 可不同，原声明顺序、分组和执行事实必须完整。
+        assert len(calls) == 3
+        first, second = (item.source.message_group for item in calls[:2])
+        assert first is not None and second is not None
+        assert first.message_group_id == second.message_group_id
+        return [(
+            item.tool_call_id.removeprefix(f"{item.source.model_call_id}:tool-call:"),
+            item.source.model_call_id,
+            (item.source.message_group.ordinal, item.source.message_group.size) if item.source.message_group else None,
+            item.tool_execution, item.tool_outcome,
+        ) for item in calls]
+
+    source_tool_facts = tool_facts(source_history)
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork")
     capture = context.saver.forks.source._capture_fork_source_snapshot
 
@@ -9436,6 +9638,9 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
             restored_messages = await acheckpoint_messages(recovered.saver, restored)
         assert [message_to_dict(message) for message in restored_messages] == [message_to_dict(message) for message in source_messages]
         assert recovered.saver._storage.storage.read_items(record.session_id, target_thread) == source_items
+        # 来源已删除；目标冷历史仍保留原声明组与真实执行范围，不能改成目标身份。
+        target_history = recovered.saver.load_history(record.session_id, target_thread, tool_history_request)
+        assert tool_facts(target_history) == source_tool_facts
         # 恢复后的续写继续走消息准入、持久队列和真实图执行，不手工补状态。
         accepted = await fork_execution_message(
             restarted, record.session_id, content="恢复后的目标新问题", start_fanout=False,

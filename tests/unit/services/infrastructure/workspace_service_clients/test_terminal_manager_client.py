@@ -7,7 +7,6 @@ import httpx
 import pytest
 
 from app.schemas.gateway.service_plugin import PluginBinding, PluginServiceReference
-from app.services.infrastructure.config import build_config_snapshot
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.support.resource_owners.sessions import WORKSPACE_ID
@@ -173,14 +172,18 @@ async def test_response_protocol_failures_preserve_diagnostics_and_fail_at_the_c
 
 
 @pytest.mark.asyncio
-async def test_current_config_binding_routes_through_gateway_without_rediscovery(resource_http) -> None:
+async def test_current_config_binding_routes_through_gateway_without_rediscovery(
+    resource_http, workspace_config_snapshots,
+) -> None:
     config_service = Mock(spec=ConfigService)
     config_service.get_gateway_connection_url.return_value = "http://gateway.test"
     config_service.get_gateway_connection_timeout_seconds.return_value = 10
     def snapshot(version, enabled=True):
-        return build_config_snapshot({"plugins": {"runtime": {"entries": [{
+        payload = workspace_config_snapshots.base.to_dict()
+        payload["plugins"] = {"runtime": {"entries": [{
             "package_id": "boxteam.developer-tools", "plugin_id": "terminal",
-            "package_version": version, "enabled": enabled}]}}}, source_paths=())
+            "package_version": version, "enabled": enabled}]}}
+        return workspace_config_snapshots.build(payload)
     config_service.get_snapshot.side_effect = [snapshot("0.1.0"), snapshot("0.2.0"), snapshot("0.2.0", False)]
     client = TerminalManagerClient(config_service=config_service, workspace_id=WORKSPACE_ID)
     requests: list[httpx.Request] = []

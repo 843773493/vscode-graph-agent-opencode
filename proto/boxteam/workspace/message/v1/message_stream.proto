@@ -44,6 +44,7 @@ enum ToolExecutionOutcome {
   TOOL_EXECUTION_OUTCOME_PROVIDER_ERROR = 2;
   TOOL_EXECUTION_OUTCOME_EXECUTION_LOST = 3;
   TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN = 4;
+  TOOL_EXECUTION_OUTCOME_CANCELLED = 5;
 }
 
 enum ActivityStatus {
@@ -140,6 +141,9 @@ message ToolCall {
   google.protobuf.Timestamp completed_at = 12;
   optional string tool_invocation_id = 13;
   optional string tool_attempt_id = 14;
+  // 仅为 Provider 调用数组的来源顺序，不是 Item 身份或消息组 ordinal。
+  optional int32 provider_call_index = 15;
+  optional string model_call_id = 16;
 }
 
 message ToolCallDelta {
@@ -150,6 +154,7 @@ message ToolCallDelta {
   optional bool arguments_complete = 5;
   optional string tool_invocation_id = 6;
   optional string tool_attempt_id = 7;
+  optional int32 provider_call_index = 8;
 }
 
 message ToolCallCompleted {
@@ -168,6 +173,8 @@ message ToolStarted {
   string tool_name = 3;
   optional string tool_invocation_id = 4;
   optional string tool_attempt_id = 5;
+  // 原工具 callback 的开始观察；缺来源时不以镜像时间补造。
+  google.protobuf.Timestamp started_at = 6;
 }
 
 message ToolCompleted {
@@ -181,6 +188,8 @@ message ToolCompleted {
   string completion_reason = 8;
   optional string tool_invocation_id = 9;
   optional string tool_attempt_id = 10;
+  // 原 owner 的真实完成观察，不是本事件的 emitted_at。
+  google.protobuf.Timestamp execution_completed_at = 11;
 }
 
 message InterruptRequested {
@@ -253,6 +262,7 @@ message ToolExecutionSnapshot {
   google.protobuf.Timestamp completed_at = 14;
   optional string tool_invocation_id = 15;
   optional string tool_attempt_id = 16;
+  google.protobuf.Timestamp execution_completed_at = 17;
 }
 
 message ModelCallSnapshot {

@@ -6,6 +6,7 @@ import chinese from '../../../../shared/core/i18n/messages/zh-cn.json';
 import { ConfigActiveOptionsInspectionDTO, ConfigModelInspectionDTO, ConfigSourcePreflightDTO } from '../../types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { ConfigurationSelector } from './ConfigurationEntities.js';
 import { ModelOptionsInspection } from './ModelOptionsInspection.js';
+import { HttpRequestError } from '../../api/http.js';
 
 let view: ReactTestRenderer | undefined;
 beforeEach(() => setLocaleResources('zh-cn', chinese));
@@ -20,6 +21,26 @@ const result = ConfigModelInspectionDTO.fromPartial({ model_ref: modelRef, model
 const receipt = ConfigSourcePreflightDTO.fromPartial({ document: { active_revision: 7 }, model_options: result,
   active_model_options: { ...result, options: { temperature: 1 } } });
 const flush = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
+test('显式预检的HTTP失败显示有界安全原因并恢复操作，原错误保持完整', async () => {
+  const failure = new HttpRequestError(422, 'Unprocessable Content', {
+    message: `预检拒绝 Authorization: Bearer inspection-secret\n${'诊断内容'.repeat(100)}`,
+  }, '/api/v1/config/sources/workspace/preflight', 'req_inspection');
+  act(() => { view = create(<ModelOptionsInspection modelRef={modelRef} version={1}
+    inspect={async () => { throw failure; }} onOpenSource={() => {}} />); });
+  await act(async () => { view!.root.findAllByType('button')[0].props.onClick(); await flush(); });
+  const visible = view!.root.findByProps({ role: 'alert' }).children.join('');
+  expect(visible).toContain('预检拒绝');
+  expect(visible).not.toContain('[object Object]');
+  expect(visible).not.toContain('inspection-secret');
+  expect(visible).not.toContain('\n');
+  expect(Array.from(visible).length).toBeLessThanOrEqual(160);
+  expect(view!.root.findAllByType('button')[0].props.disabled).toBe(false);
+  expect(failure.message.length).toBeGreaterThan(160);
+  expect(failure.requestId).toBe('req_inspection');
+  expect(visible).not.toContain('req_inspection');
+  expect(visible).not.toContain('/api/');
+});
 
 test('只有显式预检才请求，编辑标记旧回执过期并保持原来源跳转', async () => {
   const inspect = mock(async () => receipt), open = mock();

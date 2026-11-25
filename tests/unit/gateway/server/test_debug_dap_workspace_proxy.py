@@ -125,6 +125,7 @@ def test_debug_dap_route_uses_exact_workspace_backend_and_strips_browser_token(
     assert forwarded == ["dap-client-frame"]
     assert len(connect_options) == 1
     options = connect_options[0]
+    assert options["proxy"] is None
     parsed = urlsplit(options["url"])
     assert parsed.scheme == "ws"
     assert parsed.netloc == "127.0.0.1:49152"

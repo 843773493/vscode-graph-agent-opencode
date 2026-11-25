@@ -28,7 +28,7 @@ export default function ChatTurnResponseBody({
   const running = isLiveConversationView(conversation)
     && (conversation.status === "running" || conversation.status === "queued");
   const summaryOnly = conversation.turnItemsView === "summary";
-  const hasPersistedResponse = (conversation.responseParts?.length ?? 0) > 0
+  const hasPersistedResponse = (conversation.responseItems?.length ?? 0) > 0
     || (conversation.assistantMessages?.length ?? 0) > 0;
   const hasUnifiedParts = !running && hasPersistedResponse;
   // 实时回答只来自 message.v1；旧 Trace 仍可在事件/请求视图查看，

@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import { useRef, useState } from "react";
 import type { ToolApproval, ToolApprovalDecision, ToolApprovalDecisionType, ToolApprovalSubmitRequest } from "../../../types/backend";
@@ -62,7 +63,7 @@ export default function ToolApprovalForm({ approvals, disabled, onSubmit }: {
         </label> : null}
       </fieldset>;
     }))}
-    {error ? <p role="alert">{error}</p> : null}
+    {error ? <p className="failure-summary" role="alert">{failureSummary(error)}</p> : null}
     <button type="submit" disabled={disabled}>{t("chat.approval.submit")}</button>
   </form>;
 }

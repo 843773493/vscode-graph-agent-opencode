@@ -859,6 +859,33 @@ async def test_large_search_budget_checks_each_match_without_copying_prior_match
 
 
 @pytest.mark.asyncio
+async def test_information_exposes_compaction_owner_and_status_changes_revision(session_context_service_factory):
+    service = session_context_service_factory(_FakeMessageSource())
+    states = {"status": "scheduled", "candidate_id": "candidate-first", "task_id": "task-first"}
+    owners = []
+
+    def status(owner):
+        owners.append((owner.session_id, owner.thread_id))
+        return dict(states)
+
+    service.bind_compaction_source(status)
+    first = await service.read_context(_session_request(view="information"))
+    assert first.items[0].data["compaction"] == {
+        **states, "session_id": "ses_target", "thread_id": "thread_target",
+    }
+    states["status"] = "ready"
+    ready = await service.read_context(_session_request(view="information"))
+    assert ready.items[0].data["compaction"]["status"] == "ready"
+    assert ready.compacted is True
+    assert ready.revision != first.revision
+    states["status"] = "applied"
+    applied = await service.read_context(_session_request(view="information"))
+    assert applied.items[0].data["compaction"]["status"] == "applied"
+    assert applied.revision != ready.revision
+    assert owners == [("ses_target", "thread_target")] * 3
+
+
+@pytest.mark.asyncio
 async def test_inventory_information_and_output_budget(
     session_context_service_factory,
 ):

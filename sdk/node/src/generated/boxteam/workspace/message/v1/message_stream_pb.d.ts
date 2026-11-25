@@ -352,6 +352,18 @@ export declare type ToolCall = Message<"boxteam.workspace.message.v1.ToolCall"> 
    * @generated from field: optional string tool_attempt_id = 14;
    */
   toolAttemptId?: string | undefined;
+
+  /**
+   * 仅为 Provider 调用数组的来源顺序，不是 Item 身份或消息组 ordinal。
+   *
+   * @generated from field: optional int32 provider_call_index = 15;
+   */
+  providerCallIndex?: number | undefined;
+
+  /**
+   * @generated from field: optional string model_call_id = 16;
+   */
+  modelCallId?: string | undefined;
 };
 
 /**
@@ -398,6 +410,11 @@ export declare type ToolCallDelta = Message<"boxteam.workspace.message.v1.ToolCa
    * @generated from field: optional string tool_attempt_id = 7;
    */
   toolAttemptId?: string | undefined;
+
+  /**
+   * @generated from field: optional int32 provider_call_index = 8;
+   */
+  providerCallIndex?: number | undefined;
 };
 
 /**
@@ -480,6 +497,13 @@ export declare type ToolStarted = Message<"boxteam.workspace.message.v1.ToolStar
    * @generated from field: optional string tool_attempt_id = 5;
    */
   toolAttemptId?: string | undefined;
+
+  /**
+   * 原工具 callback 的开始观察；缺来源时不以镜像时间补造。
+   *
+   * @generated from field: google.protobuf.Timestamp started_at = 6;
+   */
+  startedAt?: Timestamp | undefined;
 };
 
 /**
@@ -541,6 +565,13 @@ export declare type ToolCompleted = Message<"boxteam.workspace.message.v1.ToolCo
    * @generated from field: optional string tool_attempt_id = 10;
    */
   toolAttemptId?: string | undefined;
+
+  /**
+   * 原 owner 的真实完成观察，不是本事件的 emitted_at。
+   *
+   * @generated from field: google.protobuf.Timestamp execution_completed_at = 11;
+   */
+  executionCompletedAt?: Timestamp | undefined;
 };
 
 /**
@@ -873,6 +904,11 @@ export declare type ToolExecutionSnapshot = Message<"boxteam.workspace.message.v
    * @generated from field: optional string tool_attempt_id = 16;
    */
   toolAttemptId?: string | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp execution_completed_at = 17;
+   */
+  executionCompletedAt?: Timestamp | undefined;
 };
 
 /**
@@ -1762,6 +1798,11 @@ export enum ToolExecutionOutcome {
    * @generated from enum value: TOOL_EXECUTION_OUTCOME_OUTCOME_UNKNOWN = 4;
    */
   OUTCOME_UNKNOWN = 4,
+
+  /**
+   * @generated from enum value: TOOL_EXECUTION_OUTCOME_CANCELLED = 5;
+   */
+  CANCELLED = 5,
 }
 
 /**

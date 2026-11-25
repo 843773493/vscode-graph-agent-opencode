@@ -264,39 +264,41 @@ class RolloutExecutionAdmissionReadMixin:
 
 
     def accepted_user_input(
-        self, admission: ExecutionAdmission, *, checkpoint_ns: str = "",
-    ) -> CanonicalItemRecord:
+        self, session_id: str, *, thread_id: str, job_id: str, checkpoint_ns: str = "",
+    ) -> tuple[ExecutionAdmission, CanonicalItemRecord]:
         """只读取 acceptance 已冻结的真实用户根输入，不创建或补造任何事实。"""
-        if admission.execution_origin != "user_turn" or admission.turn_id is None:
-            raise ValueError("读取用户根输入必须提供真实 user-turn admission")
-        with self._storage.read_connection(
-            admission.session_id, admission.thread_id, checkpoint_ns,
-        ) as connection:
-            stored = self.execution_admission(
-                admission.session_id, thread_id=admission.thread_id,
-                execution_id=admission.execution_id, checkpoint_ns=checkpoint_ns,
-                writer_connection=connection,
-            )
-            if stored != admission:
-                raise ValueError("用户根输入 admission 与权威执行身份不一致")
-            root = connection.execute(
-                "SELECT turn.root_input_item_id, acceptance.payload_hash "
-                "FROM turn_records AS turn JOIN turn_acceptances AS acceptance "
-                "ON acceptance.session_id=turn.session_id AND acceptance.thread_id=turn.thread_id "
-                "AND acceptance.turn_id=turn.turn_id WHERE turn.session_id=? AND turn.thread_id=? AND turn.turn_id=?",
-                (admission.session_id, admission.thread_id, admission.turn_id),
-            ).fetchone()
-            if root is None:
-                raise RuntimeError("用户执行缺少同 owner 的 acceptance/root")
-            item = self._storage.read_items(
-                admission.session_id, admission.thread_id, checkpoint_ns=checkpoint_ns,
-                item_ids=(strict_text(root[0], field="turn_records.root_input_item_id"),),
-                connection=connection,
-            )[0]
-            if (item.semantic_kind != SemanticKind.USER_INPUT or item.turn_scope != TurnScope.TURN_ROOT
-                    or item.turn_id != admission.turn_id or item.content_hash != root[1]):
-                raise RuntimeError("已接受用户根输入与 Turn/acceptance 不一致")
-            return item
+        session_id = strict_text(session_id, field="session_id")
+        thread_id = self._storage.fork_paths.thread_identity(session_id, strict_text(thread_id, field="thread_id"))
+        job_id = strict_text(job_id, field="job_id")
+        checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
+        try:
+            with self._storage.read_connection(session_id, thread_id, checkpoint_ns) as connection:
+                admission = self._read_execution_admission_for_job_connection(
+                    connection, session_id=session_id, thread_id=thread_id,
+                    job_id=job_id, checkpoint_ns=checkpoint_ns,
+                )
+                if admission.execution_origin != "user_turn" or admission.turn_id is None:
+                    raise ValueError("读取用户根输入必须提供真实 user-turn admission")
+                root = connection.execute(
+                    "SELECT turn.root_input_item_id, acceptance.payload_hash "
+                    "FROM turn_records AS turn JOIN turn_acceptances AS acceptance "
+                    "ON acceptance.session_id=turn.session_id AND acceptance.thread_id=turn.thread_id "
+                    "AND acceptance.turn_id=turn.turn_id WHERE turn.session_id=? AND turn.thread_id=? AND turn.turn_id=?",
+                    (admission.session_id, admission.thread_id, admission.turn_id),
+                ).fetchone()
+                if root is None:
+                    raise RuntimeError("用户执行缺少同 owner 的 acceptance/root")
+                item = self._storage.read_items(
+                    admission.session_id, admission.thread_id, checkpoint_ns=checkpoint_ns,
+                    item_ids=(strict_text(root[0], field="turn_records.root_input_item_id"),),
+                    connection=connection,
+                )[0]
+                if (item.semantic_kind != SemanticKind.USER_INPUT or item.turn_scope != TurnScope.TURN_ROOT
+                        or item.turn_id != admission.turn_id or item.content_hash != root[1]):
+                    raise RuntimeError("已接受用户根输入与 Turn/acceptance 不一致")
+                return admission, item
+        except RolloutNotMaterializedError as error:
+            raise KeyError(f"Job execution admission 不存在: session_id={session_id!r}, thread_id={thread_id!r}, job_id={job_id!r}, checkpoint_ns={checkpoint_ns!r}") from error
 
 
     def execution_admission_for_job(
@@ -320,22 +322,30 @@ class RolloutExecutionAdmissionReadMixin:
         )
         try:
             with self._storage.read_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
-                self._storage._require_v2_runtime(connection)
-                rows = connection.execute(
-                    "SELECT execution_id FROM executions "
-                    "WHERE session_id = ? AND thread_id = ? AND job_id = ? "
-                    "ORDER BY execution_id LIMIT 2",
-                    (session_id, owner_thread_id, job_id),
-                ).fetchall()
+                return self._read_execution_admission_for_job_connection(
+                    connection, session_id=session_id, thread_id=owner_thread_id,
+                    job_id=job_id, checkpoint_ns=checkpoint_ns,
+                )
         except RolloutNotMaterializedError as error:
             raise KeyError(f"Job execution admission 不存在: {owner}") from error
+
+    def _read_execution_admission_for_job_connection(
+        self, connection: sqlite3.Connection, *, session_id: str, thread_id: str,
+        job_id: str, checkpoint_ns: str,
+    ) -> ExecutionAdmission:
+        """Job 定位和完整准入校验共用当前事务，正文 reader 直接复用。"""
+        rows = connection.execute(
+            "SELECT execution_id FROM executions "
+            "WHERE session_id = ? AND thread_id = ? AND job_id = ? "
+            "ORDER BY execution_id LIMIT 2", (session_id, thread_id, job_id),
+        ).fetchall()
+        owner = f"session_id={session_id!r}, thread_id={thread_id!r}, job_id={job_id!r}, checkpoint_ns={checkpoint_ns!r}"
         if not rows:
             raise KeyError(f"Job execution admission 不存在: {owner}")
         if len(rows) != 1:
             raise RuntimeError(f"Job execution admission 不唯一: {owner}")
-        return self.execution_admission(
-            session_id,
-            thread_id=owner_thread_id,
+        return self._read_execution_admission_connection(
+            connection, session_id=session_id, thread_id=thread_id,
             execution_id=strict_text(rows[0][0], field="executions.execution_id"),
             checkpoint_ns=checkpoint_ns,
         )
@@ -372,7 +382,7 @@ class RolloutExecutionAdmissionReadMixin:
     ) -> ExecutionAdmission:
         """同一只读 loader 核当前或本地冻结历史 scope；不借历史身份取得 writer。"""
         require_historical_scope(connection, session_id, thread_id)
-        self._storage._require_v2_runtime(connection)
+        self._storage._require_current_rollout_format(connection)
         row = connection.execute(
             "SELECT turn_id, execution_origin, job_id, "
             "admission_idempotency_key, admission_payload_hash, accepted_ingress_id "

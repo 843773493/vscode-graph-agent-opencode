@@ -128,24 +128,25 @@ def provider_403_runtime(
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     endpoint = f"http://127.0.0.1:{provider_port}/v1"
-    primary = config["llm"]["providers"]["primary"]
-    api_mode = primary["defaults"]["api_mode"]
+    workspace_settings = config["settings"]["workspace"]
+    api_mode = config["profiles"]["provider.primary"]["settings"]["model_options"]["api_mode"]
     model_environment = {}
-    for provider_id, provider in config["llm"]["providers"].items():
+    for provider_id, provider in workspace_settings["llm"]["providers"].items():
+        options = config["profiles"][f"provider.{provider_id}"]["settings"]["model_options"]
         if provider_id == "backup_4":
-            provider["defaults"]["endpoint"] = endpoint
+            options["endpoint"] = endpoint
             provider["models"]["default"]["model"] = "provider-403-unexpected-backup_4"
             continue
         key_name = f"BOXTEAM_TEST_PROVIDER_403_{provider_id.upper()}_KEY"
         model_environment[key_name] = PROVIDER_API_KEY if provider_id == "primary" else f"provider-403-unexpected-{provider_id}-key"
-        provider["defaults"] = {
+        config["profiles"][f"provider.{provider_id}"]["settings"]["model_options"] = {
             "endpoint": endpoint, "api_key": "${" + key_name + "}",
             "custom_llm_provider": "openai", "api_mode": api_mode,
         }
         provider["models"]["default"]["model"] = (
             "provider-403-integration-model" if provider_id == "primary" else f"provider-403-unexpected-{provider_id}"
         )
-    for agent in config["agents"].values():
+    for agent in workspace_settings["agents"].values():
         agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
     config_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
@@ -403,9 +404,9 @@ async def test_real_gateway_provider_http_403_is_visible_and_has_no_fallback(
     )
     assert all(
         agent["model"]["fallbacks"] == []
-        for agent in config["agents"].values()
+        for agent in config["settings"]["workspace"]["agents"].values()
     )
-    assert list(config["llm"]["providers"]) == [
+    assert list(config["settings"]["workspace"]["llm"]["providers"]) == [
         "primary",
         "backup_1",
         "backup_2",

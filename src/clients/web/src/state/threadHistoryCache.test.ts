@@ -120,7 +120,7 @@ describe('独立于 Tab 的会话历史镜像', () => {
     expect(await new ThreadHistoryCache().read(target, 'scope')).toBeNull();
   });
 
-  test('未知镜像版本只失效当前条目，保留其它历史和草稿，并允许权威快照重建', async () => {
+  test('旧 Part 镜像版本只失效当前条目，保留其它历史和草稿，并允许权威快照重建', async () => {
     const target = owner('history-format-upgrade'), other = { ...target, threadId: 'other-thread' };
     const writer = new ThreadHistoryCache();
     writer.remember(target, history(), failure);
@@ -128,7 +128,7 @@ describe('独立于 Tab 的会话历史镜像', () => {
     await writer.flushAll();
     const key = browserViewKey(target.gatewayId, 'thread-history', target.workspaceId, target.sessionId, target.threadId);
     const index = browserViewKey(target.gatewayId, 'thread-history-v1');
-    await updateBrowserView(key, current => ({ ...current as object, version: 99 }));
+    await updateBrowserView(key, current => ({ ...current as object, version: 2 }));
     await updateBrowserView(`draft:${key}`, () => '保留草稿');
     const diagnostics = spyOn(console, 'warn');
     try {
@@ -138,7 +138,7 @@ describe('独立于 Tab 的会话历史镜像', () => {
       expect(await readBrowserView<Record<string, unknown>>(index)).not.toHaveProperty(key);
       expect(await readBrowserView<string>(`draft:${key}`)).toBe('保留草稿');
       expect((await reader.read(other, 'other-scope'))?.threadId).toBe(other.threadId);
-      expect(diagnostics).toHaveBeenCalledWith('会话历史展示缓存格式已失效，将重新同步', { owner: target, version: 99 });
+      expect(diagnostics).toHaveBeenCalledWith('会话历史展示缓存格式已失效，将重新同步', { owner: target, version: 2 });
       reader.remember(target, history(), failure);
       await reader.flushAll();
       expect((await new ThreadHistoryCache().read(target, 'rebuilt'))?.turnsById).toEqual(history().turnsById);

@@ -116,7 +116,7 @@ async def _publish_fork_policy(node: CommunicationNode, policy: dict[str, object
     assert node.gateway_home is not None
     config_path = node.gateway_home / "config/gateway.jsonc"
     config = commentjson.loads(config_path.read_text())
-    config.setdefault("permissions", {})["federation"] = policy
+    config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {})["federation"] = policy
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     async with asyncio.timeout(15):
         while True:

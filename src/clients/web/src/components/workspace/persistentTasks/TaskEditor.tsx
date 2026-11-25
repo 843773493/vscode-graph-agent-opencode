@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { useState, type FormEvent } from "react";
@@ -158,7 +159,7 @@ export default function TaskEditor({ apiPort, target, configuration, initialTarg
         <label>{t("tasks.editor.outputLimit")}<input aria-label={t("tasks.editor.outputLimit")} required type="number" min={1} value={condition.script.output_limit_bytes} onChange={(event) => setDraft({ ...draft, condition: { ...condition, script: { ...condition.script!, output_limit_bytes: Number(event.target.value) } } })} /></label>
       </> : null}
     </fieldset></details>
-    {error ? <div role="alert">{error}</div> : null}
+    {error ? <div className="failure-summary" role="alert">{failureSummary(error)}</div> : null}
     <div className="persistent-task-actions"><button disabled={busy} type="submit">{t("tasks.action.update")}</button><button disabled={busy} type="button" onClick={onCancel}>{t("tasks.editor.cancel")}</button></div>
   </form>;
 }

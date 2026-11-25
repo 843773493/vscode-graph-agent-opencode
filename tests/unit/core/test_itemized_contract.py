@@ -35,9 +35,6 @@ from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
-from app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl.legacy_adapter import (
-    LegacyRolloutAdapter,
-)
 from app.services.infrastructure.rollout_context.provider.native_request import (
     project_native_context,
 )
@@ -1170,27 +1167,6 @@ def test_content_plan_request_and_idempotency_golden_vectors(
         "terminal_convergence:turn-golden:completed:"
         "sha256:jcs:v1:1abb23c5879377c9adbe350eefbf01b95e8f8ec2554ba3ffd8df2f594da36c9e"
     )
-
-
-def test_legacy_adapter_uses_the_cross_language_golden(
-    cross_language_vectors: dict[str, object],
-) -> None:
-    rows = {row["id"]: row for row in cross_language_vectors["preimages"]}
-    message = rows["legacy-message"]["preimage"]
-    record = {
-        name: value for name, value in message.items() if name != "source_session_id"
-    }
-    record.update(
-        format_version=1,
-        record_type="message",
-        metadata={},
-        turn_id="legacy-turn-golden",
-    )
-    candidate = LegacyRolloutAdapter(message["source_session_id"]).group_candidates(
-        [record]
-    )[0]
-    assert candidate["candidate_status"] == "accepted"
-    assert candidate["legacy_seed_hash"] == rows["legacy-seed"]["hash"]
 
 
 @pytest.mark.parametrize(

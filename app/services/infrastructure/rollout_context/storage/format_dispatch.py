@@ -3,21 +3,15 @@
 from __future__ import annotations
 
 from app.domain.itemized.errors import FormatDispatchError
+from app.domain.itemized.records import CANONICAL_ITEM_FORMAT_VERSION
 
 
-def require_v2_runtime(format_version: int, *, expected: int = 2) -> None:
-    if type(expected) is not int or expected != 2:
-        raise FormatDispatchError("正常 runtime 的 expected format 必须固定为 2")
-    if type(format_version) is not int or format_version not in {1, 2}:
+def require_current_rollout_format(format_version: int) -> None:
+    if type(format_version) is not int or format_version != CANONICAL_ITEM_FORMAT_VERSION:
         raise FormatDispatchError(
-            f"unsupported_rollout_format_version: {format_version!r}"
-        )
-    if format_version == 1:
-        raise FormatDispatchError(
-            "v1_migration_required: 正常 runtime/history/provider/checkpoint "
-            "只接受 v2 rollout；请显式运行 uv run python -m "
-            "app.services.infrastructure.rollout_context.migrations.v1_jsonl_to_v2_jsonl"
+            f"unsupported_rollout_format_version: current={format_version!r}, "
+            f"expected={CANONICAL_ITEM_FORMAT_VERSION}；原件保留，当前程序不提供旧格式转换"
         )
 
 
-__all__ = ["require_v2_runtime"]
+__all__ = ["require_current_rollout_format"]

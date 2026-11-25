@@ -23,7 +23,7 @@ class _PendingStreamRecovery:
 
 
 @pytest.fixture
-def pending_stream_recovery() -> _PendingStreamRecovery:
+def pending_stream_recovery(tool_result_sink: AsyncMock) -> _PendingStreamRecovery:
     model_call = ModelCallRecord(
         session_id="session",
         thread_id="thread",
@@ -51,6 +51,9 @@ def pending_stream_recovery() -> _PendingStreamRecovery:
         ],
     )
     stream_snapshot_payload = {
+        "session_id": "session",
+        "thread_id": "thread",
+        "turn_stream_id": "stream",
         "stream_status": "open",
         "current_model_call_id": "model",
         "current_attempt": 1,
@@ -66,8 +69,12 @@ def pending_stream_recovery() -> _PendingStreamRecovery:
             {
                 "tool_call_id": "model:tool-call:pending",
                 "tool_execution_id": "original-pending",
+                "tool_invocation_id": "tool-invocation:model:pending",
+                "tool_attempt_id": "original-pending",
                 "tool_name": "read_context",
                 "status": "running",
+                "started_seq": 5,
+                "started_at": "2026-11-23T00:00:00+00:00",
             },
             {
                 "tool_call_id": "model:tool-call:done",
@@ -83,7 +90,6 @@ def pending_stream_recovery() -> _PendingStreamRecovery:
     )
     message_stream_writer.commit = AsyncMock()
     canonical_item_sink = AsyncMock()
-    tool_result_sink = AsyncMock()
     model_call_registrar = AsyncMock(return_value="execution")
     runtime = MessageStreamRuntime(
         message_stream_writer,
@@ -118,10 +124,12 @@ async def test_pending_attempt_finishes_once_and_completed_batch_member_stays_te
         ("pending", "read_context"),
     ):
         callback_run_id = f"new-callback-{provider_tool_call_id}"
+        recovery.runtime.register_tool_start("model", provider_tool_call_id, callback_run_id)
         await recovery.runtime.wait_tool_start(
             "model", provider_tool_call_id, callback_run_id
         )
-        tool_call_id = await recovery.runtime.tool_call_for_callback(callback_run_id)
+        binding = await recovery.runtime.tool_binding_for_callback(callback_run_id)
+        tool_call_id = binding.tool_call_id
         assert tool_call_id == f"model:tool-call:{provider_tool_call_id}"
         tool_attempt_id = recovery.runtime.resumed_tool_execution_id(
             tool_call_id, callback_run_id

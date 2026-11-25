@@ -42,7 +42,6 @@ from app.testing.model_stream import (
     chat_completion_frames,
     load_model_stream_config,
 )
-from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_runner_cancellation import (
     RunnerCase,
@@ -461,9 +460,9 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
     # 本用例只规划一次失败请求；使用真实配置关闭候选模型切换，保持原次数和期限断言。
     for root in mounted_case.roots.values():
         config_path = root / ".boxteam/workspace.jsonc"
-        payload = read_jsonc_object(config_path) if config_path.exists() else {}
-        model = payload.setdefault("agents", {}).setdefault("default", {}).setdefault("model", {})
-        model["fallbacks"] = []
+        payload = {"config_version": 4, "extends": "builtin:workspace", "settings": {"workspace": {
+            "agents": {"default": {"model": {"fallbacks": []}}},
+        }}}
         config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     lifespan_ready = asyncio.Event()
     model_entered, model_release = asyncio.Event(), asyncio.Event()
@@ -895,7 +894,9 @@ async def test_double_mount_consumes_each_explicit_candidate_and_ignores_process
             prompt = f"仅挂载工作区 {identity} 的候选说明"
             # 由候选应用器要求重启，两个工作区分别消费自己的说明候选。
             (root / ".boxteam/workspace.jsonc").write_text(json.dumps({
-                "agents": {agent_id: {"instructions": {"system_prompt": prompt}}},
+                "config_version": 4, "extends": "builtin:workspace", "settings": {"workspace": {
+                    "agents": {agent_id: {"instructions": {"system_prompt": prompt}}},
+                }},
             }))
             with pytest.raises(ConfigRestartRequiredError):
                 await config.reload(candidate_applier=require_restart)

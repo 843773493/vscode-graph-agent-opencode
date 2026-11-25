@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { t } from "../../../../shared/core/i18n/index.js";
 import { memo, useEffect, useMemo, useState } from "react";
 import { errorMessage } from "../../utils/errorMessage";
@@ -99,7 +100,7 @@ const NodeDebugSourcePreview = memo(function NodeDebugSourcePreview({
         aria-label={t("debug.preview.aria", path)}
       >
         {error ? (
-          <div className="node-debug-source-state error">{error}</div>
+          <div className="node-debug-source-state error failure-summary">{failureSummary(error)}</div>
         ) : content === null ? (
           <div className="node-debug-source-state">{t("debug.preview.loading", path)}</div>
         ) : visibleLines.map(({ line, lineNumber }) => {

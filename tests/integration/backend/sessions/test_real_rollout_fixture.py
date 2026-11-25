@@ -7,18 +7,18 @@ from itertools import pairwise
 from pathlib import Path
 
 import pytest
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
+from app.services.mapping.itemized.canonical_langchain import project_reasoning_carrier
 from tests.harness.performance.record import stage
+from tests.harness.python.run_context import TestRunContext
 from tests.support.custom_tool_test_workspace import (
     prepare_custom_tool_test_workspace,
 )
-from tests.support.paths import output_root_for_test
 
 REAL_SESSION_ID = "ses_019c27f816b17ee394a67f9312bb669e"
 STATIC_MOCK_SESSION_ID = "ses_019c642bc2ec78718d0a296b3319d6df"
@@ -28,15 +28,12 @@ STATIC_MOCK_SESSION_ID = "ses_019c642bc2ec78718d0a296b3319d6df"
 def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
     """用 custom_tool_test_workspace 的完整副本作为本文件的集成测试工作区。"""
 
-    project_root = Path.cwd().resolve()
-    output_root = output_root_for_test(
-        Path(request.node.fspath),
-        test_layer="integration",
-        project_root=project_root,
-    )
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    project_root = context.project_root
     with stage("fixture.workspace_setup"):
         workspace_root = prepare_custom_tool_test_workspace(
-            workspace_root=output_root / "workspace",
+            workspace_root=context.workspace_root,
+            artifacts_dir=context.run_root / "artifacts",
             template_root=project_root / "tests/fixtures/workspaces/custom_tool_test_workspace",
             shared_skill_root=project_root / "resources/skills",
         )
@@ -113,44 +110,32 @@ def test_custom_tool_fixture_asset_contract(
         checkpoint_id = connection.execute(
             "SELECT checkpoint_id FROM checkpoints ORDER BY commit_id DESC LIMIT 1"
         ).fetchone()[0]
-        event_version = connection.execute(
-            "SELECT channel_version FROM checkpoint_channels "
-            "WHERE checkpoint_id = ? AND channel_name = '_summarization_event'",
-            (checkpoint_id,),
-        ).fetchone()[0]
         messages_version = connection.execute(
             "SELECT channel_version FROM checkpoint_channels "
             "WHERE checkpoint_id = ? AND channel_name = 'messages'",
             (checkpoint_id,),
         ).fetchone()[0]
-        assert str(event_version).split(".", 1)[0].isdigit()
         assert str(messages_version).split(".", 1)[0].isdigit()
-
-        serializer, blob, length, digest = connection.execute(
-            "SELECT value.serializer_name, value.value_blob, value.value_length, value.value_hash "
-            "FROM checkpoint_channels channel JOIN checkpoint_state_values value ON value.value_id=channel.value_id "
-            "WHERE channel.checkpoint_id=? AND channel.channel_name='_summarization_event'",
-            (checkpoint_id,),
+        applied_candidate, summary_id, applied_view = connection.execute(
+            "SELECT candidate.candidate_id,candidate.applied_summary_item_id,candidate.applied_view_id "
+            "FROM context_compaction_candidates candidate "
+            "JOIN checkpoint_namespace_state namespace ON namespace.checkpoint_ns=candidate.checkpoint_ns "
+            "JOIN branches branch ON branch.branch_id=namespace.active_branch_id "
+            "WHERE namespace.checkpoint_ns='' AND candidate.applied_view_id=branch.head_view_id "
+            "ORDER BY candidate.created_at DESC LIMIT 1",
         ).fetchone()
-        import hashlib
-
-        assert len(blob) == length
-        assert hashlib.sha256(blob).hexdigest() == digest
-        # 仅审核可信 fixture 的原始 BLOB，不通过 runtime 的 v1 checkpoint reader。
-        compact_event = JsonPlusSerializer().loads_typed((serializer, blob))
-    assert compact_event["strategy"] == "cache_preserving"
-    # 切点属于第 16 Turn 完整消息边界，不能用固定序号切开工具组。
-    with closing(sqlite3.connect(compact_index.as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
-        cutoff = compact_event["cutoff_index"]
-        message_ids = [row[0] for row in connection.execute(
-            "SELECT message_id FROM messages ORDER BY message_sequence"
-        ) if not row[0].startswith("summary-")]
-    assert message_ids[cutoff - 1] == "assistant-final-0016"
-    assert message_ids[cutoff] == "user-0017"
-    assert compact_event["cache_prefix_messages"] == []
-    assert compact_event["summary_message"].additional_kwargs["lc_source"] == (
-        "summarization"
-    )
+        assert summary_id == f"item-summary-{applied_candidate}"
+        assert connection.execute(
+            "SELECT semantic_kind,status FROM item_catalog WHERE item_id=?", (summary_id,),
+        ).fetchone() == ("compaction_summary", "completed")
+        assert connection.execute(
+            "SELECT visible,context_selected FROM context_view_items WHERE view_id=? AND item_id=?",
+            (applied_view, summary_id),
+        ).fetchone() == (1, 1)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM compaction_history_ranges history JOIN context_views view "
+            "ON view.control_sequence=history.adopted_control_sequence WHERE view.view_id=?", (applied_view,),
+        ).fetchone()[0] > 0
 
 def test_provider_128_turn_fixture_preserves_canonical_semantics(
     real_rollout_workspace: Path,
@@ -198,7 +183,7 @@ def test_provider_128_turn_fixture_preserves_canonical_semantics(
         }
         assert {
             "reasoning_content",
-            "reasoning_items",
+            "reasoning",
             "redacted_thinking",
         }.issubset(reasoning_carriers)
         checkpoint_providers = {
@@ -238,21 +223,19 @@ def test_provider_128_turn_fixture_preserves_canonical_semantics(
     )
     items = storage.storage.read_items(REAL_SESSION_ID, resolver.main_thread_id(REAL_SESSION_ID))
     assert len(items) >= 288
-    assert all(item.format_version == 2 for item in items)
+    assert all(item.format_version == 3 for item in items)
     assert {item.semantic_kind for item in items} >= {
         "user_input",
         "assistant_output",
+        "reasoning",
         "tool_call",
         "tool_result",
     }
     canonical_reasoning_carriers = {
-        block["type"]
+        carrier["type"]
         for item in items
-        if item.semantic_kind == "assistant_output" and isinstance(item.payload, list)
-        for block in item.payload
-        if isinstance(block, dict)
-        and block.get("type")
-        in {"reasoning", "reasoning_content", "redacted_thinking"}
+        if item.semantic_kind == "reasoning"
+        and (carrier := project_reasoning_carrier(item)) is not None
     }
     assert {"reasoning", "reasoning_content", "redacted_thinking"}.issubset(
         canonical_reasoning_carriers

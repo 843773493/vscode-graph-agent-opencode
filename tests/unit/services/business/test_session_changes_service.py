@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator
 from dataclasses import asdict, replace
 from pathlib import Path
 from threading import Event
@@ -16,14 +17,18 @@ from app.core.path_utils import (
     get_session_path_resolver,
     get_sessions_dir,
     initialize_directories,
+    workspace_context,
 )
 from app.core.resource_uri import resource_display_uri
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_changes.service import SessionChangesService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
 from app.services.infrastructure.session_trace.store import TraceEventStore
+from tests.harness.python.run_context import TestRunContext
+from tests.support.workspaces import prepare_test_workspace
 
 
 def _uri(workspace_id: str, path: str) -> str:
@@ -33,39 +38,38 @@ def _uri(workspace_id: str, path: str) -> str:
 
 @pytest.fixture
 def session_changes_workspace(
-    empty_workspace_scope: tuple[str, Path],
-) -> tuple[str, Path]:
-    workspace_id, workspace_root = empty_workspace_scope
-    initialize_directories(workspace_id, workspace_root)
+    request: pytest.FixtureRequest,
+) -> Iterator[tuple[str, Path]]:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    workspace_root = prepare_test_workspace(
+        workspace_root=context.workspace_root,
+        template_root=context.project_root / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(),
+    )
+    workspace_id = load_or_create_workspace_id(workspace_root)
+    with workspace_context(workspace_id, workspace_root):
+        initialize_directories(workspace_id, workspace_root)
     local_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
     local_config_path.write_text(
         json.dumps(
             {
-                "llm": {
-                    "providers": {
-                        "test-local": {"defaults": {
-                            "endpoint": "http://127.0.0.1:9/v1",
-                            "api_key": "",
-                            "custom_llm_provider": "openai",
-                            "api_mode": {
-                                "protocol": "chat_completions",
-                                "model_info": {
-                                    "supports_function_calling": True,
-                                    "supports_reasoning": True,
-                                },
-                                "supports_reasoning": {"reasoning_content": True},
-                            },
-                        }, "models": {"default": {"model": "offline-test-model"}}}
-                    }
-                },
-                "agents": {
-                    "default": {
-                        "model": {
-                            "primary": {"provider_id": "test-local", "model_id": "default"},
-                            "fallbacks": [],
-                        }
-                    }
-                },
+                "config_version": 4,
+                "extends": "builtin:workspace",
+                "settings": {"workspace": {
+                    "llm": {"providers": {"test-local": {
+                        "config_ref": "#/profiles/test-local",
+                        "models": {"default": {"model": "offline-test-model", "config_ref": "context:provider/test-local"}},
+                    }}},
+                    "agents": {"default": {"model": {
+                        "primary": {"provider_id": "test-local", "model_id": "default"}, "fallbacks": [],
+                    }}},
+                }},
+                "profiles": {"test-local": {"extends": "context:workspace", "settings": {"model_options": {
+                    "endpoint": "http://127.0.0.1:9/v1", "api_key": "", "custom_llm_provider": "openai",
+                    "api_mode": {"protocol": "chat_completions", "model_info": {
+                        "supports_function_calling": True, "supports_reasoning": True,
+                    }, "supports_reasoning": {"reasoning_content": True}},
+                }}}},
             },
             ensure_ascii=False,
             indent=2,
@@ -73,7 +77,8 @@ def session_changes_workspace(
         + "\n",
         encoding="utf-8",
     )
-    return workspace_id, workspace_root
+    with workspace_context(workspace_id, workspace_root):
+        yield workspace_id, workspace_root
 
 
 @pytest.fixture

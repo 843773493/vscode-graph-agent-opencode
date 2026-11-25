@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from datetime import datetime
 from functools import wraps
 
 import pytest
@@ -12,13 +13,21 @@ import pytest
 from app.agents import agent_factory
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.schemas.internal_v2.common import JobStatus
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.resource_derivations.team import (
     TEAM_RESOURCE_IDS,
     TEAM_SOURCE_IDS,
 )
+from app.services.infrastructure.rollout_context.checkpoint.reader import (
+    RolloutContextReader,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     RuntimeCase,
@@ -185,6 +194,25 @@ async def test_parallel_skill_and_team_sources_wait_for_all_paired_results(
     projection_results = [item for item in results if item.producer_ref["producer_kind"] == "provider"]
     assert [item.tool_call_id for item in projection_results] == list(provider_ids)
     assert len(results) == len(streamed_results) + len(projection_results) == 4
+    # 开始／结果仍经真实工具执行入口提交；完成顺序不改变原调用顺序。
+    evidence = [item.tool_execution for item in reversed(streamed_results)]
+    assert all(value is not None and value.status == "completed" and value.outcome == "success"
+               for value in evidence)
+    assert max(datetime.fromisoformat(value.started_at) for value in evidence) < min(
+        datetime.fromisoformat(value.execution_completed_at) for value in evidence)
+    assert len({(value.session_id, value.thread_id, value.turn_stream_id) for value in evidence}) == 1
+    cold = RolloutCheckpointSaver(case.runner.workspace / ".boxteam" / "sessions")
+    history = RolloutHistoryReader(RolloutContextReader(cold._storage))
+    summary = history.load(session, thread, TurnHistoryLoadRequest(include=["tool_summary"])).items[0]
+    page = history.load(session, thread, TurnHistoryLoadRequest(
+        turn_ids=[streamed_results[0].turn_id], include=["activity_outline"],
+        source_view_id=summary.source_view_id, source_view_revision=summary.source_view_revision,
+    ))
+    calls = [part for part in page.items[0].response_items if part.kind == "tool_call"]
+    assert [part.tool_call_id.rsplit(":tool-call:", 1)[-1] for part in calls] == list(provider_ids)
+    assert [part.tool_execution.tool_attempt_id for part in calls] == [value.tool_attempt_id for value in evidence]
+    assert all(part.arguments is None and part.result is None and part.text == "" for part in calls)
+    assert all(part.tool_execution.execution_completed_at is not None for part in calls)
     final_snapshot = case.model_dispatches[-1].snapshot
     frames = final_snapshot.seal_binding.prefix.state.frames
     assert any(ref.source_identity == TEAM_SOURCE_IDS["tasks"]

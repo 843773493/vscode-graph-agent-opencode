@@ -16,6 +16,10 @@ from app.services.infrastructure.config.snapshot import ConfigRestartRequiredErr
 from app.services.infrastructure.config.state import ConfigConflictError
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
+from configs.installer import (
+    install_user_configuration,
+    install_workspace_configuration,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_test_workspace
 
@@ -31,30 +35,23 @@ def config_workspace_roots(request: pytest.FixtureRequest) -> tuple[Path, Path]:
             template_root=template_root,
             template_items=(),
         )
+        install_workspace_configuration(workspace_root=root)
         load_or_create_workspace_id(root)
     return roots
 
 
 def _write_config(path: Path, *, model_name: str) -> None:
+    install_user_configuration(config_root=path.parent, profile="default")
     path.write_text(
         json.dumps(
             {
-                "config_version": 3,
-                "llm": {
+                "config_version": 4,
+                "extends": "builtin:workspace",
+                "settings": {"workspace": {"llm": {
                     "providers": {
-                        "primary": {"defaults": {
-                            "endpoint": "https://example.com/v1",
-                            "api_key": "${TEST_API_KEY}",
-                            "custom_llm_provider": "openai",
-                            "api_mode": {
-                                "protocol": "chat_completions",
-                                "model_info": {
-                                    "supports_function_calling": True,
-                                    "supports_reasoning": True,
-                                },
-                                "supports_reasoning": {"reasoning_content": True},
-                            },
-                        }, "models": {"default": {"model": model_name}}}
+                        "primary": {"config_ref": "#/profiles/primary", "models": {
+                            "default": {"model": model_name, "config_ref": "context:provider/primary"},
+                        }}
                     }
                 },
                 "default_agent": "default",
@@ -69,7 +66,22 @@ def _write_config(path: Path, *, model_name: str) -> None:
                             "fallbacks": [],
                         },
                     }
-                },
+                }}},
+                "profiles": {"primary": {"extends": "context:workspace", "settings": {
+                    "model_options": {
+                            "endpoint": "https://example.com/v1",
+                            "api_key": "${TEST_API_KEY}",
+                            "custom_llm_provider": "openai",
+                            "api_mode": {
+                                "protocol": "chat_completions",
+                                "model_info": {
+                                    "supports_function_calling": True,
+                                    "supports_reasoning": True,
+                                },
+                                "supports_reasoning": {"reasoning_content": True},
+                            },
+                    },
+                }}},
             }
         ),
         encoding="utf-8",
@@ -138,7 +150,7 @@ async def test_user_source_writer_previews_saves_and_queries_original_generation
             service.validate_workspace_config()
             document = service.get_source_document(source_key="workspace_mutable_override", gateway_id="gateway-test")
             payload = json.loads(document.jsonc)
-            payload["agents"]["default"]["instructions"]["system_prompt"] = "共享文件新值"
+            payload["settings"]["workspace"]["agents"]["default"]["instructions"]["system_prompt"] = "共享文件新值"
             text = "// 保留共享来源注释\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
             request = ConfigSourceEditRequest(gateway_id=document.gateway_id, workspace_id=workspace_id,
                 source_key=document.source_key, jsonc=text, base_file_digest=document.file_digest,
@@ -154,7 +166,7 @@ async def test_user_source_writer_previews_saves_and_queries_original_generation
             saved = await service.save_source_edit(source_key=document.source_key, gateway_id=document.gateway_id, request=request)
             assert saved.edit is not None and saved.edit.source_saved and saved.edit.layer_imported
             assert saved.edit.state == "active"
-            mask = payload["llm"]["providers"]["primary"]["defaults"]["api_key"]
+            mask = payload["profiles"]["primary"]["settings"]["model_options"]["api_key"]
             assert config_path.read_text() == text.replace(mask, "${TEST_API_KEY}")
             assert saved.fanout is not None and saved.fanout.source_generation == 2
             assert saved.fanout.coverage == "observed_only" and saved.fanout.workspaces[0].result == "applied"
@@ -162,8 +174,8 @@ async def test_user_source_writer_previews_saves_and_queries_original_generation
             with pytest.raises(ConfigConflictError):
                 await service.save_source_edit(source_key=document.source_key, gateway_id=document.gateway_id,
                     request=request.model_copy(update={"idempotency_key": "stale-source-save"}))
-            payload["agents"]["default"]["instructions"]["system_prompt"] = "后续文件版本"
-            payload["llm"]["providers"]["primary"]["defaults"]["api_key"] = "${TEST_API_KEY}"
+            payload["settings"]["workspace"]["agents"]["default"]["instructions"]["system_prompt"] = "后续文件版本"
+            payload["profiles"]["primary"]["settings"]["model_options"]["api_key"] = "${TEST_API_KEY}"
             config_path.write_text(json.dumps(payload))
             await service.reload()
             queried = service.get_source_document(source_key=document.source_key, gateway_id=document.gateway_id,
@@ -209,7 +221,7 @@ async def test_saved_restart_source_is_not_rematerialized_or_replayed_by_reload(
                 source_key="workspace_mutable_override", gateway_id="gateway-test",
             )
             payload = json.loads(document.jsonc)
-            payload["agents"]["default"]["name"] = "Restart Required Agent"
+            payload["settings"]["workspace"]["agents"]["default"]["name"] = "Restart Required Agent"
             request = ConfigSourceEditRequest(
                 gateway_id=document.gateway_id,
                 workspace_id=workspace_id,
@@ -275,9 +287,12 @@ async def test_saved_restart_source_is_not_rematerialized_or_replayed_by_reload(
             assert store.list_config_apply_journals(config_domain="workspace") == original_journals
 
             root_config_path = get_workspace_config_path(workspace)
-            root_config_path.parent.mkdir(parents=True, exist_ok=True)
             root_config_path.write_text(json.dumps({
-                "agents": {"default": {"instructions": {"system_prompt": "workspace-root update"}}},
+                "config_version": 4,
+                "extends": "user:workspace_local",
+                "settings": {"workspace": {"agents": {"default": {
+                    "instructions": {"system_prompt": "workspace-root update"},
+                }}}},
             }), encoding="utf-8")
             root_file = read_stable_config_file(root_config_path)
 
@@ -286,7 +301,13 @@ async def test_saved_restart_source_is_not_rematerialized_or_replayed_by_reload(
             root_source = store.get_source_layer("workspace_root_mutable_override")
             assert root_source is not None
             assert root_source.presence == "present" and root_source.layer_digest == root_file.digest
-            assert root_source.payload == {"agents": {"default": {"instructions": {"system_prompt": "workspace-root update"}}}}
+            assert root_source.payload == {
+                "config_version": 4,
+                "extends": "user:workspace_local",
+                "settings": {"workspace": {"agents": {"default": {
+                    "instructions": {"system_prompt": "workspace-root update"},
+                }}}},
+            }
             assert apply_calls == 2
             unchanged = store.get_pending_config_candidate(
                 config_domain="workspace", idempotency_key=request.idempotency_key,
@@ -529,14 +550,17 @@ async def test_shared_source_fanout_reports_candidate_application_not_layer_impo
         workspace_root=workspace, workspace_state_store=store, source_owner=owner,
         source_owner_workspace_id="workspace-a")
     if outcome == "unchanged":
-        (workspace / ".boxteam/workspace.jsonc").write_text('{"default_agent":"default"}')
+        (workspace / ".boxteam/workspace.jsonc").write_text(json.dumps({
+            "config_version": 4, "extends": "user:workspace_local",
+            "settings": {"workspace": {"default_agent": "default"}},
+        }))
     service.validate_workspace_config()
     active = store.get_active_config_snapshot("workspace")
     assert active is not None
     if outcome == "unchanged":
         payload = json.loads(config_path.read_text())
         # 只改变被工作区层遮蔽的字段，来源版本仍须前进。
-        payload["default_agent"] = "unused-default"
+        payload["settings"]["workspace"]["default_agent"] = "unused-default"
         config_path.write_text(json.dumps(payload))
     else:
         _write_config(config_path, model_name="after")
@@ -573,6 +597,12 @@ async def test_shared_source_fanout_reports_candidate_application_not_layer_impo
             with pytest.raises(expected_error):
                 await service.reload(candidate_applier=apply)
             assert store.get_active_config_snapshot("workspace") == active
+            if outcome == "source_read_failed":
+                # 入口文档尚未解析，候选没有到达共享 user 来源。
+                with pytest.raises(RuntimeError, match="fanout 提交后无法读取"):
+                    owner.get_fanout(source_key="workspace:user", source_generation=2,
+                        workspace_id="workspace-a")
+                return
         else:
             assert await service.reload(candidate_applier=apply) is (outcome == "applied")
         result = owner.get_fanout(source_key="workspace:user", source_generation=2,

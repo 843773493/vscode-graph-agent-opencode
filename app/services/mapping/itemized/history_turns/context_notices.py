@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
-from app.schemas.internal_v2.turn import TurnResponsePartDTO, TurnResponseSourceDTO
+from app.schemas.internal_v2.turn import TurnResponseItemDTO, TurnResponseSourceDTO
 from app.schemas.internal_v2.turn_search import (
     CanonicalContextContentReference,
     SealedContextContentReference,
@@ -18,14 +18,14 @@ if TYPE_CHECKING:
 
 
 def context_notice_parts(rows: list[ContextNoticeMetadata], *,
-                         continuation: str | None = None) -> dict[str, list[TurnResponsePartDTO]]:
-    owners: dict[str, list[TurnResponsePartDTO]] = defaultdict(list)
+                         continuation: str | None = None) -> dict[str, list[TurnResponseItemDTO]]:
+    owners: dict[str, list[TurnResponseItemDTO]] = defaultdict(list)
     for row in rows:
         reference = (CanonicalContextContentReference(item_id=row.item_id) if row.item_id is not None
             else SealedContextContentReference(session_id=row.session_id, thread_id=row.thread_id,
                 assembly_id=row.assembly_id, contribution_id=row.contribution_id))
-        owners[row.turn_id or row.execution_id].append(TurnResponsePartDTO(
-            part_id=f"{row.model_call_id}:{row.plan_ordinal}:context", kind="context_notice", projection="summary",
+        owners[row.turn_id or row.execution_id].append(TurnResponseItemDTO(
+            id=f"{row.model_call_id}:{row.plan_ordinal}:context", kind="context_notice", projection="summary",
             source=TurnResponseSourceDTO(message_sequence=0, item_id=row.item_id,
                 item_sequence=row.item_sequence, logical_item_ordinal=row.logical_item_ordinal,
                 model_call_id=row.model_call_id, created_at=row.created_at, elapsed_ms=0,

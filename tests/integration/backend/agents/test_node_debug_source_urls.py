@@ -38,29 +38,26 @@ async def test_native_source_urls_use_the_same_file_owner_as_file_urls(
     config_path = Path(integration_workspace_config_path)
     source = commentjson.loads(config_path.read_text(encoding="utf-8"))
     ports = integration_ports_for_file(Path(request.node.fspath))
-    source.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+    workspace_settings = source["settings"]["workspace"]
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
         "url"
     ] = f"http://127.0.0.1:{ports.port(1)}"
     # 本场景不调用模型；显式提供配置依赖，避免借用宿主凭据。
-    source["llm"]["providers"] = {
-        "primary": {
-            "defaults": {
-                "endpoint": "http://127.0.0.1:1/v1",
-                "api_key": "",
-                "custom_llm_provider": "openai",
-                "api_mode": {
-                    "protocol": "chat_completions",
-                    "model_info": {
-                        "supports_function_calling": True,
-                        "supports_reasoning": False,
-                    },
-                    "supports_reasoning": {"reasoning_content": False},
-                },
-            },
-            "models": {"default": {"model": "unused-debug-model"}},
-        }
+    workspace_settings["llm"]["providers"] = {"primary": {
+        "config_ref": "#/profiles/provider.primary",
+        "models": {"default": {"model": "unused-debug-model", "config_ref": "context:provider/primary"}},
+    }}
+    source["profiles"]["provider.primary"]["settings"]["model_options"] = {
+        "endpoint": "http://127.0.0.1:1/v1",
+        "api_key": "",
+        "custom_llm_provider": "openai",
+        "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {"supports_function_calling": True, "supports_reasoning": False},
+            "supports_reasoning": {"reasoning_content": False},
+        },
     }
-    for agent in source["agents"].values():
+    for agent in workspace_settings["agents"].values():
         if "model" in agent:
             agent["model"] = {'primary': {'provider_id': 'primary', 'model_id': 'default'}, 'fallbacks': []}
     config_path.write_text(json.dumps(source, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

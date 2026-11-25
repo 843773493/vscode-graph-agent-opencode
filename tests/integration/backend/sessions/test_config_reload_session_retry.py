@@ -64,14 +64,15 @@ async def test_persisted_failed_session_retries_after_model_configuration_reload
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path).resolve()
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    primary_provider = config["llm"]["providers"]["primary"]
-    primary_provider["defaults"] = {
+    workspace = config["settings"]["workspace"]
+    primary_provider = workspace["llm"]["providers"]["primary"]
+    provider_options = config["profiles"]["provider.primary"]["settings"]["model_options"]
+    provider_options.update({
         "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
         "api_key": "", "custom_llm_provider": "openai",
-        "api_mode": primary_provider["defaults"]["api_mode"],
-    }
+    })
     primary_provider["models"]["default"]["model"] = "e2e-stub-model"
-    config["agents"]["default"]["model"] = {
+    workspace["agents"]["default"]["model"] = {
         "primary": {"provider_id": "primary", "model_id": "default"},
         "fallbacks": [],
     }
@@ -140,7 +141,7 @@ async def test_persisted_failed_session_retries_after_model_configuration_reload
             message_id = accepted["message_id"]
 
             config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-            config["llm"]["providers"]["primary"]["models"]["default"]["model"] = "e2e-retry-model"
+            config["settings"]["workspace"]["llm"]["providers"]["primary"]["models"]["default"]["model"] = "e2e-retry-model"
             config_path.write_text(
                 json.dumps(config, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",

@@ -12,6 +12,8 @@ from urllib.parse import quote
 
 import pytest
 
+import app.services.infrastructure.config.source_document as source_document_module
+import app.services.infrastructure.config_service.config_source_layers as source_layers_module
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.config import ConfigSourceEditRequest
 from app.schemas.internal_v2.model_reference import ModelReferenceDTO
@@ -146,6 +148,76 @@ async def test_explicit_parent_can_bypass_user_sources(installed_workspace: Inst
     assert len(graph.resolve_scope().chain) == 2
     assert set(graph.dependencies) == {entry.resolve(), Path.cwd() / "configs/workspace_inline.jsonc"}
     assert graph.resolve_provider("primary").location.pointer == "/profiles/provider.primary"
+
+
+@pytest.mark.parametrize("literal_secret", [False, True])
+async def test_source_document_reuses_current_read_without_reparsing_or_publishing(
+    installed_workspace: InstalledWorkspace, monkeypatch: pytest.MonkeyPatch, literal_secret: bool,
+) -> None:
+    case = installed_workspace
+    source = case.workspace / ".boxteam/workspace.jsonc"
+    active = case.service.get_snapshot()
+    payload = {"config_version": 4, "extends": "user:workspace_local",
+        "settings": {"workspace": {"agents": {"default": {"name": "Saved only"}}}}}
+    if literal_secret:
+        payload["profiles"] = {"unused": {"settings": {"model_options": {
+            "request_options": {"default_headers": {"X-Unit": "private-source-key"}},
+        }}}}
+    text = "// 保留当前来源注释\r\n" + json.dumps(payload, ensure_ascii=False, indent=2).replace("\n", "\r\n") + "\r\n"
+    source.write_bytes(text.encode("utf-8"))
+
+    def reject_duplicate_parse(*_args, **_kwargs):
+        pytest.fail("来源读取重新解析了本次配置图已经取得的正文")
+
+    # 初始化已加载 schema；真实来源入口仍须读取、解析和校验当前磁盘文件。
+    monkeypatch.setattr(source_layers_module, "read_jsonc_object", reject_duplicate_parse)
+    monkeypatch.setattr(source_document_module, "parse_source_text", reject_duplicate_parse)
+    document = case.service.get_source_document(
+        source_key="workspace_root_mutable_override", gateway_id="gateway_" + "8" * 32,
+    )
+    expected = text.replace('"private-source-key"', '"boxteam-redacted:/profiles/unused/settings/model_options/request_options/default_headers/X-Unit"')
+    assert document.jsonc == expected
+    assert document.source_effective["agents"]["default"]["name"] == "Saved only"
+    assert document.effective["agents"]["default"]["name"] != "Saved only"
+    assert case.service.get_snapshot() is active
+
+    source.write_text('{"config_version": 4, invalid}', encoding="utf-8")
+    with pytest.raises(ValueError):
+        case.service.get_source_document(source_key=document.source_key, gateway_id=document.gateway_id)
+    assert case.service.get_snapshot() is active
+
+
+async def test_source_document_reports_actual_inherited_entity_owners(
+    installed_workspace: InstalledWorkspace,
+) -> None:
+    case = installed_workspace
+    user = case.config_root / "workspace.jsonc"
+    local = case.config_root / "workspace_local.jsonc"
+    user_document = read_jsonc_object(user)
+    shared = deepcopy(read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")["settings"]["workspace"]["agents"]["default"])
+    shared["name"] = "User Shared"
+    user_document["settings"]["workspace"]["agents"] = {
+        "default": {"name": "User Agent"},
+        "shared": shared,
+    }
+    user.write_text(json.dumps(user_document), encoding="utf-8")
+    local_document = read_jsonc_object(local)
+    local_document["settings"] = {"workspace": {"agents": {"shared": {"name": "Local Shared"}}}}
+    local.write_text(json.dumps(local_document), encoding="utf-8")
+    assert await case.service.reload()
+
+    document = case.service.get_source_document(
+        source_key="workspace_root_mutable_override", gateway_id="gateway_" + "8" * 32,
+    )
+    origins = {origin.path: origin.source_key for origin in document.source_inherited_origins}
+    assert origins["/agents/default"] == "workspace_mutable_override"
+    assert origins["/agents/shared"] == "workspace_local_mutable_override"
+    assert origins["/llm/providers/primary"] == "workspace_mutable_override"
+    assert origins["/llm/providers/backup_1"] == "inline"
+    assert set(origins) == {
+        *(f"/agents/{identity}" for identity in document.source_inherited["agents"]),
+        *(f"/llm/providers/{identity}" for identity in document.source_inherited["llm"]["providers"]),
+    }
 
 
 async def test_missing_declared_parent_is_not_created_and_can_be_repaired(installed_workspace: InstalledWorkspace) -> None:

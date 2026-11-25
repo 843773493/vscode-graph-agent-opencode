@@ -150,7 +150,7 @@ class ModelReplayCase:
             assert main_thread.status_code == 200, main_thread.text
             thread_id = main_thread.json()["data"]["thread_id"]
         config = commentjson.loads((self.workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-        endpoint = config["llm"]["providers"]["primary"]["defaults"]["endpoint"]
+        endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
         interactions = [build_cassette(
             asset_id="runtime-source-restart", model="e2e-stub-model", url=endpoint + "/chat/completions",
             frames=chat_completion_frames(
@@ -717,7 +717,7 @@ async def test_runtime_notice_plain_text_containing_display_part_stays_text(
         entry for entry in page["internal_executions"]
         if entry["execution_id"] == execution_id
     )
-    assert execution_history["display_parts"] == []
+    assert execution_history["display_items"] == []
 
 
 @pytest.mark.asyncio
@@ -1333,8 +1333,8 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
             status_response = await case.client.get(f"/api/v1/persistent-tasks/{task['task_id']}/runs")
             assert status_response.status_code == 200, status_response.text
             assert status_response.headers["X-Request-ID"] == status_response.json()["request_id"]
-            current, = [item for item in status_response.json()["data"]["items"] if item["run_id"] == run["run_id"]]
-            result = current["generation"]
+            current_summary, = [item for item in status_response.json()["data"]["items"] if item["run_id"] == run["run_id"]]
+            result = current_summary["generation"]
             if result["status"] in {"completed", "failed"}:
                 assert result["status"] == "completed", result
                 break
@@ -1371,12 +1371,11 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
         == (f"{identity.model_call_id}:block:{ref.id}", ref.index)
         for item in generated_items for ref in identity.content_part_refs
     )
-    assert any(
-        relation.relation == "replaces" and relation.target_kind == "projection_message"
-        and item.projection_identity is not None
-        and item.projection_identity.projection_message_id == relation.target_id
-        for relation in final_item.provenance_relations for item in generated_items
-    )
+    # final 指向原 checkpoint 输出，不再追加聚合消息及其替代关系。
+    assert identity.projection_message_id is not None
+    assert final_item.item_id == f"item-{identity.projection_message_id}"
+    assert not any(relation.relation == "replaces" and relation.target_kind == "projection_message"
+                   for relation in final_item.provenance_relations)
     canonical_report = _assert_generated_notice(
         case, session_id, child_thread_id, child_notices[0][0],
         expected_provenance={"source_session_id": generated_session_id, "source_thread_id": generated_thread_id,
@@ -1401,20 +1400,30 @@ async def test_h4_generated_branch_returns_to_frozen_child_thread(source_case: R
     history = history_response.json()["data"]
     report_history = next(entry for entry in history["internal_executions"]
                           if entry["execution_id"] == report_admission.execution_id)
-    assert [part["text"] for part in report_history["display_parts"]] == ["生成分支已结束，主会话正在处理返回结果。"]
+    assert [part["text"] for part in report_history["display_items"]] == ["生成分支已结束，主会话正在处理返回结果。"]
     assert all(private not in canonical_json_bytes(history).decode()
                for private in ("H4-generated-result", "H4-private-generator-prompt"))
     current_task_response = await case.client.get(f"/api/v1/persistent-tasks/{task['task_id']}")
     assert current_task_response.status_code == 200, current_task_response.text
     current_task = current_task_response.json()["data"]
     assert current_task["task_id"] == task["task_id"]
+    detail_response = await case.client.get(f"/api/v1/persistent-tasks/{task['task_id']}/runs/{run['run_id']}")
+    assert detail_response.status_code == 200, detail_response.text
+    assert detail_response.headers["X-Request-ID"] == detail_response.json()["request_id"]
+    current_run = detail_response.json()["data"]["run"]
     repeated_task, repeated_run = await _create_generation(case.client, configuration, "h4-stable-key")
     assert repeated_task == current_task
-    assert repeated_run == await _check_generation(case.client, task, "h4-stable-key") == current
+    assert repeated_run == await _check_generation(case.client, task, "h4-stable-key") == current_run
     assert repeated_run["generation"] == result
+    repeated_list = await case.client.get(f"/api/v1/persistent-tasks/{task['task_id']}/runs")
+    assert repeated_list.status_code == 200, repeated_list.text
+    assert repeated_list.headers["X-Request-ID"] == repeated_list.json()["request_id"]
+    assert repeated_list.json()["data"]["items"] == [current_summary]
+    assert repeated_list.json()["data"]["next_before"] is None
     assert case.sql(session_id, child_thread_id, "SELECT COUNT(*) FROM executions")[0][0] == 2
     case.write_actual("h4", {"generated_session_id": generated_session_id, "generated_job": generated_job,
-        "report_job": report_job, "task": task, "run": current, "result": result, "exact_origin_thread_id": child_thread_id,
+        "report_job": report_job, "task": task, "run": current_run, "run_summary": current_summary,
+        "result": result, "exact_origin_thread_id": child_thread_id,
         "child_runtime_inputs": child_notices, "canonical_report": canonical_report,
         "report_provider_prompts": report_prompts, "report_history": report_history,
         "private_seed_in_generated_context": any("private-seed-h1" in value for value in generated_contexts),
@@ -1566,9 +1575,11 @@ with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
         current_execution_count = connection.execute(
             'SELECT COUNT(*) FROM executions WHERE session_id=? AND thread_id=?', (session, thread),
         ).fetchone()[0]
-        parts = connection.execute(
-            'SELECT p.item_id,p.part_id,p.part_ordinal,i.jsonl_offset FROM item_parts p '
-            'JOIN item_catalog i ON i.item_id=p.item_id ORDER BY i.item_sequence,p.part_ordinal'
+        block_sources = connection.execute(
+            "SELECT item_id,json_extract(projection_manifest_json,'$.projection_identity.block_id'),"
+            "json_extract(projection_manifest_json,'$.projection_identity.block_index'),jsonl_offset "
+            "FROM item_catalog WHERE json_extract(projection_manifest_json,'$.projection_identity.block_id') IS NOT NULL "
+            "ORDER BY item_sequence"
         ).fetchall()
         model_calls = connection.execute(
             'SELECT model_call_id,execution_id,assembly_id,outcome,dispatch_state '
@@ -1613,7 +1624,7 @@ with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
             input_reference_json=json.dumps(request['reference']),
         )
         if execution_scope == (session, thread):
-            message = saver.accepted_internal_message(
+            _admission, message = saver.accepted_internal_message(
                 session, thread_id=thread, job_id=admission.job_id,
                 message_id=binding.message_id, intent=binding,
             )
@@ -1643,7 +1654,7 @@ with fixture_catalog_scope(), RolloutCheckpointSaver(sessions) as saver:
         'request': request, 'seed': seed, 'detail_owners': detail_owners,
         'accepted_seed': accepted_seed, 'admission_cursor': cursor_fact,
         'admission_payload_hash': admission_hash,
-        'parts': parts, 'execution_scope': execution_scope,
+        'block_sources': block_sources, 'execution_scope': execution_scope,
         'historical_execution_rejected': historical_execution_rejected,
         'model_calls': model_calls,
         'items': [item.to_dict() for item in items],
@@ -1804,7 +1815,7 @@ async def test_h5_cold_refork_and_hard_exit_recovery(source_case: RuntimeSourceC
         source_message = case.container.checkpointer.accepted_internal_message(
             source_session, thread_id=source_thread, job_id=admission.job_id,
             message_id=binding.message_id, intent=binding,
-        )
+        )[1]
         source_admission_hash = case.sql(
             source_session, source_thread,
             "SELECT admission_payload_hash FROM executions WHERE execution_id=?",
@@ -1844,7 +1855,7 @@ async def test_h5_cold_refork_and_hard_exit_recovery(source_case: RuntimeSourceC
         assert source["accepted_seed"]["metadata"] == source_message.response_metadata["message_metadata"]
         for copied in (first, second):
             assert copied["detail_owners"] == source["detail_owners"]
-            assert copied["parts"] == source["parts"]
+            assert copied["block_sources"] == source["block_sources"]
             assert copied["items"] == source["items"]
             assert copied["model_calls"] == source["model_calls"]
             assert copied["admission_cursor"] == source["admission_cursor"]
@@ -1903,7 +1914,7 @@ async def completed_empty_seed_source(
                     "graph_schema_hash": "sha256:" + "a" * 64,
                     "capability_profile_hash": compute_capability_profile_hash(capability_profile=profile)},
                 "capability_profile": profile,
-                "task_seed": {"description": "H5 合法无输出冻结任务", "gateway_id": None, "request_id": None},
+                "task_seed": {"description": "H5 合法无输出冻结任务", "agent_id": "default", "gateway_id": None, "request_id": None},
                 "task_reference": {"parent_session_id": session_id,
                     "parent_thread_id": await case.container.session_service.resolve_main_thread(session_id)},
             },
@@ -1933,6 +1944,10 @@ async def completed_empty_seed_source(
         )
         with (session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id),
               execution_admission_scope(admission, langgraph_thread_id=thread_id)):
+            saver.claim_execution_queue(
+                session_id, thread_id, job_id=admission.job_id,
+                claim_owner="h5-completed-empty-fixture", previous_generation=0,
+            )
             creation_key = "h5-completed-empty-plan-create"
             prepared = saver.prepare_context_for_provider(
                 session_id, thread_id, turn_id=None, execution_id=admission.execution_id,
@@ -1978,7 +1993,7 @@ async def test_h5_completed_empty_seed_preserves_metadata_only_admission(
     second_session = await create_session(case.client, "H5 无输出再次 fork")
     second = await cold_fork_process(first_session, first["thread_id"], second_session, phase="fork", mode=mode)
     for actual in (source, first, second):
-        assert actual["items"] == [] and actual["parts"] == []
+        assert actual["items"] == [] and actual["block_sources"] == []
         assert actual["counts"]["turn_records"] == 0
         assert actual["executions"][0][1:] == ["internal", None, "completed_empty"]
         assert len(actual["model_calls"]) == 1
@@ -2386,7 +2401,11 @@ async def test_replay_and_manual_compaction_http_keep_catalog_main_owner(
     with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
         scheduled = await saver.aget_tuple(build_checkpoint_config(owner.thread_id))
     assert scheduled is not None
-    assert scheduled.checkpoint["channel_values"]["_force_cache_compaction"] is True
+    assert scheduled.config == latest.config
+    assert case.sql(
+        session_id, owner.thread_id,
+        "SELECT task_id,apply_on_next_request FROM context_compaction_candidates",
+    ) == [(compact.json()["data"]["task_id"], 1)]
     assert scheduled.checkpoint["channel_values"]["messages"] == messages
     assert case.sql(session_id, owner.thread_id, "SELECT COUNT(*) FROM executions")[0][0] == before_execution_count
     assert case.sql(session_id, owner.thread_id,

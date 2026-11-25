@@ -100,7 +100,7 @@ try {
     },
   );
   const historyItem = history.data.items.find((item) => item.turn_id === turnId);
-  const unknownToolPart = historyItem?.response_parts?.find(
+  const unknownToolPart = historyItem?.response_items?.find(
     (part) => part.kind === "tool_call" && part.outcome_unknown === true,
   );
   if (historyItem?.status !== "failed" || !unknownToolPart) {

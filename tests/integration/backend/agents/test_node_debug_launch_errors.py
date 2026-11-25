@@ -42,7 +42,7 @@ async def _set_node_executable(
     assert response.status_code == 200, response.text
     document = response.json()["data"]
     source = commentjson.loads(document["jsonc"])
-    source.setdefault("runtime", {}).setdefault("debug", {}).setdefault("node", {})[
+    source["settings"]["workspace"].setdefault("runtime", {}).setdefault("debug", {}).setdefault("node", {})[
         "executable"
     ] = executable
     saved = await client.put(path, headers=headers, json={
@@ -84,36 +84,33 @@ async def test_missing_node_executable_preserves_safe_history_and_retries_after_
     missing = context.runtime_root_for_node(request.node.nodeid) / "missing-node"
     assert not missing.exists()
     (root / "entry.mjs").write_text("setInterval(() => {}, 1000);\n")
-    source.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+    workspace_settings = source["settings"]["workspace"]
+    workspace_settings.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
         "url"
     ] = f"http://127.0.0.1:{ports.port(1)}"
-    source.setdefault("runtime", {}).setdefault("debug", {}).setdefault("node", {})[
+    workspace_settings.setdefault("runtime", {}).setdefault("debug", {}).setdefault("node", {})[
         "executable"
     ] = str(missing)
     # 本场景不调用模型；显式提供配置依赖，避免借用宿主凭据。
-    source["llm"]["providers"] = {
-        "primary": {
-            "defaults": {
-                "endpoint": "http://127.0.0.1:1/v1",
-                "api_key": "",
-                "custom_llm_provider": "openai",
-                "api_mode": {
-                    "protocol": "chat_completions",
-                    "model_info": {
-                        "supports_function_calling": True,
-                        "supports_reasoning": False,
-                    },
-                    "supports_reasoning": {"reasoning_content": False},
-                },
-            },
-            "models": {"default": {"model": "unused-debug-model"}},
-        }
+    workspace_settings["llm"]["providers"] = {"primary": {
+        "config_ref": "#/profiles/provider.primary",
+        "models": {"default": {"model": "unused-debug-model", "config_ref": "context:provider/primary"}},
+    }}
+    source["profiles"]["provider.primary"]["settings"]["model_options"] = {
+        "endpoint": "http://127.0.0.1:1/v1",
+        "api_key": "",
+        "custom_llm_provider": "openai",
+        "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {"supports_function_calling": True, "supports_reasoning": False},
+            "supports_reasoning": {"reasoning_content": False},
+        },
     }
-    for agent in source["agents"].values():
+    for agent in workspace_settings["agents"].values():
         if "model" in agent:
             agent["model"] = {'primary': {'provider_id': 'primary', 'model_id': 'default'}, 'fallbacks': []}
     source["$schema"] = "./workspace_schema.jsonc"
-    source["config_version"] = 3
+    source["config_version"] = 4
     dummy_config = json.dumps(source, ensure_ascii=False, indent=2) + "\n"
     config_path.write_text(dummy_config, encoding="utf-8")
     Path(integration_workspace_config_path).write_text(dummy_config, encoding="utf-8")

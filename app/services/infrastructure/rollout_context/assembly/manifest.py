@@ -45,7 +45,7 @@ def _frozen_source_refs(
 ) -> tuple[dict[str, tuple[str, str]], frozenset[str]]:
     """只冻结实时来源 cut；候选正文由独立的 canonical provenance 审计。"""
     binding = snapshot.seal_binding
-    if binding is None or snapshot.selection_policy == "summary_candidate":
+    if binding is None or snapshot.selection_policy == "derived_request":
         return {}, frozenset()
     contributions = {source.contribution_id: source for source in snapshot.contributions}
     selected_sources = {
@@ -114,7 +114,7 @@ class ContextAssemblyManifestMixin:
         )
         if row[6] not in {"sealed", "terminal"} or manifest["sealed"] is not True:
             raise RuntimeError("source-cut-frontier-conflict: predecessor 尚未封存")
-        if manifest["selection_policy"] == "summary_candidate" or manifest["seal_binding"] == {"literal": None}:
+        if manifest["selection_policy"] == "derived_request" or manifest["seal_binding"] == {"literal": None}:
             return {}, {}
         contributions = {
             source.contribution_id: source for raw in manifest["contributions"]

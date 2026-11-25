@@ -96,27 +96,32 @@ try {
     await options.getByRole('button', { name: '添加请求参数', exact: true }).click();
   };
   const providerOptions = form.locator('.configuration-model-options').first();
-  await providerOptions.locator(':scope > summary').click();
   await addParameter(providerOptions, 'temperature', 0);
   await addParameter(providerOptions, 'top_p', null);
   await addParameter(providerOptions, 'extra_body', { extension_switch: false, extension_value: null });
   assert.equal(result.requests.filter(item => item.path.endsWith('/llm/discover')).length, 1, '参数编辑不能自动探测');
   result.phase = 'inspect-original-model-draft';
+  await form.locator('.configuration-model-list').getByRole('button', { name: 'upstream-main', exact: true }).click();
   await form.locator('[data-model-id="default"] > details > summary').click();
-  const inspection = form.locator('.configuration-model-inspection');
+  await openDetails(form.locator('[data-model-id="default"] .configuration-node-reference'));
+  const inspection = form.locator('[data-model-id] .configuration-model-inspection');
   const inspect = async (expectedStatus = 200) => {
     const [response] = await Promise.all([
       page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/preflight')),
       inspection.getByRole('button', { name: '预检并查看最终选项', exact: true }).click(),
     ]);
     assert.equal(response.status(), expectedStatus, await response.text());
-    if (expectedStatus !== 200) return response.json();
+    if (expectedStatus !== 200) {
+      const failure = await response.json();
+      result.preflightFailure = failure;
+      return failure;
+    }
     const preflight = (await response.json()).data;
     const receipt = preflight.model_options;
     assert.deepEqual(receipt.model_ref, { provider_id: 'primary', model_id: 'default' });
     await expect(inspection.getByRole('status')).toHaveText('本次草稿预检通过');
-    await expect(inspection.locator('[data-model-options="draft"] pre')).toHaveText(JSON.stringify(receipt.options, null, 2));
-    await expect(inspection.locator('[data-model-options="active"] pre')).toHaveText(JSON.stringify(preflight.active_model_options.options, null, 2));
+    await expect(inspection.locator('[data-model-options="draft"] > pre')).toHaveText(JSON.stringify(receipt.options, null, 2));
+    await expect(inspection.locator('[data-model-options="active"] > pre')).toHaveText(JSON.stringify(preflight.active_model_options.options, null, 2));
     assert.equal(preflight.active_model_options.options.request_options.parameters?.temperature, undefined,
       '未保存草稿不能冒充已生效参数');
     assert.equal(result.requests.filter(item => item.method === 'PUT').length, 0);
@@ -137,12 +142,16 @@ try {
   const overriddenCredential = await inspect();
   assert.equal(overriddenCredential.options.api_key, '');
   assert.equal(overriddenCredential.origins.find(origin => origin.path === '/api_key').definition, 'node');
-  await modelCredential.getByRole('button', { name: '使用服务默认设置', exact: true }).click();
+  const overriddenDraft = JSON.parse(result.requests.filter(item => item.path.endsWith('/preflight')).at(-1).body.jsonc);
+  const credentialReference = overriddenDraft.settings.workspace.llm.providers.primary.models.default.config_ref;
+  await modelCredential.getByRole('button', { name: '重置', exact: true }).click();
   const inheritedCredential = await inspect();
   assert.equal(inheritedCredential.options.api_key, providerReceipt.options.api_key);
   assert.equal(inheritedCredential.origins.find(origin => origin.path === '/api_key').definition, 'node');
   const restoredDraft = JSON.parse(result.requests.filter(item => item.path.endsWith('/preflight')).at(-1).body.jsonc);
-  assert.equal(restoredDraft.settings.workspace.llm.providers.primary.models.default.config_ref, 'context:provider/primary',
+  assert.equal(restoredDraft.settings.workspace.llm.providers.primary.models.default.config_ref, credentialReference,
+    '重置字段保留原Model配置节点');
+  assert.equal(localModelOptions(restoredDraft, 'primary', 'default').api_key, undefined,
     '恢复继承只删除当前Model字段，不复制Provider值或写入null');
   assert.equal(result.requests.filter(item => item.path.endsWith('/llm/discover')).length, 1,
     '模型凭据覆盖与恢复不编辑Provider连接');
@@ -153,12 +162,11 @@ try {
   await modelStreaming.selectOption('false');
   await modelProtocol.selectOption('responses');
   const incompleteProtocol = await inspect(422);
-  assert.match(incompleteProtocol.detail, /model_info\.supports_reasoning/,
+  assert.match(JSON.stringify(incompleteProtocol.detail), /model_info\.supports_reasoning/,
     '协议切换不猜测能力，继承的reasoning声明与显式空块冲突时必须拒绝');
   const modelOptions = modelSection.locator('.configuration-model-options');
-  await modelOptions.locator(':scope > summary').click();
   await modelOptions.locator('.configuration-option-section > summary').filter({ hasText: '能力与输入容量' }).click();
-  const reasoningCapability = modelOptions.getByRole('combobox', { name: /^supports_reasoning/ });
+  const reasoningCapability = modelOptions.getByRole('combobox', { name: '思考能力', exact: true });
   await reasoningCapability.selectOption('false');
   const responseOptions = await inspect();
   assert.equal(responseOptions.request_url, fixture.endpoint + '/responses');
@@ -191,7 +199,7 @@ try {
   await modelOptions.locator('[data-parameter="temperature"]').getByRole('button', { name: '不发送此参数', exact: true }).click();
   await modelOptions.locator('.configuration-option-section > summary').filter({ hasText: '推理' }).click();
   await modelOptions.getByRole('button', { name: '清空推理格式', exact: true }).click();
-  const wireForm = modelOptions.locator('.configuration-option-json').filter({ has: page.getByLabel('api_mode.supports_reasoning', { exact: true }) });
+  const wireForm = modelOptions.locator('.configuration-option-json').filter({ has: page.getByLabel('推理格式', { exact: true }) });
   await wireForm.getByRole('button', { name: '清除设置', exact: true }).click();
   await expect(inspection.getByRole('status')).toContainText('草稿已改变');
   const modelReceipt = await inspect();
@@ -217,6 +225,8 @@ try {
   await expect(page.locator('.editor-instance:visible .monaco-editor .view-lines').last()).toContainText('upstream-new');
   result.phase = 'create-provider-without-model';
   await command('boxteam.settings.modelsProviders', location);
+  await openDetails(panel.locator(':scope > details').first());
+  await panel.getByLabel('连接编辑结束后自动获取一次模型', { exact: true }).uncheck();
   await form.getByRole('button', { name: '添加模型服务', exact: true }).click();
   const quick = page.locator('.quick-input-widget');
   const input = async value => {
@@ -234,13 +244,17 @@ try {
   await expect(panel.getByRole('button', { name: '测试配置模式', exact: true })).toBeDisabled();
   const beforeNewConnection = result.requests.filter(item => item.path.endsWith('/llm/discover')).length;
   await form.getByLabel('API 地址').first().fill(fixture.endpoint);
+  await form.getByRole('button', { name: '设置 API 密钥', exact: true }).click();
+  await quick.getByText('无认证', { exact: true }).click();
+  await panel.getByLabel('连接编辑结束后自动获取一次模型', { exact: true }).check();
   const [newConnection] = await Promise.all([
     page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/llm/discover')),
-    panel.getByRole('button', { name: '刷新观察版本', exact: true }).focus(),
+    panel.getByRole('button', { name: '获取上游模型', exact: true }).click(),
   ]);
   assert.equal(newConnection.status(), 200, await newConnection.text());
   const connectionInput = result.requests.filter(item => item.path.endsWith('/llm/discover')).at(-1).body;
   assert.deepEqual(JSON.parse(connectionInput.jsonc).settings.workspace.llm.providers[newProviderId].models, {});
+  assert.equal(localModelOptions(JSON.parse(connectionInput.jsonc), newProviderId).api_key, '', '无认证必须由用户显式选择');
   assert.equal(result.requests.filter(item => item.path.endsWith('/llm/discover')).length, beforeNewConnection + 1);
   result.phase = 'credential-reference-in-original-draft';
   await form.getByRole('button', { name: '设置 API 密钥', exact: true }).click();
@@ -257,6 +271,7 @@ try {
   await expect(panel.getByText('完整目录：2 个模型', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: '选择全部匹配项', exact: true }).click();
   await panel.getByRole('button', { name: '添加选中的模型', exact: true }).click();
+  await form.locator('.configuration-model-list').getByRole('button', { name: 'upstream-main', exact: true }).click();
   await openDetails(panel.locator('.configuration-probe-more'));
   await panel.getByRole('button', { name: '测试两种模式', exact: true }).click();
   const newStream = panel.locator('.configuration-probe-result').filter({ hasText: '测试流式' });
@@ -416,7 +431,9 @@ try {
   await page.screenshot({ path: path.join(fixture.artifacts, 'model-catalog-inline.png') });
   await form.getByRole('button', { name: '添加模型', exact: true }).click();
   await expect(form.getByRole('button', { name: 'gpt-6-luna', exact: true })).toBeVisible();
+  await form.locator('.configuration-model-list').getByRole('button', { name: 'gpt-6-luna', exact: true }).click();
   await form.locator('[data-model-id="gpt-6-luna"] > details > summary').click();
+  await openDetails(form.locator('[data-model-id="gpt-6-luna"] .configuration-node-reference'));
   const catalogPreflight = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/preflight'));
   await inspection.getByRole('button', { name: '预检并查看最终选项', exact: true }).click();
   const catalogReceipt = await catalogPreflight;

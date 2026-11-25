@@ -17,7 +17,6 @@ from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.enums import CanonicalItemStatus, PayloadKind, SemanticKind
 from app.domain.itemized.errors import FormatDispatchError
-from app.domain.itemized.hashing import payload_content_length
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
 )
@@ -47,7 +46,6 @@ from app.services.infrastructure.rollout_context.storage.schema import (
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
-    canonical_json_text,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history.errors import InvalidTurnCursorError
@@ -76,17 +74,17 @@ def test_cold_execution_selector_is_exact_and_has_frozen_bounded_continuation(hi
     assert page.items == []
     assert len(page.internal_executions) == 1
     assert page.internal_executions[0].execution_id == "report-owner"
-    assert len(page.internal_executions[0].display_parts) == 256
+    assert len(page.internal_executions[0].display_items) == 256
     assert page.has_before and page.before_cursor is not None
     following = environment.history_reader.load(
         environment.session_id, environment.thread_id,
         TurnHistoryLoadRequest(direction="before", execution_id="report-owner", cursor=page.before_cursor),
     )
     assert following.items == []
-    assert len(following.internal_executions[0].display_parts) == 4
+    assert len(following.internal_executions[0].display_items) == 4
     assert not following.has_before
-    ids = {part.item_id for part in page.internal_executions[0].display_parts}
-    assert ids.isdisjoint(part.item_id for part in following.internal_executions[0].display_parts)
+    ids = {part.item_id for part in page.internal_executions[0].display_items}
+    assert ids.isdisjoint(part.item_id for part in following.internal_executions[0].display_items)
     with pytest.raises(InvalidTurnCursorError, match="execution_id"):
         environment.history_reader.load(
             environment.session_id, environment.thread_id,
@@ -319,39 +317,11 @@ def _seed_rollout(
             ),
         )
         item_offset = 0
-        for (item, execution_id), line in zip(items, item_lines, strict=True):
+        for (item, _execution_id), line in zip(items, item_lines, strict=True):
             item.validate()
-            source_revision = item.source_manifest.source_revision if item.source_manifest is not None else None
-            connection.execute(
-                "INSERT INTO item_catalog "
-                "(item_sequence, item_id, semantic_kind, payload_kind, status, turn_id, "
-                "execution_id, turn_scope, message_group_id, wire_role, producer_ref_json, "
-                "payload_length, source_revision, content_hash, jsonl_offset, jsonl_length, "
-                "commit_id, operation_anchor_capable, searchable, created_at, projection_manifest_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)",
-                (
-                    item.item_sequence,
-                    item.item_id,
-                    item.semantic_kind,
-                    item.payload_kind,
-                    item.status,
-                    item.turn_id,
-                    execution_id,
-                    item.turn_scope,
-                    item.wire_role,
-                    canonical_json_text(item.producer_ref),
-                    payload_content_length(item.payload_kind, item.payload),
-                    source_revision or f"canonical:{item.item_id}:{item.content_hash}",
-                    item.content_hash,
-                    item_offset,
-                    len(line),
-                    int(
-                        item.semantic_kind
-                        in {SemanticKind.USER_INPUT, SemanticKind.ASSISTANT_OUTPUT}
-                    ),
-                    item.created_at,
-                    canonical_json_text(item.projection_manifest()),
-                ),
+            storage.storage._insert_canonical_item(
+                connection, item, commit_id=1, jsonl_offset=item_offset,
+                jsonl_bytes=line, commit_recorded_at=_UPDATED_AT,
             )
             item_offset += len(line)
 
@@ -479,6 +449,19 @@ def _seed_rollout(
             "VALUES (?, ?, ?, 1, ?, 1, ?)",
             [(*row, row[2]) for row in memberships],
         )
+        # 仍手工控制稀疏 view 坐标；正文与消息索引复用真实 writer，避免 fixture 漏建派生数据。
+        for item, execution_id in items:
+            storage.storage._bind_canonical_item_execution(
+                connection, item_id=item.item_id, execution_id=execution_id,
+            )
+            storage.checkpoints._materialize_canonical_message_projection(
+                connection, item, session_id=session_id, thread_id=thread_id,
+                checkpoint_ns="", commit_id=1, message_sequence=item.item_sequence, timestamp=_CREATED_AT,
+            )
+        connection.execute(
+            "UPDATE database_meta SET last_message_sequence=? WHERE singleton_id=1", (len(items),),
+        )
+        connection.execute("UPDATE context_views SET head_message_sequence=? WHERE view_id=?", (len(items), view_id))
         connection.commit()
 
 
@@ -586,7 +569,7 @@ def _internal_display_identities(page: TurnHistoryPageDTO) -> list[tuple[int, in
     return [
         (part.item_sequence, part.logical_item_ordinal)
         for execution in executions
-        for part in execution.display_parts
+        for part in execution.display_items
     ]
 
 
@@ -732,7 +715,7 @@ def test_internal_history_accepts_zero_membership_ordinal(
     )
 
     assert "logical_item_ordinal" not in page.internal_executions[0].model_dump()
-    assert page.internal_executions[0].display_parts[0].logical_item_ordinal == 0
+    assert page.internal_executions[0].display_items[0].logical_item_ordinal == 0
     assert page.before_cursor is None
 
 
@@ -751,8 +734,8 @@ def test_single_internal_execution_response_history_keeps_256_record_pages(
     )
     assert len(tail.internal_executions) == 1
     assert tail.internal_executions[0].execution_id == execution_id
-    assert tail.internal_executions[0].display_parts == []
-    assert len(tail.internal_executions[0].response_parts) == 256
+    assert tail.internal_executions[0].display_items == []
+    assert len(tail.internal_executions[0].response_items) == 256
     assert tail.before_cursor is not None
     older = _load_history(
         environment,
@@ -763,13 +746,13 @@ def test_single_internal_execution_response_history_keeps_256_record_pages(
         ),
     )
     assert len(older.internal_executions) == 1
-    assert len(older.internal_executions[0].display_parts) == 1
-    assert len(older.internal_executions[0].response_parts) == 44
+    assert len(older.internal_executions[0].display_items) == 1
+    assert len(older.internal_executions[0].response_items) == 44
     sequences = sorted(
         part.source.item_sequence
         for page in (tail, older)
         for entry in page.internal_executions
-        for part in entry.response_parts
+        for part in entry.response_items
     )
     assert sequences == list(range(2, 302))
     assert older.has_more is False
@@ -1121,21 +1104,44 @@ def test_internal_history_rejects_snapshot_from_another_owner(
             )
 
 
-def test_v1_rollout_is_rejected_by_the_real_context_reader(
+@pytest.mark.parametrize("format_version", [None, 1, 2, 4], ids=["missing", "v1", "v2", "unknown"])
+def test_old_or_unknown_rollout_is_rejected_by_the_real_context_reader(
     history_environment: Callable[..., HistoryEnvironment],
+    format_version: int | None,
 ) -> None:
     environment = history_environment()
     with environment.storage.storage._connect(
         environment.thread_id,
         session_id=environment.session_id,
     ) as connection:
-        connection.execute(
-            "UPDATE database_meta SET rollout_format_version = 1 WHERE singleton_id = 1"
-        )
+        if format_version is None:
+            connection.execute("ALTER TABLE database_meta DROP COLUMN rollout_format_version")
+        else:
+            connection.execute(
+                "UPDATE database_meta SET rollout_format_version = ? WHERE singleton_id = 1",
+                (format_version,),
+            )
         connection.commit()
 
-    with pytest.raises(FormatDispatchError, match="v1_migration_required"):
-        environment.open_snapshot()
+    root = environment.storage.storage.root(
+        environment.session_id, thread_id=environment.thread_id,
+    )
+    jsonl_before = (root / "rollout.jsonl").read_bytes()
+    with sqlite3.connect(root / "index.sqlite") as connection:
+        database_before = tuple(connection.iterdump())
+
+    # 查询与显式初始化共用格式闸门；拒绝后不安装旧转换或改写既有数据。
+    for operation in (
+        environment.open_snapshot,
+        lambda: environment.storage.storage.initialize(
+            environment.session_id, thread_id=environment.thread_id,
+        ),
+    ):
+        with pytest.raises(FormatDispatchError, match="unsupported_(legacy_rollout|rollout_format_version)"):
+            operation()
+        assert (root / "rollout.jsonl").read_bytes() == jsonl_before
+        with sqlite3.connect(root / "index.sqlite") as connection:
+            assert tuple(connection.iterdump()) == database_before
 
 
 @pytest.mark.parametrize(

@@ -8,105 +8,131 @@
 
 ### Requirement: Provider 和 Model 必须以稳定 ID 为对象键
 
-模型配置 SHALL 使用 `llm.providers.<provider_id>.models.<model_id>` 对象结构，对象键为唯一的不可变身份，不再在值中重复维护 `id`。显示名称、Model 稳定 ID 与实际服务端模型名称 SHALL 分离；显示名修改不改变引用，同一服务端模型可以对应不同稳定 Model ID。数组重排、显示顺序、endpoint 或名称 MUST NOT 被用来推断身份。
+Workspace 业务命名空间的模型目录 SHALL 使用 `llm.providers.<provider_id>.models.<model_id>` 对象结构；对象键为唯一不可变身份，不在值中重复维护 id。显示名、Model 稳定 ID 和服务端模型名称 SHALL 分离，同一服务端名称可有不同稳定 Model ID。Provider 和 Model SHALL 各用 config_ref 选择一个配置节点，不能同时保存 defaults／overrides 作为第二套选项。数组顺序、endpoint 或显示名 MUST NOT 推导身份。
 
 #### Scenario: 两个服务包含相同名称的模型
-- **WHEN** 两个 Provider 都配置 Model ID 为 general 且显示名称相同的模型
-- **THEN** 两者以 Provider＋Model 的组合准确区分，修改一个不会改写另一个，模型选择展示必要的所属服务信息
+- **WHEN** 两个 Provider 都有 general 模型且显示名相同
+- **THEN** 使用完整 Provider＋Model 区分，修改一个不改写另一个，选择器显示必要归属信息
 
 #### Scenario: 修改别名和复制模型
-- **WHEN** 用户修改显示名称，或复制一个模型配置
-- **THEN** 重命名保留原身份与引用；副本取得不同稳定 ID，后续配置与选择独立
+- **WHEN** 用户改显示名或复制模型
+- **THEN** 重命名保持身份；副本取得不同稳定键和明确的选项节点，继承可共享但后续本地覆盖独立，不借用原对象的秘密占位
 
-### Requirement: 配置来源和模型默认必须按两种继承关系解析
+### Requirement: 配置来源和模型选项必须使用统一单父继承
 
-系统 SHALL 先按现有 Workspace 配置来源优先级合并对象，再将选定 Provider 的 `defaults` 与 Model 的 `overrides` 合并为该模型选项。对象默认递归合并，标量及数组整体覆盖；`api_mode.supports_reasoning` 作为完整协议线格式声明，在两个合并阶段均以显式块整体替换，缺键才继承，不能混合不同协议的字段。局部来源允许仅提供一个字段，但修改线格式块须提供完整该块，合并后须满足实际协议要求。系统 SHALL 提供最终值、来源层和 Provider／Model 来源，不能由客户端另算权威有效配置。
+系统 SHALL 以同一节点规则解释文件、Provider 和 Model。Provider／Model 目录的 config_ref 只选择节点，选中节点的 extends 才决定唯一父。默认 Provider 继承本次 Workspace 节点、Model 继承对应 Provider，允许用户明确改变合法父链；MUST NOT 先按固定文件层 merge，再隐式合并 defaults 和 overrides。内嵌节点本体不跨来源自动拼接；需要覆盖既有节点时，新节点明确继承原节点并选择新节点。
+
+对象递归合并、标量／数组替换、原子 reasoning 线格式整块替换 SHALL 使用统一 schema 语义。最终选项 SHALL 提供有效值、完整父链、定义来源和原文位置；最终 model_options 按实际协议完整校验，本地片段可省略父已定义字段。消费者和客户端不能另算权威值。
 
 #### Scenario: 工作区只修改一个模型参数
-- **WHEN** 用户在 workspace 来源只覆盖一个 Provider 下一个 Model 的请求参数
-- **THEN** 下层其他 Provider、其他 Model 及该模型未覆盖字段保持，诊断准确标识本层字段与继承字段，不要求复制整个模型列表
+- **WHEN** 用户让本工作区该 Model 的 config_ref 指向一个继承原模型节点的新节点，且仅写一个请求参数
+- **THEN** 该参数在当前工作区覆盖，其他字段、Provider、Model 与其他工作区不变，inspection 显示真实新父链和定义位置
 
 #### Scenario: 高层服务默认和低层模型覆盖同时存在
-- **WHEN** workspace 修改 Provider 默认参数，而 user 来源已为其中一个 Model 显式覆盖同一参数
-- **THEN** 先完成来源合并后，该 Model 的明确覆盖仍优先于 Provider 默认；界面展示这个覆盖的实际 user 来源，不错误宣称 workspace 默认压过全部模型覆盖
+- **WHEN** 工作区将 Provider 选择到新的默认节点，而某个 Model 的节点仍明确覆盖同一参数并通过 context:provider 继承该 Provider
+- **THEN** Model 本地参数优先是实际父链结果，显示其原来源；不通过两次隐藏合并计算，不把 Provider 更改说成压过所有 Model 定义
 
 #### Scenario: 来源覆盖片段不能独立满足完整模型 schema
-- **WHEN** 合法覆盖片段只写一个参数，而下层提供其连接与模型必需信息
-- **THEN** 按合并后的完整模型校验；若最终确实缺少信息则定位具体 Provider／Model／字段，不伪造默认值
+- **WHEN** 子节点只写一个合法参数，父链提供其余连接和模型选项
+- **THEN** 校验最终 model_options；最终缺必需信息才定位 Provider／Model／来源字段，不伪造默认值
 
 #### Scenario: 模型覆盖服务的协议及线格式
-- **WHEN** Provider 默认使用 Responses 并声明 reasoning_items，一个 Model 明确改用 Anthropic 并提供完整 thinking_blocks 线格式块及合法能力声明
-- **THEN** 该 Model 的有效线格式仅采用其完整块，不混入 reasoning_items；连接、streaming 等未覆盖通用字段继续继承，其他 Model 保持 Provider 默认
+- **WHEN** Model 从 Responses 的父节点继承，明确改用 Anthropic 并提供完整合法 thinking_blocks 块及对应能力声明
+- **THEN** Model 只使用目标线格式，不残留 reasoning_items；未覆盖通用字段继承，其他模型不变
 
 #### Scenario: 高层来源切换已有模型的协议
-- **WHEN** user 来源已为 Model 声明 Responses 线格式，workspace 来源将该 Model 改用 Anthropic 并提供完整目标线格式块
-- **THEN** 来源合并先整体替换该块，之后再完成模型继承；未知或错误协议字段仍须拒绝，不靠删掉未知字段或跳过校验通过
+- **WHEN** 工作区新节点继承 user 的 Responses 模型节点，并改用 Anthropic、明确给出完整目标线格式
+- **THEN** 原子块在唯一节点链上替换，非法协议字段仍拒绝，不删未知字段或跳过校验
 
 ### Requirement: 恢复继承必须保留显式覆盖意图
 
-恢复继承 SHALL 只移除选定来源的选定字段，原子线格式声明须移除整个本层块，结果由下层 Model 覆盖或 Provider 默认决定；MUST NOT 将有效值复制回该层。显式设值即使等于当前继承值也 SHALL 保留覆盖意图。`supports_reasoning` 的显式空对象 SHALL 作为完整空块替换下层，仍须与能力声明一致，不等于恢复继承；其他对象的空对象不清空下层。移除本层 Provider／Model 子树 SHALL 说明下层同身份定义可能重新可见，不引入隐藏删除标记或级联修改其他来源。
+恢复继承 SHALL 只移除选定节点的本地字段，原子块移除整个本地块，结果由实际唯一父链决定；MUST NOT 复制有效值回节点。显式值即使等于父值也保留。supports_reasoning 的显式空对象 SHALL 作为完整块替换，仍校验能力一致性，不等于恢复继承；普通空对象不清空父对象。移除本地 Provider／Model 目录定义可能露出祖先的同身份定义，须明确说明，不加隐藏 tombstone 或改写其他来源。
 
 #### Scenario: 默认值变化前保存相同的显式值
-- **WHEN** 模型显式参数与当前 Provider 默认相等，随后 Provider 默认改变
-- **THEN** 模型仍保留显式参数；只有用户执行恢复继承后才跟随默认值变化
+- **WHEN** 模型本节点参数等于父值，随后父值改变
+- **THEN** 本地参数保持，只有删除该定义恢复继承后才采用父值
 
 #### Scenario: 删除本层覆盖后露出下层模型
-- **WHEN** 用户移除 workspace 中某个 Model 的全部本层覆盖，而 user 来源仍定义该模型
-- **THEN** 模型继续可用且展示 user 来源，不显示为已从所有配置中删除
+- **WHEN** workspace 移除 Model 的本地目录定义，祖先仍有相同稳定 Model ID
+- **THEN** 模型继续存在并显示祖先定义及其 config_ref，不宣称已从所有来源删除
 
 ### Requirement: 请求参数必须具有一致优先级及明确省略语义
 
-请求参数 SHALL 从低到高采用 Provider 默认、Model 覆盖、Agent 显式参数、本次调用已支持的显式参数。请求选项统一使用 `request_options.parameters`，MUST NOT 同时保留原 `request_options.overrides` 的另一套优先级。参数 schema 支持省略的字段 SHALL 区分缺键继承、显式值、null 不发送；零和 false 不能被当作未设置。更高优先级明确设值可以覆盖较低层的省略选择。
+现有 Agent 与调用接口支持的显式参数 SHALL 作为最终 Model 节点之后的临时单父子节点，采用同一合并规则；常用链为 Provider、Model、Agent、本次调用。临时节点不持久化新配置，不能借此新增改模型身份、认证、网络、消息、工具或业务期限的权限。用户明确自定义的持久父链按实际链解释，不在链外再套 Provider 默认。
 
-未配置采样、reasoning 或输出限制时 SHALL 使用模型服务默认，不自动填值或从上下文容量推导输出上限。容量与能力声明不得被误当作请求参数。协议确实必需的参数沿已有已验证合同处理。高级参数 SHALL 保留实际协议边界，不覆盖模型身份、认证、消息／工具及既有业务期限；自定义正文中的 null 依其协议解释，不递归删掉所有 null。
+请求选项统一使用 request_options.parameters，不保留 request_options.overrides 的平行优先级。schema 允许省略的字段 SHALL 区分缺键继承、显式值和 null 不发送；false／0 为明确值。null 标记保留至所有子节点合并完毕才在 SDK 发送前移除，更高显式值可以覆盖省略选择；未知扩展和 extra_body 的合法 null 依协议保留。
 
-Agent 参数别名 SHALL 沿当前 adapter 映射后参加统一优先级合并，同一优先级重复声明同一协议字段必须拒绝。null 省略标记 SHALL 保留到所有优先级合并完成，再于 SDK 调用前移除，不能让已省略的低层值恢复。`extra_body` 展开字段 MUST NOT 与当前 adapter 的正式参数或受保护字段重复，即使值相同；冲突在原预检／调用选项边界定位并拒绝，不依赖 SDK 最后覆盖。不新增全厂商参数注册表，未知扩展中合法 null 保持原协议语义。
+未配置采样、reasoning 和输出限制 SHALL 采用上游默认，不能从模型容量推导 max_tokens／max_output_tokens。能力与输入容量不是请求参数。已有协议必需参数合同保持。Agent 别名在所属输入边界规范化后参与合并，同节点重复协议字段拒绝。extra_body 展开字段不得与正式参数或受保护字段重复，即使值相同也在原预检／调用边界拒绝；不靠 SDK 最后写入顺序，不增加全厂商参数注册表。
+
+请求参数别名 SHALL 先转换为协议无关的内部逻辑键，最终合并后才按最终叶子协议映射，不按每层声明协议分别生成线上字段。同节点重复逻辑键必须拒绝，来源保留原文键。参数映射本身按名称合并，各参数的对象值（包括 extra_body）SHALL 在 schema 声明整体替换；所有持久与临时节点一致，不保留 Provider／Model 递归而 Agent／调用浅覆盖的两套算法。原持久配置对象参数拼接行为的变化 SHALL 在转换预检明确展示。
+
 
 #### Scenario: 多层参数最终进入模型服务
-- **WHEN** Provider、Model、Agent 与现有调用接口对同一支持的参数分别设值
-- **THEN** 实际发送请求包含最高优先级的显式值，所有支持的协议遵守同一规则，界面有效值与发出的请求一致
+- **WHEN** 默认父链中 Provider、Model、Agent 与现有调用接口对同一参数设值
+- **THEN** 实际上游请求使用最终临时节点的明确值，所有现有协议一致，inspection 与实际发送相符
 
 #### Scenario: 继承省略与显式零
-- **WHEN** Model 将一个可省略参数设为 null，或将另一个允许零的参数设为0
-- **THEN** 前者在没有更高显式值时不发送，后者真实发送0；恢复继承和选择不发送是不同操作
+- **WHEN** Model 把可省略参数设为 null，把允许零的另一参数设为0
+- **THEN** 前者在无后续明确值时不发送，后者发送0；恢复继承和不发送为不同操作
 
 #### Scenario: 最小配置不增加额外请求参数
-- **WHEN** 用户只提供协议必需配置，模型还声明了输入容量
-- **THEN** 实际请求不因此出现 temperature、top_p、reasoning 或输出上限，容量仍只作模型元数据
+- **WHEN** 用户只配置必需字段，模型另声明输入容量
+- **THEN** 实际请求不因此带采样、reasoning 或输出限制，输入容量仅作为元数据
 
 #### Scenario: 高级正文不能绕过 Agent 参数
-- **WHEN** Provider 的 extra_body 声明 temperature，而当前 adapter 已提供该参数的正式入口，Agent 还显式设置 temperature
-- **THEN** 网络前拒绝 extra_body 重复字段并定位修正位置，不因 SDK 展开顺序发送 Provider 的值，也不静默删除用户字段
+- **WHEN** extra_body 声明正式入口已有的 temperature，Agent 又明确设置 temperature
+- **THEN** 网络请求前定位冲突并拒绝，不按 SDK 展开顺序决定，也不静默删用户字段
 
 #### Scenario: 省略标记在最终合并后处理
-- **WHEN** Provider 有一个请求参数，Model 将它设为 null，Agent 与调用均未显式覆盖，另一个未知扩展含合法 JSON null
-- **THEN** 上游不收到被省略参数，扩展中的 null 保留；Agent 后来明确设值时才恢复发送，不复活 Provider 低层值
+- **WHEN** 父有参数、Model 设 null，Agent／调用未覆盖，另一合法扩展含 JSON null
+- **THEN** 被省略参数不发，扩展 null 保留；后续明确设置该参数才恢复发送
+
+
+#### Scenario: 改协议同时覆盖输出上限别名
+- **WHEN** 父 Responses 节点写 max_output_tokens，子节点改为 Chat 并写 max_tokens
+- **THEN** 最终请求只有目标协议接受的一个输出上限，采用子值；同节点同时写两种别名拒绝
+
+#### Scenario: 对象请求参数只写部分字段
+- **WHEN** 父 extra_body 为两个字段，子任意层明确提供仅含一个字段的 extra_body
+- **THEN** 有效 extra_body 仅保留子对象，不补父字段；子未定义 extra_body 时才继承，inspection 与线上正文一致
 
 ### Requirement: 模型能力与协议覆盖必须明确且可验证
 
-Provider SHALL 支持协议与连接默认，Model SHALL 能显式覆盖现有协议允许的选项。能力、reasoning 线格式与请求参数 SHALL 分别展示；控件和枚举只开放真实支持项。未知能力不得凭名称或同服务其他模型猜测，冲突协议／能力组合须明确拒绝。系统 SHALL 展示按实际请求规则生成的脱敏目录／调用地址与协议，避免用户误解是否需要 `/v1`；客户端不能另行拼出不同地址。
+Provider SHALL 支持协议与连接默认，Model 可通过所选节点明确覆盖现有协议支持选项。能力、reasoning 线格式与请求参数分别展示，枚举只开放真实项；未知能力不靠名称或其他模型猜测，冲突组合拒绝。系统 SHALL 展示按真实规则生成的脱敏目录／请求地址及协议，客户端不自行拼接不同地址。
 
-协议切换 SHALL 在同一来源草稿中明确给出目标协议的完整 `supports_reasoning` 块，不自动转换线格式或改写能力声明；继承结果与目标协议冲突时定位所需修正。该原子块规则 SHALL 由原配置 owner 在两种继承中复用，其他字段保持原合并合同，不新增通用策略注册框架。
+协议切换 SHALL 在同一来源草稿中明确提供完整 supports_reasoning 块，不自动转换或改写能力。原子替换由统一 schema 合并语义承担，原 owner 进行业务一致性校验，不保留按来源阶段和 Provider 阶段各一份实现，也不增加通用厂商策略框架。
 
-`api_mode.streaming` SHALL 是可继承、可按模型覆盖的布尔传输选项，最终缺省为 true；false 必须使实际上游请求非流式，而非服务端收集流式后伪装为非流式。正式执行和测试 SHALL 使用同一解析规则，保持非流式结果的消息、reasoning、工具调用和 usage 语义；页面事件流不因上游非流式而关闭。普通请求参数 MUST NOT 再提供一套可覆盖此选择的 `stream` 设置，失败不自动切模式或换协议。
+api_mode.streaming SHALL 是节点链上可继承布尔项，内置 Workspace 根明确声明 true 以保留原默认及可见来源。false 必须让上游真实非流式，不能收集流式伪装非流式。测试与正式请求共用解析，非流式的消息、reasoning、工具调用和 usage 语义保持，页面事件流不受影响。普通请求参数不得另提供覆盖该值的 stream，失败不自动切模式或协议。
 
-正式 Job SHALL 将同一冻结传输选择经原 Saver profile／wire 参数传入统一 finalizer、封存 request_hash preimage 及实际 adapter 发送，完整正文中的 stream／实际 stream_options 保持一致。MUST NOT 为接入非流式而剔除实际正文字段、绕过 sealed binding 或放宽 source-mismatch 校验；必要投影语义变更沿原 projector 更新版本，历史封存不重写。
+正式 Job SHALL 将同一冻结传输选择经原 Saver profile／wire 参数、统一 finalizer、request_hash preimage 和实际 adapter 发送，完整正文的 stream／stream_options 一致。不得剔除实际正文字段、绕过 sealed binding 或放宽 source-mismatch；必要投影变化沿原 projector 升版，不重写历史封存。
 
 #### Scenario: 同服务中的模型采用不同协议
-- **WHEN** 一个 Model 继承服务协议，另一个明确覆盖为另一已支持协议并给出合法模型选项
-- **THEN** 两者分别向其明确目标发送对应协议请求，认证与参数保持各自解析结果，不以 Provider 厂商名称取代协议选择
+- **WHEN** 一个 Model 继承服务协议，另一个节点明确选择不同合法协议及完整选项
+- **THEN** 两者各发其明确协议请求，认证、参数和代理按相应链，不以厂商名替代协议
 
 #### Scenario: 模型没有支持某个推理强度
-- **WHEN** 用户查看模型的快捷配置或提交不支持的枚举值
-- **THEN** 菜单只显示真实允许项及说明；非法提交在原预检／执行校验边界明确拒绝，不静默换成其他值
+- **WHEN** 用户查看菜单或提交不支持的枚举
+- **THEN** 控件只展示真实项，非法提交在原边界定位并拒绝，不换成另一个值
 
 #### Scenario: 同服务有仅支持非流式的模型
-- **WHEN** Provider 默认流式，而一个 Model 明确覆盖 `api_mode.streaming=false` 并用于正式会话
-- **THEN** 每种现有协议的正式 Job 均以真实封存准入发送非流式请求，sealed preimage 与实际正文一致，完整内容、reasoning、工具调用和 usage 沿原会话事件链呈现；其他模型继续继承流式，不借测试专用豁免或未接入的 Agent 开关假报支持
+- **WHEN** Provider 默认流式，Model 节点明确 streaming=false 并用于正式会话
+- **THEN** 现有各协议真实发送并封存非流式正文，reasoning、工具和 usage 沿原事件链呈现；其他模型保持流式，不靠测试豁免证明
 
 #### Scenario: 高级参数与传输选择冲突
-- **WHEN** 用户将模型设为非流式，却在高级参数中另写 stream=true
-- **THEN** 原校验边界明确拒绝冲突并定位字段，不让测试与正式请求各取不同优先级
+- **WHEN** 模型为非流式，高级参数另设 stream=true
+- **THEN** 原校验拒绝并定位，不让测试与正式执行采用不同优先级
+
+### Requirement: 共享选项编辑和复制必须保持对象隔离
+
+普通对象表单 SHALL 默认只修改当前 Provider／Model：选中共享或只读祖先节点时，在可写来源的同一草稿创建子节点并修改当前 config_ref，一次原 CAS 提交。只有显式编辑共享定义才改原节点，并显示已知影响方，不扫描全部工作区。复制 SHALL 创建新稳定实体键、复制自有定义并重绑定内部引用；Provider 副本的 context:provider 引用指向副本，外部共享祖先保持明确引用，不克隆全图或复制秘密值。
+
+#### Scenario: 两个模型选用同一 profile
+- **WHEN** 用户在一个模型的普通详情改参数
+- **THEN** 只为当前模型形成局部覆盖，另一个模型保持；明确编辑共享定义才影响两者
+
+#### Scenario: 复制 Provider 后编辑其模型
+- **WHEN** 复制含自有模型节点的 Provider，再修改副本默认或模型局部参数
+- **THEN** 副本内部引用绑定新 Provider，原对象和其定义保持，外部共享祖先仍可识别
 
 ### Requirement: 业务选择必须使用结构化模型引用
 
@@ -146,15 +172,15 @@ Settings SHALL 能管理工作区完整模型目录，Composer 及 Session／执
 
 ### Requirement: 配置保存与执行生效必须保持原快照边界
 
-模型选项变更 SHALL 沿原配置来源、CAS、active／pending 与后续 Job 生效规则。已运行的 Job 和在途请求保持原快照；保存、active 和下一次执行使用分别报告。当前引用检查 SHALL 限于原 owner 的完整候选和当前工作区默认值，共享影响只报告已观察消费者，不以扫描所有工作区／会话／Trace 作为保存条件。
+模型节点、引用和代理变更 SHALL 沿原 source writer、CAS、active／pending 和后续 Job 生效边界。正在运行的 Job／请求保持原快照；保存、active 和后续执行分别报告。完整候选包含选定节点及其父依赖；当前引用检查仍只覆盖原 owner 的候选和当前工作区默认值，共享影响只报告已观察消费者，不扫描全部工作区、历史会话或 Trace 作为保存条件。
 
 #### Scenario: 编辑默认值时已有模型流在运行
-- **WHEN** 用户保存 Provider 默认参数，当前 Thread 的旧 Job 仍在流式输出
-- **THEN** 旧 Job 保持，配置已 active 后后续 Job 使用新值；若候选含需重启字段则如实保持 pending，不将文件保存当作全部生效
+- **WHEN** 用户保存 Provider 选项节点或代理，旧 Job 仍输出
+- **THEN** 旧 Job 保持原绑定，后续合法边界采用已 active 新值；需重启则显示 pending，不把文件保存当全部已生效
 
 #### Scenario: 删除当前 Agent 使用的模型
-- **WHEN** 候选删除仍被 primary、fallback 或当前工作区默认值引用的模型
-- **THEN** 原 owner 拒绝该候选并返回具体引用，旧有效配置保持，不自动选择替代项或全历史扫描
+- **WHEN** 候选删除被 primary、fallback 或当前工作区默认值引用的模型，或使其选项节点无法解析
+- **THEN** 原 owner 返回具体引用冲突并拒绝，旧有效配置保持，不自动选择替代或全历史扫描
 
 ### Requirement: 模型管理读取必须满足完整交互预算
 

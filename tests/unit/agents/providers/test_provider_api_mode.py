@@ -117,6 +117,9 @@ def test_input_context_capacity_sets_profile_without_changing_wire(direct_proxy_
 
     assert model.profile["max_input_tokens"] == 400000
     assert model.profile["context_window"] == 128000
+    assert model.profile["image_inputs"] is provider["api_mode"]["model_info"].get("supports_vision", False)
+    assert model.profile["audio_inputs"] is False
+    assert model.profile["video_inputs"] is False
     if protocol == "responses":
         baseline_body = baseline._responses_payload([HumanMessage("hello")], None, {})
         body = model._responses_payload([HumanMessage("hello")], None, {})

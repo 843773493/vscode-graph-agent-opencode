@@ -8,7 +8,10 @@ from io import StringIO
 from langchain_core.messages import AIMessage
 
 from app.abstractions.turn_terminal_status import ToolResultCompletion
-from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ToolExecutionEvidence,
+)
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.runtime import ModelCallRecord
@@ -27,8 +30,10 @@ from app.services.orchestration.message_stream.finalization import (
     MessageStreamFinalizationMixin,
 )
 from app.services.orchestration.message_stream.tool_calls import (
+    ActiveToolExecution,
     MessageStreamToolCallsMixin,
     PendingToolCompletion,
+    ToolCallbackBinding,
 )
 
 NormalizedBlockObserver = Callable[[str, Mapping[str, object]], Awaitable[None]]
@@ -74,7 +79,6 @@ class MessageStreamRuntime(
         self._sealed_canonical_model_call_ids: set[str] = set()
         self._model_execution_ids: dict[str, str] = {}
         self._pending_model_starts: dict[str, asyncio.Future[None]] = {}
-        self._summary_candidate_model_call_ids: set[str] = set()
         self._completed_model_call_ids: set[str] = set()
         self._pending_canonical_blocks: list[dict[str, object]] = []
         self.current_model_call_id: str | None = None
@@ -103,10 +107,10 @@ class MessageStreamRuntime(
         self._completed_tool_result_call_ids: set[str] = set()
         self._completed_tool_result_execution_by_call_id: dict[str, str] = {}
         self._completed_tool_execution_ids: set[str] = set()
-        self._active_tool_executions: dict[str, tuple[str, str]] = {}
+        self._active_tool_executions: dict[str, ActiveToolExecution] = {}
         self._pending_tool_completions: dict[str, PendingToolCompletion] = {}
         self._pending_tool_starts: dict[str, asyncio.Future[tuple[str, str]]] = {}
-        self._tool_call_bindings_by_callback_run_id: dict[str, asyncio.Future[str]] = {}
+        self._tool_call_bindings_by_callback_run_id: dict[str, asyncio.Future[ToolCallbackBinding]] = {}
         self._resuming_tool_executions: dict[str, str] = {}
         self._stream_state_lock = asyncio.Lock()
         self._tool_completion_lock = asyncio.Lock()
@@ -118,13 +122,6 @@ class MessageStreamRuntime(
     ) -> None:
         if self._normalized_block_observer is not None:
             await self._normalized_block_observer(event_type, payload)
-
-    def register_summary_candidate(self, model_call_id: str) -> None:
-        """callback 在首个 delta 前登记；仍由 start_model 提交真实 ModelCall。"""
-        self._summary_candidate_model_call_ids.add(model_call_id)
-
-    def is_summary_candidate(self, model_call_id: str | None) -> bool:
-        return model_call_id in self._summary_candidate_model_call_ids
 
     async def restore_pending_model(self, assistant: AIMessage, model_call: ModelCallRecord) -> None:
         """由原 checkpoint carrier 与原 stream 恢复登记镜像，不补模型事件或 item。"""
@@ -174,7 +171,11 @@ class MessageStreamRuntime(
                         raise RuntimeError("同一 pending tool call 存在多个原 attempt")
                     self._resuming_tool_executions[call_id] = execution_id
                     if execution["status"] == "running":
-                        self._active_tool_executions[execution_id] = (call_id, execution["tool_name"])
+                        self._active_tool_executions[execution_id] = ActiveToolExecution(
+                            call_id, execution["tool_name"],
+                            ToolExecutionEvidence.from_started_snapshot(snapshot, execution)
+                            if execution.get("started_at") is not None else None,
+                        )
                     else:
                         self._completed_tool_execution_ids.add(execution_id)
                         self._completed_tool_result_call_ids.add(call_id)

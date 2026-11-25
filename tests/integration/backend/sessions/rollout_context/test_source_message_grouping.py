@@ -85,8 +85,9 @@ async def test_product_tools_freeze_mixed_tracking_and_fork(
     grouping = "aggregate"
     path = case.workspace / ".boxteam/workspace.jsonc"
     config = json.loads(path.read_text())
-    config["runtime"]["agent"]["run"]["mode"] = "single_agent"
-    config.setdefault("context", {})["source_messages"] = {"grouping": grouping}
+    workspace_settings = config["settings"]["workspace"]
+    workspace_settings["runtime"]["agent"]["run"]["mode"] = "single_agent"
+    workspace_settings.setdefault("context", {})["source_messages"] = {"grouping": grouping}
     path.write_text(json.dumps(config, ensure_ascii=False))
     assert await case.container.config_service.reload(idempotency_key="grouping-initial")
     session = await create_session(case.client, "混合来源分组")
@@ -98,7 +99,7 @@ async def test_product_tools_freeze_mixed_tracking_and_fork(
     previous = None
     for batch, active_grouping in enumerate((grouping, "separate" if grouping == "aggregate" else "aggregate")):
         if batch:
-            config["context"]["source_messages"]["grouping"] = active_grouping
+            workspace_settings["context"]["source_messages"]["grouping"] = active_grouping
             path.write_text(json.dumps(config, ensure_ascii=False))
             assert await case.container.config_service.reload(idempotency_key="grouping-switch")
         names = (f"group-{batch}-tracked", f"group-{batch}-snapshot")

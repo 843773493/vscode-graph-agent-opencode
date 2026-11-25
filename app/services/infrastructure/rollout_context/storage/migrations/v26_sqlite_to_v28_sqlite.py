@@ -25,7 +25,7 @@ def validate_rollout_v26(connection: sqlite3.Connection, jsonl_path: Path, *, se
     if tuple(owner or ()) != (session_id, thread_id, 26):
         raise ValueError("rollout 转换来源必须是原 Thread 的 v26，保留原件")
     RolloutSchemaIntrospectionMixin._validate_schema_state(connection, expected_version=26)
-    RolloutSchemaIntrospectionMixin._validate_v2_commit_offsets(connection, jsonl_path)
+    RolloutSchemaIntrospectionMixin._validate_commit_offsets(connection, jsonl_path)
     if connection.execute("SELECT 1 FROM execution_queue WHERE phase<>'terminal' LIMIT 1").fetchone():
         raise ValueError("rollout v26 执行队列未排空，须由原运行时先结算")
 

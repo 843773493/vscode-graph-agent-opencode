@@ -3,11 +3,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from app.abstractions.execution_queue import ExecutionQueueProtocol
+from app.abstractions.execution_queue import ExecutionQueueLoad, ExecutionQueueProtocol
 from app.abstractions.job_executor import JobInputOwnerProtocol
 from app.schemas.internal_v2.pending_request import (
     DeliveryPolicy,
-    PendingRequestDTO,
     PendingRequestListDTO,
     PendingRequestSummaryListDTO,
 )
@@ -45,8 +44,8 @@ class JobPendingRequestService:
             input_owner=input_owner, execution_queue=execution_queue,
         )
 
-    async def load(self, session_id: str) -> list[PendingRequestDTO]:
-        return await self._execution_queue.load(session_id) if self._execution_queue is not None else []
+    async def load(self, session_id: str) -> ExecutionQueueLoad:
+        return await self.execution_queue.load(session_id)
 
     def mark_loaded(self, session_id: str) -> None:
         self._loaded_sessions.add(session_id)

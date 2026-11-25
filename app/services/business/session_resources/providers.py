@@ -92,15 +92,7 @@ class BackgroundTaskResourceProvider:
     ) -> int:
         if action not in {"stop", "delete"}:
             raise ValueError(f"后台任务不支持清理动作: {action}")
-        handles = await run_sync_shielded(self._task_registry.list_summaries, session_id, include_history=True)
-        affected = [handle for handle in handles
-                    if (thread_id is None or handle.thread_id == thread_id) and handle.status != "deleted"]
-        for handle in affected:
-            result = await (self._task_registry.delete(session_id, handle.task_id) if action == "delete"
-                            else self._task_registry.cancel(session_id, handle.task_id))
-            if result.status == "reconcile_required":
-                raise RuntimeError(f"后台任务外部效果未确认，停止未完成: {session_id}/{handle.task_id}")
-        return len(affected)
+        return await self._task_registry.cleanup_session(session_id, action=action, thread_id=thread_id)
 
     def _to_resource(self, handle: BackgroundTaskHandle | BackgroundTaskSummary) -> SessionResourceDTO:
         actions: list[SessionResourceAction]

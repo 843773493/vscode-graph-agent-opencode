@@ -254,8 +254,7 @@ def test_llm_log_bounds_large_payload_and_keeps_valid_json(
     middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
 
     middleware._save_log(
-        session_id,
-        request,
+        middleware._log_request(request),
         ModelResponse(result=[AIMessage(content="done")]),
         [{"request": "y" * (1024 * 1024)}],
     )

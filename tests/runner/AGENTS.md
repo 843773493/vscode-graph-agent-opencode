@@ -108,9 +108,9 @@ Quick Access 的 `contracts-search-publication`、`unit-search-federation` 和 `
 
 `integration-chatgpt-auth-errors` 经真实认证、模型工厂、Agent服务及ASGI路由验证凭据读取、结构拒绝及迁移/刷新发布失败的错误归属、文件不变与同入口恢复，固定60秒/4GiB；仅替换原生故障和路由依赖装配，不代表真实OAuth网络、Gateway、独立Backend或Web验收。
 
-`integration-compaction-history-errors` 经工具选择、消息 API、真实 Agent 和 model_stream 验证归档缺失与真实日志 ENOTDIR 次错、canonical 工具结果和模型协议配对、后续执行及封存请求 hash。固定120秒/4GiB及集成独占闸门；ASGI 装具不代真实 HTTP、Gateway、进程重启或全部压缩验收。
+`integration-compaction-history-errors` 经工具选择、消息 API、真实 Agent 和 model_stream 建立已采用候选，再验证 canonical 原文页读取与日志 ENOTDIR 次错、工具失败配对、冷事件／原件读取、同 Thread 恢复及封存请求 hash。固定120秒/4GiB及集成独占闸门；ASGI 装具不代 Gateway、独立 Backend、进程重启或全部压缩验收。
 
-`integration-compaction-activity-errors` 经消息入口生成六轮历史、调用正式压缩工具，再用真实归档目录冲突及日志 ENOTDIR 验证原错误、专属活动失败事件、冷事件读取与原会话恢复压缩。固定180秒/4GiB及原集成闸门，复用 model_stream；不代 Gateway、真实 HTTP、进程重启或全部压缩验收。两个归档 suite 各选自身用例，避免重复执行或合并后超出原预算。
+`integration-compaction-activity-errors` 经真实消息及手动候选，在后台冻结 canonical 来源读取处注入原生缺失和日志 ENOTDIR；验证只失败原任务、正常 Turn 不受污染、冷任务／事件读取及同会话显式重评后采用。固定180秒/4GiB及原集成闸门，复用 model_stream；不代 Gateway、独立 Backend、进程重启或全部压缩验收。两个 suite 各选自身用例，保留原注册与资源限制。
 
 存放测试套件注册、能力矩阵和统一命令入口，不包含具体测试实现。
 

@@ -97,7 +97,7 @@ async def test_parameter_reconfiguration_orders_plugin_handoff_before_mcp_promot
     current.raise_for_status()
     source_document = current.json()["data"]
     source = commentjson.loads(source_document["jsonc"])
-    source["plugins"]["configuration"]["values"]["boxteam.mcp-stdio"]["stdio"]["env"]["MCP_TEST_VERSION"] = "new"
+    source["settings"]["workspace"]["plugins"]["configuration"]["values"]["boxteam.mcp-stdio"]["stdio"]["env"]["MCP_TEST_VERSION"] = "new"
     source_response = await case.client.put("/api/v1/config/sources/workspace_root_mutable_override", json={
         "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
         "source_key": "workspace_root_mutable_override", "jsonc": json.dumps(source, ensure_ascii=False),
@@ -174,7 +174,7 @@ async def test_parameter_reconfiguration_orders_plugin_handoff_before_mcp_promot
                            encoding="utf-8")
     source_document = (await case.client.get("/api/v1/config/sources/workspace_root_mutable_override")).json()["data"]
     source = commentjson.loads(source_document["jsonc"])
-    source["plugins"]["configuration"]["values"]["boxteam.mcp-stdio"]["stdio"]["env"]["MCP_TEST_VERSION"] = "fixed"
+    source["settings"]["workspace"]["plugins"]["configuration"]["values"]["boxteam.mcp-stdio"]["stdio"]["env"]["MCP_TEST_VERSION"] = "fixed"
     response = await case.client.put("/api/v1/config/sources/workspace_root_mutable_override", json={
         "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
         "source_key": "workspace_root_mutable_override", "jsonc": json.dumps(source, ensure_ascii=False),
@@ -233,7 +233,7 @@ async def test_close_cancels_mcp_candidate_without_waiting_for_catalog(
     blocked_key = f"mcp-plugin-blocked-catalog-{uuid4().hex}"
     source_document = (await case.client.get(source_path)).raise_for_status().json()["data"]
     source = commentjson.loads(source_document["jsonc"])
-    parameters = source["plugins"]["configuration"]["values"]["boxteam.mcp-stdio"]["stdio"]
+    parameters = source["settings"]["workspace"]["plugins"]["configuration"]["values"]["boxteam.mcp-stdio"]["stdio"]
     parameters["env"] = {"MCP_TEST_VERSION": "blocked", "MCP_TEST_CATALOG_GATE": str(gate)}
     blocked = asyncio.create_task(case.client.put(source_path, json={
         "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
@@ -255,9 +255,9 @@ async def test_close_cancels_mcp_candidate_without_waiting_for_catalog(
         assert before_close["active_digest"] == source_document["active_digest"]
         close_source = commentjson.loads(before_close["jsonc"])
         if unbind:
-            close_source["plugins"]["runtime"]["entries"] = []
+            close_source["settings"]["workspace"]["plugins"]["runtime"]["entries"] = []
         else:
-            close_source["plugins"]["runtime"]["entries"][0]["enabled"] = False
+            close_source["settings"]["workspace"]["plugins"]["runtime"]["entries"][0]["enabled"] = False
         close_request = {
             "gateway_id": case.gateway_id, "workspace_id": case.workspace_id,
             "source_key": "workspace_root_mutable_override", "jsonc": json.dumps(close_source),
@@ -313,8 +313,8 @@ async def test_close_cancels_mcp_candidate_without_waiting_for_catalog(
         assert len([row for row in phases_after_close if row["phase"] == "start" and row["version"] == "blocked"]) == 1
         # 关闭态修改同一参数仍只保存，不能创建 client 或进程。
         lifecycle_after_close = lifecycle.read_text(encoding="utf-8")
-        close_source["plugins"]["configuration"]["values"]["boxteam.mcp-stdio"]["stdio"]["env"]["MCP_TEST_VERSION"] = "offline"
-        await _publish(case, {"plugins": close_source["plugins"]}, f"mcp-plugin-offline-edit-{uuid4().hex}")
+        close_source["settings"]["workspace"]["plugins"]["configuration"]["values"]["boxteam.mcp-stdio"]["stdio"]["env"]["MCP_TEST_VERSION"] = "offline"
+        await _publish(case, {"plugins": close_source["settings"]["workspace"]["plugins"]}, f"mcp-plugin-offline-edit-{uuid4().hex}")
         assert lifecycle.read_text(encoding="utf-8") == lifecycle_after_close
         if unbind:
             status = (await case.client.post("/api/gateway/service-plugins/status", json={

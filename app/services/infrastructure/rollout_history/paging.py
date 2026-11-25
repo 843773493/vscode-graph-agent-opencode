@@ -109,7 +109,7 @@ class HistoryPageReadMixin(HistoryCursorMixin):
                 raise StaleTurnReferenceError(session_id=session_id, turn_ids=[binding.activity_turn_id])
             projections = self._context_reader.read_turn_projections(snapshot, indexed.chain, [binding.activity_turn_id],
                 outline=True, activity_limit=_INTERNAL_HISTORY_PAGE_LIMIT,
-                activity_before=(decoded_cursor.logical_item_ordinal, decoded_cursor.stage) if decoded_cursor else None)
+                activity_before=decoded_cursor.logical_item_ordinal if decoded_cursor else None)
             page = self._indexed_page(session_id, [self._span_from_row(rows[0])], include=include,
                 next_cursor=None, has_more=False, projection_epoch=projection_epoch,
                 snapshot=snapshot, chain=indexed.chain, activity_limit=_INTERNAL_HISTORY_PAGE_LIMIT,
@@ -117,8 +117,8 @@ class HistoryPageReadMixin(HistoryCursorMixin):
             continuation = projections[binding.activity_turn_id].get("activity_continuation")
             if continuation is not None:
                 cursor = self._indexed_before_cursor(session_id, indexed, binding=binding,
-                    stage=continuation[1], turn_ordinal=None,
-                    logical_item_ordinal=continuation[0])
+                    stage=decoded_cursor.stage + 1 if decoded_cursor else 1, turn_ordinal=None,
+                    logical_item_ordinal=continuation)
                 return page.model_copy(update={"before_cursor": cursor, "has_before": True,
                     "next_cursor": cursor, "has_more": True})
             return page

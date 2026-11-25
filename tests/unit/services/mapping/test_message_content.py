@@ -6,6 +6,7 @@ from hashlib import sha256
 import pytest
 from langchain_core.messages import AIMessage
 
+from app.agents.providers.response_normalization import canonicalize_ai_message
 from app.services.mapping.agent_state_messages import message_to_agent_state_record
 from app.services.mapping.itemized.provider_history import public_message_record
 from app.services.mapping.message_content import extract_message_content
@@ -49,6 +50,28 @@ def test_lightweight_display_reads_nested_reasoning_without_protected_body(nativ
             {"type": "reasoning", "reasoning": " 第一段\n第二段 ", "id": "part-reasoning", "index": 0},
             {"type": "text", "text": "回答", "id": "part-answer", "index": 1},
         ],
+    }
+
+
+@pytest.mark.parametrize("with_media", [False, True])
+def test_merged_stream_carriers_do_not_lend_reasoning_coordinates_to_text(with_media):
+    content = [
+        {"type": "reasoning", "reasoning": "先分析", "id": "part_a", "index": 0},
+        {"type": "reasoning", "reasoning": "再确认", "id": "part_b", "index": 1},
+        {"type": "text", "text": "回答", "id": "part_c", "index": 2},
+    ]
+    media = {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}
+    if with_media:
+        content.append(media)
+    message = canonicalize_ai_message(AIMessage(content=content))
+    assert len(message.response_metadata["content_part_refs"]) == 3
+    assert len(message.content) == 2 + with_media
+    assert extract_message_content(message) == {
+        "content": "回答", "reasoning_id": None,
+        "content_blocks": [
+            {"type": "reasoning", "reasoning": "先分析再确认"},
+            {"type": "text", "text": "回答"},
+        ] + ([media] if with_media else []),
     }
 
 

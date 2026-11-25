@@ -59,7 +59,7 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
     gateway_home = context.boxteam_home_for_node(request.node.nodeid)
     workspace_config_path = workspace_root / ".boxteam" / "workspace.jsonc"
     workspace_config = commentjson.loads(workspace_config_path.read_text(encoding="utf-8"))
-    workspace_config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+    workspace_config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
         "url"
     ] = f"http://127.0.0.1:{gateway_port}"
     workspace_config_path.write_text(

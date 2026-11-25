@@ -11,12 +11,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agents import agent_factory
 from app.agents.instruction_producers import runtime_instruction_producers
-from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
+from app.agents.summarization.tool_middleware import CompactionToolsMiddleware
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME, TOOL_DISCOVERY_NAME
 from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.core.path_utils import workspace_context
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.domain.context_compaction import CompactionPolicy
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
@@ -178,7 +178,7 @@ def local_factory_arguments(factory_workspace: Path, factory_config: ConfigServi
     "factory_config,automatic_enabled", [(False, False), (True, True)],
     indirect=["factory_config"], ids=["automatic-disabled", "automatic-enabled"],
 )
-def test_agent_factory_assembles_configured_compaction_middleware(
+def test_agent_factory_registers_compaction_tools_without_a_durable_owner(
     local_factory_arguments, automatic_enabled: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """真实配置、middleware 与图编译贯通；不执行模型或工具。"""
@@ -207,27 +207,26 @@ def test_agent_factory_assembles_configured_compaction_middleware(
 
     build_middleware.assert_called_once()
     options = build_middleware.call_args.kwargs
-    assert isinstance(options["compaction_policy"], CompactionPolicy)
-    assert options["compaction_policy"] == CompactionPolicy(
-        prepare_fraction=0.6, apply_fraction=0.8, target_fraction=0.4, apply_policy="next_request",
-    )
-    assert options["automatic_compaction_enabled"] is automatic_enabled
+    assert options["compaction_runtime"] is None
+    assert options["compaction_owner"] == MutationIntentOwner(local_factory_arguments["session_id"], local_factory_arguments["thread_id"])
+    assert options["agent_id"] == "default"
     create_agent.assert_called_once()
     summarization, = (
         item for item in create_agent.call_args.kwargs["middleware"]
-        if isinstance(item, CachePreservingSummarizationMiddleware)
+        if isinstance(item, CompactionToolsMiddleware)
     )
-    assert summarization._automatic_enabled is automatic_enabled
-    assert not summarization._should_summarize([], 799)
-    assert summarization._should_summarize([], 800)
+    assert summarization._compactor is None
+    assert local_factory_arguments["config_service"].is_automatic_compaction_enabled() is automatic_enabled
     assert "model" in agent.get_graph().nodes
     assert {"compact_conversation", "read_compaction_history"} <= set(extract_agent_tools_by_name(agent))
 
 
 def test_local_factory_error_precedes_model_construction_and_graph(local_factory_arguments, monkeypatch):
     def forbidden(*_args, **_kwargs):
-        pytest.fail("本地 factory 失败不能构造模型或图")
+        pytest.fail("本地 factory 失败不能继续构造默认工具、来源管理器、模型或图")
 
+    monkeypatch.setattr(agent_factory, "build_default_tools", forbidden)
+    monkeypatch.setattr(agent_factory, "ContextSourceManager", forbidden)
     monkeypatch.setattr(agent_factory, "prepare_agent_model", forbidden)
     monkeypatch.setattr(agent_factory, "create_model_call_agent", forbidden)
     with pytest.raises(TypeError, match="dynamic"):

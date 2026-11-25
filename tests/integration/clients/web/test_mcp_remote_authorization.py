@@ -52,27 +52,33 @@ def product_case(request: pytest.FixtureRequest):
             workspace = _prepare_workspace(node_context, model_port, gateway_port)
             path = workspace / ".boxteam/workspace.jsonc"
             payload = read_jsonc_object(path)
-            payload["llm"] = {"providers": {"control-replay": {
-                "defaults": {"endpoint": "https://opencode.ai/zen/v1", "api_key": "", "custom_llm_provider": "openai",
-                    "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True},
-                                 "supports_reasoning": {"reasoning_content": False}}},
-                "models": {"default": {"model": "control-replay-model"}},
+            workspace_settings = payload["settings"]["workspace"]
+            workspace_settings["llm"] = {"providers": {"control-replay": {
+                "config_ref": "#/profiles/provider.control-replay",
+                "models": {"default": {"model": "control-replay-model", "config_ref": "context:provider/control-replay"}},
             }}}
-            agents = payload["agents"]
+            payload["profiles"]["provider.control-replay"] = {
+                "extends": "context:workspace",
+                "settings": {"model_options": {"endpoint": "https://opencode.ai/zen/v1", "api_key": "",
+                    "custom_llm_provider": "openai",
+                    "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True},
+                                 "supports_reasoning": {"reasoning_content": False}}}},
+            }
+            agents = workspace_settings["agents"]
             assert isinstance(agents, dict)
             for agent in agents.values():
                 assert isinstance(agent, dict)
                 agent["model"] = {"primary": {"provider_id": "control-replay", "model_id": "default"}, "fallbacks": []}
             tools = agents["default"].setdefault("tools", {})
             tools["custom"] = [{"tool_id": "connections.manage"}]
-            payload["mcp"] = {"servers": {"schema": {
+            workspace_settings["mcp"] = {"servers": {"schema": {
                 "enabled": True, "transport": "streamable_http", "url": sibling.url,
             }}}
             if node_context.workspace_root.parent.name == "b":
-                payload["mcp"]["servers"]["secure"] = secure.configuration(
+                workspace_settings["mcp"]["servers"]["secure"] = secure.configuration(
                     redirect_uri=f"http://127.0.0.1:{ports.port(1)}/mcp-oauth-callback.html",
                 )
-            payload["context"] = {"resource_activation": {
+            workspace_settings["context"] = {"resource_activation": {
                 "default_boundary": boundary, "overrides": {"mcp_tool_catalog": boundary},
             }}
             path.write_text(json.dumps(payload), encoding="utf-8")

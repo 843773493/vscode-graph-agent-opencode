@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import {
   useCallback,
   useEffect,
@@ -560,7 +561,7 @@ export default function WorkspaceFileTree({
     if (directory.error) {
       return (
         <div className="files-tree-error" style={{ marginLeft: `${22 + depth * 14}px` }}>
-          <span>{directory.error}</span>
+          <span className="failure-summary">{failureSummary(directory.error)}</span>
           <button type="button" onClick={() => void loadDirectory(path)}>
             {t("fileTree.retry")}
           </button>

@@ -265,7 +265,7 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
     config_path = workspace / ".boxteam/workspace.jsonc"
     workspace_config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     clear_test_provider_api_keys(workspace_config)
-    workspace_config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = (
+    workspace_config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = (
         f"http://127.0.0.1:{unused_tcp_port}"
     )
     config_path.write_text(json.dumps(workspace_config), encoding="utf-8")
@@ -335,7 +335,7 @@ def test_launcher_handoff_preserves_plugin_instance_and_full_stop_exits_it(
             workspace_document = _json_request(client, "GET", workspace_source_path)["data"]
             assert isinstance(workspace_document, dict)
             workspace_config = commentjson.loads(str(workspace_document["jsonc"]))
-            workspace_config.setdefault("plugins", {})["runtime"] = {"entries": [{
+            workspace_config["settings"]["workspace"].setdefault("plugins", {})["runtime"] = {"entries": [{
                 "package_id": "launcher.lifecycle", "plugin_id": "workspace-probe",
                 "package_version": "1.0.0", "enabled": True,
             }]}

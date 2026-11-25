@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
@@ -20,6 +21,7 @@ from app.abstractions.session_read import SessionListReaderProtocol
 from app.core.phase_observer import observe_phase
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_current_gateway_id
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextItemDTO,
@@ -76,9 +78,10 @@ class _SessionContextRecords:
     session_id: str
     revision: str
     records: list[dict[str, object]]
-    raw_message_count: int
+    raw_message_count: int | None
     compacted: bool
     compaction_cutoff: int | None
+    compaction: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +114,7 @@ class SessionContextQueryService:
         )
         self._workspace_id = workspace_id
         self._information_source: SessionInformationSourceProtocol | None = None
+        self._compaction_source: Callable[[MutationIntentOwner], dict[str, object]] | None = None
 
     @property
     def workspace_id(self) -> str:
@@ -123,6 +127,10 @@ class SessionContextQueryService:
         """延迟绑定组合服务，避免容器构造形成循环依赖。"""
 
         self._information_source = information_source
+
+    def bind_compaction_source(self, source: Callable[[MutationIntentOwner], dict[str, object]]) -> None:
+        """查询复用运行与手动入口的同一压缩 owner，不构建模型或执行图。"""
+        self._compaction_source = source
 
     async def read_context(
         self,
@@ -482,12 +490,15 @@ class SessionContextQueryService:
         information = await self._information_source.get_information(
             context_records.session_id
         )
+        data = information.model_dump(mode="json")
+        if context_records.compaction is not None:
+            data["compaction"] = context_records.compaction
         return SessionContextItemDTO(
             kind="information",
             resource_identity=context_records.resource_identity,
             uri=context_records.uri,
             scope=context_records.scope,
-            data=information.model_dump(mode="json"),
+            data=data,
         )
 
     async def _freeze_inventory(self, resource: ParsedSessionContextResource) -> SessionContextReadSnapshot:
@@ -619,6 +630,14 @@ class SessionContextQueryService:
             session.thread_id,
         )
         revision = await run_sync_shielded(context_revision, state)
+        compaction = None
+        if self._compaction_source is not None:
+            compaction = await run_sync_shielded(self._compaction_source, MutationIntentOwner(session.session_id, session.thread_id))
+            compaction = {**compaction, "session_id": session.session_id, "thread_id": session.thread_id}
+            revision = "content:" + hashlib.sha256(json.dumps(
+                {"context_revision": revision, "compaction": compaction}, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")).hexdigest()
         return _SessionContextRecords(
             resource_identity=resource.resource_identity,
             uri=resource.uri,
@@ -629,6 +648,7 @@ class SessionContextQueryService:
             raw_message_count=state["raw_message_count"],
             compacted=state["compacted"],
             compaction_cutoff=state["compaction_cutoff"],
+            compaction=compaction,
         )
 
     def _require_workspace_resource(

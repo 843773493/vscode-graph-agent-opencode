@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import AIMessageChunk, ToolMessage
@@ -23,11 +23,9 @@ from app.services.orchestration.message_stream.trace_observer import (
 
 
 @pytest.fixture
-def tool_failure_runtime_case():
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+def tool_failure_runtime_case(stream_writer, tool_result_sink):
+    writer = stream_writer()
     sink = AsyncMock()
-    tool_result_sink = AsyncMock()
     runtime = MessageStreamRuntime(
         writer,
         canonical_item_sink=sink,
@@ -61,9 +59,10 @@ async def test_mcp_unknown_is_preserved_by_both_result_carriers(tool_failure_run
     await case.runtime.start_tool(tool_execution_id="native-target", tool_call_id=call_id, tool_name="read_context")
     receipt = McpInvocationReceipt(tool_name="mcp__server__write", error_type="McpError")
     message = ToolMessage(content=receipt.model_dump_json(), artifact=receipt.as_artifact(), status="error", tool_call_id="target")
-    case.tool_result_sink.side_effect = lambda completion: SimpleNamespace(payload={
-        "content": completion.content, "tool_outcome": completion.tool_outcome,
-    })
+    case.tool_result_sink.side_effect = lambda completion: SimpleNamespace(
+        tool_execution=completion.tool_execution,
+        payload={"content": completion.content, "tool_outcome": completion.tool_outcome},
+    )
 
     async def stream():
         await case.runtime.complete_tool(tool_execution_id="native-target", tool_call_id=call_id, tool_name="read_context",
@@ -127,7 +126,8 @@ async def test_failure_commits_exact_active_attempt_once_before_return(tool_fail
     async def commit(_completion: ToolResultCompletion):
         commit_started.set()
         await release_commit.wait()
-        return SimpleNamespace(payload={"content": _completion.content, "tool_outcome": _completion.tool_outcome})
+        return SimpleNamespace(tool_execution=_completion.tool_execution,
+                               payload={"content": _completion.content, "tool_outcome": _completion.tool_outcome})
 
     case.tool_result_sink.side_effect = commit
     sibling = case.runtime.claim_tool_call_id("original-model", "sibling")
@@ -222,7 +222,8 @@ async def test_failure_without_active_attempt_does_not_wait_or_create_result(
     ), timeout=1)
 
     assert case.runtime._pending_tool_starts == {}
-    assert case.runtime._active_tool_executions == {
+    assert {key: (value.tool_call_id, value.tool_name)
+            for key, value in case.runtime._active_tool_executions.items()} == {
         "native-sibling": (sibling, "wait_for_session"),
     }
     case.tool_result_sink.assert_not_awaited()
@@ -283,9 +284,8 @@ async def test_canonical_commit_failure_leaves_completion_unpublished(tool_failu
 
 
 @pytest.mark.asyncio
-async def test_model_registration_failure_does_not_publish_unregistered_lifecycle() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_model_registration_failure_does_not_publish_unregistered_lifecycle(stream_writer) -> None:
+    writer = stream_writer()
     registrar = AsyncMock(side_effect=RuntimeError("登记失败"))
     runtime = MessageStreamRuntime(writer, model_call_registrar=registrar)
     preparation = asyncio.create_task(runtime.prepare_tool_execution("model_unregistered"))
@@ -334,9 +334,43 @@ async def test_tool_execution_waits_for_emitting_model_and_commits_exact_calls()
 
 
 @pytest.mark.asyncio
-async def test_next_model_attempt_does_not_duplicate_completed_model_call() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_complete_call_can_start_while_sibling_arguments_are_incomplete(stream_writer) -> None:
+    writer = stream_writer()
+    sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        writer, canonical_item_sink=sink,
+        model_call_registrar=AsyncMock(return_value="execution-interleaved"),
+    )
+    await runtime.start_model("model-interleaved", "primary")
+    # B先到、A参数未完成：声明顺序仍是A/B，B沿原执行入口即可启动。
+    for chunk in (
+        {"index": 1, "id": "b", "name": "read", "args": '{"paths":["B"]}'},
+        {"index": 0, "id": "a", "name": "read", "args": '{"paths":['},
+    ):
+        await runtime.accept_message_chunk(AIMessageChunk(content="", tool_call_chunks=[chunk]))
+
+    await asyncio.wait_for(runtime.prepare_tool_execution("model-interleaved"), 1)
+    sink.assert_awaited_once()
+    a, b = sink.await_args.args[0]
+    assert [item.tool_call_id for item in (a, b)] == [
+        "model-interleaved:tool-call:a", "model-interleaved:tool-call:b",
+    ]
+    assert (a.status, b.status) == ("incomplete", "completed")
+    assert a.payload["args"] == '{"paths":['
+    assert b.payload["args"] == {"paths": ["B"]}
+    assert [(item.projection_group.ordinal, item.projection_group.size) for item in (a, b)] == [(0, 2), (1, 2)]
+    call = runtime.claim_tool_call_id("model-interleaved", "b")
+    await asyncio.wait_for(runtime.start_tool(
+        tool_execution_id="attempt-b", tool_call_id=call, tool_name="read",
+    ), 1)
+    started = [event.args[1] for event in writer.commit.await_args_list if event.args[0] == "tool.started"]
+    assert len(started) == 1 and started[0]["tool_call_id"] == b.tool_call_id
+    assert runtime.pending_tool_calls() == ((a.tool_call_id, "read", False),)
+
+
+@pytest.mark.asyncio
+async def test_next_model_attempt_does_not_duplicate_completed_model_call(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     await runtime.start_model("model_1", "primary")
@@ -362,9 +396,8 @@ async def test_next_model_attempt_does_not_duplicate_completed_model_call() -> N
 
 
 @pytest.mark.asyncio
-async def test_provider_fallback_marks_previous_model_attempt_failed() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_provider_fallback_marks_previous_model_attempt_failed(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     await runtime.start_model("model_1", "backup_3")
@@ -452,7 +485,9 @@ async def test_internal_provider_stream_persists_turnless_items_without_writer()
     (tool_call_item,) = [
         item for item in model_items if item.semantic_kind == "tool_call"
     ]
-    assert assistant_item.payload == "internal output"
+    assert assistant_item.payload == [{
+        "type": "text", "id": "model_internal:text:0", "index": 0, "text": "internal output",
+    }]
     assert tool_call_item.payload["tool_call_id"] == tool_call_id
     assert tool_call_item.payload["name"] == "read_file"
     tool_result_sink.assert_awaited_once()
@@ -470,9 +505,8 @@ async def test_internal_provider_stream_persists_turnless_items_without_writer()
 
 
 @pytest.mark.asyncio
-async def test_tool_call_delta_keeps_identity_and_can_be_claimed_by_tool_execution() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_tool_call_delta_keeps_identity_and_can_be_claimed_by_tool_execution(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     await runtime.start_model("model_1", "primary")
@@ -545,13 +579,13 @@ async def test_tool_call_delta_keeps_identity_and_can_be_claimed_by_tool_executi
     ],
 )
 async def test_tool_call_argument_completeness_requires_a_received_object(
+    stream_writer,
     raw_args: object,
     include_args: bool,
     expected_arguments: dict[str, object],
     expected_complete: bool,
 ) -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
     await runtime.start_model("model_arguments", "primary")
 
@@ -584,9 +618,8 @@ async def test_tool_call_argument_completeness_requires_a_received_object(
 
 
 @pytest.mark.asyncio
-async def test_parallel_tool_calls_with_reused_provider_index_get_distinct_identities() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_parallel_tool_calls_with_reused_provider_index_get_distinct_identities(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     await runtime.start_model("model_1", "primary")
@@ -636,9 +669,8 @@ async def test_parallel_tool_calls_with_reused_provider_index_get_distinct_ident
 
 
 @pytest.mark.asyncio
-async def test_same_name_and_argument_tool_calls_are_claimed_by_exact_provider_id() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_same_name_and_argument_tool_calls_are_claimed_by_exact_provider_id(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     await runtime.start_model("model_1", "primary")
@@ -666,9 +698,8 @@ async def test_same_name_and_argument_tool_calls_are_claimed_by_exact_provider_i
 
 
 @pytest.mark.asyncio
-async def test_next_model_start_preserves_late_tool_start_correlation() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_next_model_start_preserves_late_tool_start_correlation(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     await runtime.start_model("model_1", "primary")
@@ -717,9 +748,8 @@ async def test_next_model_start_preserves_late_tool_start_correlation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pending_failure_keeps_emitting_owner_after_next_model() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_pending_failure_keeps_emitting_owner_after_next_model(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     await runtime.start_model("model_1", "primary")
@@ -753,9 +783,8 @@ async def test_pending_failure_keeps_emitting_owner_after_next_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_registered_missing_tool_owner_is_not_replaced_by_current_model() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_registered_missing_tool_owner_is_not_replaced_by_current_model(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     await runtime.accept_message_chunk(AIMessageChunk(
@@ -803,9 +832,8 @@ async def test_registered_missing_tool_owner_is_not_replaced_by_current_model() 
 
 
 @pytest.mark.asyncio
-async def test_interrupt_closes_calls_under_emitting_model_owner() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_interrupt_closes_calls_under_emitting_model_owner(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     for model_call_id, provider_call_id in (
@@ -846,9 +874,8 @@ async def test_interrupt_closes_calls_under_emitting_model_owner() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reused_provider_tool_call_id_is_scoped_per_model_call() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_reused_provider_tool_call_id_is_scoped_per_model_call(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     for model_call_id in ("model_1", "model_2"):
@@ -889,10 +916,10 @@ async def test_reused_provider_tool_call_id_is_scoped_per_model_call() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first_completed", [False, True])
 async def test_historical_tool_message_does_not_complete_reused_call_in_next_model(
+    stream_writer,
     first_completed: bool,
 ) -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
     for ordinal in (1, 2):
         model_call_id = f"model_{ordinal}"
@@ -920,7 +947,8 @@ async def test_historical_tool_message_does_not_complete_reused_call_in_next_mod
         response_metadata={"model_call_id": "model_1"},
     )
     await runtime.complete_tool_from_message(old, model_call_id="model_1")
-    assert runtime._active_tool_executions == {
+    assert {key: (value.tool_call_id, value.tool_name)
+            for key, value in runtime._active_tool_executions.items()} == {
         "execution_2": ("model_2:tool-call:call_reused", "read_file"),
     }
     completed = [call.args[1] for call in writer.commit.await_args_list if call.args[0] == "tool.completed"]
@@ -1058,9 +1086,8 @@ async def test_tool_message_waits_for_real_start_before_persisting_terminal_even
 
 
 @pytest.mark.asyncio
-async def test_cancelled_tool_message_waiter_preserves_shared_start_for_remaining_waiter() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_cancelled_tool_message_waiter_preserves_shared_start_for_remaining_waiter(stream_writer) -> None:
+    writer = stream_writer()
     canonical_item_sink = AsyncMock()
     tool_result_sink = AsyncMock()
     runtime = MessageStreamRuntime(
@@ -1153,9 +1180,8 @@ async def test_cancelled_tool_message_waiter_preserves_shared_start_for_remainin
 
 
 @pytest.mark.asyncio
-async def test_tool_message_closes_call_without_inventing_complete_arguments() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_tool_message_closes_call_without_inventing_complete_arguments(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     await runtime.start_model("model_incomplete_call", "primary")
@@ -1208,9 +1234,8 @@ async def test_tool_message_closes_call_without_inventing_complete_arguments() -
 
 
 @pytest.mark.asyncio
-async def test_tool_message_waits_for_its_start_before_claiming_same_argument_calls() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_tool_message_waits_for_its_start_before_claiming_same_argument_calls(stream_writer) -> None:
+    writer = stream_writer()
     canonical_item_sink = AsyncMock()
     tool_result_sink = AsyncMock()
     runtime = MessageStreamRuntime(
@@ -1346,9 +1371,8 @@ async def test_tool_message_waits_for_its_start_before_claiming_same_argument_ca
 
 
 @pytest.mark.asyncio
-async def test_late_provider_delta_after_model_sealed_does_not_reappend_canonical_item() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_late_provider_delta_after_model_sealed_does_not_reappend_canonical_item(stream_writer) -> None:
+    writer = stream_writer()
     canonical_sink = AsyncMock()
     runtime = MessageStreamRuntime(
         writer,
@@ -1392,9 +1416,8 @@ async def test_late_provider_delta_after_model_sealed_does_not_reappend_canonica
 
 
 @pytest.mark.asyncio
-async def test_normalized_blocks_drive_message_stream_and_trace_projection_once() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_normalized_blocks_drive_message_stream_and_trace_projection_once(stream_writer) -> None:
+    writer = stream_writer()
     trace_events: list[tuple[str, dict[str, object]]] = []
 
     async def publish(event_type: str, payload: dict[str, object]) -> None:
@@ -1476,9 +1499,8 @@ async def test_normalized_blocks_drive_message_stream_and_trace_projection_once(
 
 
 @pytest.mark.asyncio
-async def test_nested_reasoning_content_is_projected_to_message_stream_and_trace() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_nested_reasoning_content_is_projected_to_message_stream_and_trace(stream_writer) -> None:
+    writer = stream_writer()
     trace_events: list[tuple[str, dict[str, object]]] = []
 
     async def publish(event_type: str, payload: dict[str, object]) -> None:
@@ -1517,9 +1539,8 @@ async def test_nested_reasoning_content_is_projected_to_message_stream_and_trace
 
 
 @pytest.mark.asyncio
-async def test_interruption_finalizes_partial_blocks_calls_and_unknown_tool_results() -> None:
-    writer = MagicMock()
-    writer.commit = AsyncMock()
+async def test_interruption_finalizes_partial_blocks_calls_and_unknown_tool_results(stream_writer) -> None:
+    writer = stream_writer()
     runtime = MessageStreamRuntime(writer)
 
     await runtime.start_model("model_1", "primary")
@@ -1567,8 +1588,7 @@ async def test_interruption_finalizes_partial_blocks_calls_and_unknown_tool_resu
     assert calls[8][1]["outcome"] == "user_interrupt"
     assert calls[8][1]["retryable"] is False
 
-    partial_writer = MagicMock()
-    partial_writer.commit = AsyncMock()
+    partial_writer = stream_writer()
     partial_runtime = MessageStreamRuntime(partial_writer)
     await partial_runtime.start_model("model_2", "primary")
     await partial_runtime.accept_message_chunk(

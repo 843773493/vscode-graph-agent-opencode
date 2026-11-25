@@ -1,11 +1,12 @@
 import { useTranscriptDisclosure, useDisclosureFocus } from "./TranscriptViewContext";
-import { nodeAttributes, nodeKey, partNode, type TranscriptNodeKey } from "../../state/timeline/transcriptNodes";
+import { nodeAttributes, nodeKey, responseNode, responseNodeMembers, type TranscriptNodeKey } from "../../state/timeline/transcriptNodes";
 import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import { deriveToolRowDisplay } from "../../state/display/toolDisplay";
 import type { TimelineItem } from "../../state/timeline/timelineTypes";
 import MarkdownContent from "./MarkdownContent";
 import { errorMessage } from "../../utils/errorMessage";
+import { failureSummary } from "../../../../shared/core/failurePresentation";
 import { MessageSearchLocation, MessageSearchLocationContext } from "./messageSearchLocation";
 
 type ToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
@@ -43,6 +44,9 @@ function toolStatus(item: ToolItem): {
       className: "is-failed",
     };
   }
+  if (item.declared) {
+    return { icon: "codicon-tools", label: t("chat.tool.declared", item.toolName), className: "is-declared" };
+  }
   return {
     icon: "codicon-check",
     label: t("chat.tool.completed", item.toolName),
@@ -66,7 +70,7 @@ function ToolRow({
   const locatedItemId = message?.role === "tool" && item.responseSources?.some(entry => entry.source?.item_id === message.reference?.item_id)
     ? message.reference?.item_id : undefined;
   const source = item.responseSources?.[0];
-  const key = source ? partNode(source, "header") : nodeKey({ kind: "stream", id: item.id }, "header");
+  const key = source ? responseNode(source, "header") : nodeKey({ kind: "stream", id: item.id }, "header");
   const [open, setOpen] = useTranscriptDisclosure(key);
   const focus = useDisclosureFocus(open);
   const itemLocated = locatedItem && item.responseSources?.some(entry => entry.source.item_id === locatedItem.item_id);
@@ -106,7 +110,7 @@ function ToolRow({
     <section ref={element => { focus.root.current = element; locateRef(element); }} data-tool-result-item-id={locatedToolId} className={`chat-tool-row ${status.className}`} data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}>
       <button ref={focus.header}
         type="button"
-        className="chat-tool-summary" {...nodeAttributes(key, parentNode)} data-transcript-members={JSON.stringify(item.responseSources?.map(part => partNode(part).source_ref) ?? [key.source_ref])}
+        className="chat-tool-summary" {...nodeAttributes(key, parentNode)} data-transcript-members={JSON.stringify(item.responseSources?.flatMap(responseNodeMembers) ?? [key])}
         aria-expanded={open}
         aria-busy={loading}
         disabled={!hasDetails}
@@ -128,12 +132,12 @@ function ToolRow({
         <div className="chat-tool-details">
           {locatedItemId ? <MessageSearchLocation itemId={locatedItemId} /> : null}
           {error ? (
-            <div className="chat-inline-error" role="alert">{error}</div>
+            <div className="chat-inline-error failure-summary" role="alert">{failureSummary(error)}</div>
           ) : null}
-          {content && (inputSource || content.input) ? <div {...nodeAttributes(inputSource ? partNode(inputSource,"tool_input") : nodeKey({kind: "stream", id: item.id}, "tool_input"), key)}>
+          {content && (inputSource || content.input) ? <div {...nodeAttributes(inputSource ? responseNode(inputSource,"tool_input") : nodeKey({kind: "stream", id: item.id}, "tool_input"), key)}>
             <MarkdownContent value={content.input} />
           </div> : null}
-          {content && (resultSource || content.result) ? <div {...nodeAttributes(resultSource ? partNode(resultSource,"tool_output") : nodeKey({kind: "stream", id: item.id}, "tool_output"), key)}>
+          {content && (resultSource || content.result) ? <div {...nodeAttributes(resultSource ? responseNode(resultSource,"tool_output") : nodeKey({kind: "stream", id: item.id}, "tool_output"), key)}>
             <MarkdownContent value={content.result} />
           </div> : null}
           {showRawDetails ? (

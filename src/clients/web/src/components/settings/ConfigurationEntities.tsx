@@ -6,6 +6,7 @@ import { ModelOptionsInspection, type ConfigurationOptionsReceipt } from './Mode
 import type { GatewayWorkspaceRequestTarget } from '../../api/workspaceIdentity.js';
 import { ModelCatalogSelect, type CatalogChoice } from './ModelCatalogSelect.js';
 import { ConfigurationProxyFields } from './ConfigurationProxyFields.js';
+import { errorSummary } from '../../utils/errorMessage.js';
 
 export type DefinitionKind = 'providers' | 'agents';
 export type DefinitionObject = Record<string, unknown>;
@@ -82,21 +83,21 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
   const [modelSearch, setModelSearch] = useState('');
   const [providerSearch, setProviderSearch] = useState('');
   const [inspected, setInspected] = useState<{ version: number; data: ConfigurationOptionsReceipt }>();
-  const [preparationError, setPreparationError] = useState<string>();
+  const [preparationError, setPreparationError] = useState<unknown>();
   const prepareOptions = useRef(onPrepareOptions);
   prepareOptions.current = onPrepareOptions;
   if (!document.source_inherited) throw new Error(t('settings.editor.inheritedMissing'));
   const workspace = definitionObject(definitionValue(draft, ['settings', 'workspace']));
-  const selectedLayer = document.layers.find(layer => layer.source_key === document.source_key);
-  const lower = document.layers.filter(layer => selectedLayer && layer.precedence < selectedLayer.precedence).sort((a, b) => a.precedence - b.precedence);
   const basePath = kind === 'providers' ? ['llm', 'providers'] : ['agents'];
   const localDefinitions = definitionObject(definitionValue(workspace, basePath));
-  // 这里只枚举身份和原文位置；有效模型选项仍由 Backend resolver 计算。
+  // 实体归属直接使用当前来源实际父节点的回执；有效模型选项仍由 Backend resolver 计算。
+  const inheritedOrigins = new Map(document.source_inherited_origins.map(origin => [origin.path, origin.source_key]));
   const inheritedDefinitions = new Map<string, string>();
   for (const id of Object.keys(definitionObject(definitionValue(document.source_inherited, basePath)))) {
-    const owner = [...lower].reverse().find(layer => definitionValue(layer.payload, ['settings', 'workspace', ...basePath, id]) !== undefined);
+    const path = '/' + [...basePath, id].map(part => part.replace(/~/g, '~0').replace(/\//g, '~1')).join('/');
+    const owner = inheritedOrigins.get(path);
     if (!owner) throw new Error(t('configuration.node.inheritedOriginMissing', id));
-    inheritedDefinitions.set(id, owner.source_key);
+    inheritedDefinitions.set(id, owner);
   }
   const entries = [...new Set([...inheritedDefinitions.keys(), ...Object.keys(localDefinitions)])].map(id => ({
     id, value: definitionObject(localDefinitions[id]), local: Object.hasOwn(localDefinitions, id),
@@ -127,7 +128,7 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
     if (kind !== 'providers' || !selected) return;
     const controller = new AbortController();
     void prepareOptions.current({ provider_id: selected.id, ...(modelId === undefined ? {} : { model_id: modelId }) }, controller.signal)
-      .catch(error => { if (!controller.signal.aborted) setPreparationError(error instanceof Error ? error.message : String(error)); });
+      .catch(error => { if (!controller.signal.aborted) setPreparationError(error); });
     return () => controller.abort();
   }, [kind, selected?.id, modelId, draftVersion, document, providerReady, modelReady]);
   const modelPath = modelId === undefined ? [] : ['models', modelId];
@@ -218,7 +219,7 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
         <input value={text(profile.extends)} placeholder={parent?.reference ?? ''} disabled={!editable || !onEditNodeParent || !node.ready}
           onChange={event => onEditNodeParent?.(node.selector, event.target.value || undefined)} /></label>
       <p>{t('configuration.node.isolation')}</p>
-      {!node.ready ? <p role={preparationError ? 'alert' : 'status'}>{preparationError ?? t('configuration.inspect.loading')}</p> : null}
+      {!node.ready ? <p role={preparationError ? 'alert' : 'status'}>{preparationError ? errorSummary(preparationError) : t('configuration.inspect.loading')}</p> : null}
       <ConfigurationProxyFields local={proxy === undefined ? undefined : definitionObject(proxy)}
         inherited={inheritedProxy === undefined ? undefined : definitionObject(inheritedProxy)} disabled={!editable || !onEditOptions || !node.ready}
         allowInherit={!node.profilePath || typeof profile.extends === 'string'}
@@ -265,7 +266,7 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
       {pendingSubmission ? <p role="status">{t('settings.editor.originalSaveUnknown', pendingSubmission)} <button type="button" onClick={onQuerySubmission}>{t('configuration.entities.querySave')}</button></p> : null}
       {selectedId !== undefined && !selected ? <p role="alert">{t('configuration.entities.definitionChanged', selectedId)}</p> : null}
     </div> : null}
-    {error ? <p role="alert">{error}</p> : <div className="configuration-entity-columns">
+    {error ? <p className="failure-summary" role="alert">{errorSummary(error)}</p> : <div className="configuration-entity-columns">
       <div className="configuration-definition-selector">
       {kind === 'providers' && (entries.length > 6 || providerSearch) ? <label className="configuration-entity-field configuration-provider-search">
         <input type="search" aria-label={t('configuration.catalog.searchConfigured')} placeholder={t('configuration.catalog.searchConfigured')}

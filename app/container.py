@@ -36,10 +36,12 @@ from app.core.resource_uri import parse_resource_uri
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
+from app.core.session_lifecycle_gate import SessionLifecycleGate
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
 from app.runtime.context_compaction import AgentSummarizationCompactor
+from app.runtime.derived_tools import build_derived_tools
 from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS, RuntimeClockPorts
 from app.services.business.agent_service import AgentService
 from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
@@ -47,6 +49,7 @@ from app.services.business.agent_tool_settings.service import AgentToolSettingsS
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.communication.user_questions import UserQuestionService
 from app.services.business.context_compaction_service import ContextCompactionService
+from app.services.business.derived_execution_service import DerivedExecutionService
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.persistent_task_service import PersistentTaskService
@@ -145,6 +148,9 @@ from app.services.infrastructure.resource_platform.bootstrap import (
     ResourcePlatform,
     bootstrap_resource_platform,
 )
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceNavigation,
 )
@@ -183,6 +189,10 @@ from app.services.infrastructure.workspace_files.text_owner import (
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.orchestration.agent_execution_service import AgentExecutionService
+from app.services.orchestration.background_work.compaction import CompactionTaskHandler
+from app.services.orchestration.background_work.derived_execution import (
+    DerivedExecutionHandler,
+)
 from app.services.orchestration.background_work.mailbox import BackgroundMailbox
 from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 from app.services.orchestration.background_work.system_time_emitter import (
@@ -232,6 +242,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         session_service: SessionService,
         user_question_service: UserQuestionService,
         checkpointer: RolloutCheckpointSaver,
+        summarization_compactor: AgentSummarizationCompactor,
         terminal_resource_owner: TerminalResourceOwner,
         browser_resource_owner: BrowserResourceOwner,
         session_context_query_service: SessionContextQueryService,
@@ -245,6 +256,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._session_service = session_service
         self._user_question_service = user_question_service
         self._checkpointer = checkpointer
+        self._summarization_compactor = summarization_compactor
         self._terminal_resource_owner = terminal_resource_owner
         self._browser_resource_owner = browser_resource_owner
         self._session_context_query_service = session_context_query_service
@@ -280,6 +292,9 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
 
     def get_checkpointer(self) -> RolloutCheckpointSaver:
         return self._checkpointer
+
+    def get_summarization_compactor(self) -> AgentSummarizationCompactor:
+        return self._summarization_compactor
 
     def get_resource_navigation(self) -> ResourceNavigation:
         return self._resource_navigation
@@ -400,6 +415,7 @@ class AppContainer:
     browser_resource_owner: BrowserResourceOwner
     browser_manager_client: BrowserManagerClient
     context_compaction_service: ContextCompactionService
+    derived_execution_service: DerivedExecutionService
     session_service: SessionService
     session_orchestrator: SessionMessageOrchestrator
     session_communication_service: SessionCommunicationService
@@ -782,10 +798,39 @@ def _build_app_container(
         connections=mcp_connection_service, saver=checkpointer, events=job_event_bus,
         config=config_service, selection=tool_selection_store, sessions=session_service,
     )
+    derived_handler = DerivedExecutionHandler(
+        saver=checkpointer, config=config_service, trace_sink=trace_event_store,
+        workspace_id=workspace_id, workspace_root=resolved_workspace_root, session_catalog=session_catalog,
+        activation=ResourceActivationCoordinator(
+            registry=ResourceRegistry(), saver=checkpointer, body_store=resource_activation_body,
+        ),
+        registry=lambda: background_task_registry,
+        tool_settings=lambda: agent_tool_settings_service,
+        tool_runtime=lambda frozen: build_derived_tools(
+            frozen, workspace_root=resolved_workspace_root, resource_navigation=resource_navigation,
+            text_mutations=text_mutations, artifact_reader=read_artifact, output_store=artifact_outputs,
+        ),
+    )
+    compaction_handler = CompactionTaskHandler(
+        saver=checkpointer, config=config_service, trace_sink=trace_event_store,
+        workspace_id=workspace_id, workspace_root=resolved_workspace_root, session_catalog=session_catalog,
+        activation=ResourceActivationCoordinator(
+            registry=ResourceRegistry(), saver=checkpointer, body_store=resource_activation_body,
+        ), registry=lambda: background_task_registry,
+        provider_wait=lambda handle, waiting: summarization_compactor.observe_provider_wait(handle, waiting),
+    )
     background_task_registry = BackgroundTaskRegistry(
         store=background_work_store, residency_tracker=thread_residency_tracker,
-        handlers=(SystemTimeEmitterHandler(), mcp_connection_wait_handler),
+        handlers=(SystemTimeEmitterHandler(), mcp_connection_wait_handler, derived_handler, compaction_handler),
         admission_guard=lambda session_id: job_service.assert_session_control_open(session_id),
+    )
+    summarization_compactor = AgentSummarizationCompactor(
+        config_service=config_service, saver=checkpointer, registry=background_task_registry, sessions=session_service,
+    )
+    derived_execution_service = DerivedExecutionService(
+        registry=background_task_registry, handler=derived_handler, store=background_work_store,
+        saver=checkpointer, sessions=session_service, config=config_service,
+        tool_settings=lambda: agent_tool_settings_service,
     )
     def read_artifact(uri: str, max_bytes: int) -> ResourceFileContent:
         artifact = parse_resource_uri(uri)
@@ -848,6 +893,7 @@ def _build_app_container(
         session_service=session_service,
         user_question_service=user_question_service,
         checkpointer=checkpointer,
+        summarization_compactor=summarization_compactor,
         terminal_resource_owner=terminal_resource_owner,
         browser_resource_owner=browser_resource_owner,
         session_context_query_service=session_context_query_service,
@@ -862,6 +908,7 @@ def _build_app_container(
     # 已核实的 claim 相位单向推送为 thread 的 idle blocker；tracker 评估时再通过
     # ResidencyBlockerSource 拉取磁盘 durable claim 兜底（重启恢复），不建第二套
     # dispose/LifetimeScope 抽象；tracker 直接持有真实 thread generation scope。
+    thread_residency_tracker.add_unload_listener(summarization_compactor.release_thread)
     thread_residency_tracker.add_unload_listener(terminal_resource_owner.release_thread)
     thread_residency_tracker.add_unload_listener(browser_resource_owner.release_thread)
     thread_residency_tracker.add_acquire_listener(attachment_blob_store.bind_thread_runtime)
@@ -1093,18 +1140,16 @@ def _build_app_container(
         resume_execution=runtime_source_dispatcher.resume_execution,
     )
     if isinstance(session_path_resolver, SessionCatalogPathResolver):
-        # 子树删除沿统一停止入口依次结算 Job、调试和资源 owner。该回调在每个
-        # session 的生命周期 gate 内执行，并且先于 fence、物理隔离和
-        # drain 进度记录，保证部分失败可按 record 定点重试。
+        # catalog deleting 已关闭准入；先在 gate 外排空运行，再短时结算原
+        # 控制事实，全部成功后删除 owner 才能关闭 fence 并物理隔离。
         async def drain_session_resources(session_id: str) -> None:
-            session_service.settle_abandoned_context_controls(session_id)
-            runtime_source_dispatcher.recover_context_publications(session_id)
             await session_stop_service.drain_for_deletion(session_id)
-            persistent_task_store.goal_clear(session_id)
-            # 附件引用释放与 ingest/claim 定点收敛必须先于 fence CAS 与物理
-            # 隔离：删除 owner 按 pin 阻断 canonical 使用、释放 reference 后
-            # 才隔离 Session 节点，且不留下指向已删除 owner 的 reference。
-            attachment_blob_store.release_session_references(session_id)
+            async with SessionLifecycleGate(resolved_sessions_root).exclusive(session_id):
+                session_service.settle_abandoned_context_controls(session_id)
+                runtime_source_dispatcher.recover_context_publications(session_id)
+                persistent_task_store.goal_clear(session_id)
+                # 原引用与 ingest/claim 必须先收敛，才允许后续 fence/物理隔离。
+                attachment_blob_store.release_session_references(session_id)
             released = await attachment_blob_store.process_pending_directories()
             await observe_phase(session_id, "attachments.working_copies.processed", details={
                 "released_attachment_ids": list(released),
@@ -1127,7 +1172,7 @@ def _build_app_container(
     compaction_checkpoint_adapter = ManualCompactionCheckpointAdapter(
         checkpointer=checkpointer,
     )
-    summarization_compactor = AgentSummarizationCompactor(config_service=config_service)
+    session_context_query_service.bind_compaction_source(summarization_compactor.status)
     context_compaction_service = ContextCompactionService(
         checkpoint_adapter=compaction_checkpoint_adapter,
         job_service=job_service,
@@ -1192,6 +1237,7 @@ def _build_app_container(
         workspace_session_context_transport=workspace_session_context_transport,
         session_resource_service=session_resource_service,
         context_compaction_service=context_compaction_service,
+        derived_execution_service=derived_execution_service,
         terminal_resource_owner=terminal_resource_owner,
         terminal_manager_client=terminal_manager_client,
         browser_resource_owner=browser_resource_owner,

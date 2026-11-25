@@ -145,7 +145,7 @@ async def _release_source_retention(
                 storage._lock(record.source_thread_id, record.checkpoint_ns, session_id=record.source_session_id),
                 storage._connect(record.source_thread_id, record.checkpoint_ns, session_id=record.source_session_id) as connection,
             ):
-                storage._require_v2_runtime(connection)
+                storage._require_current_rollout_format(connection)
                 owner = connection.execute("SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1").fetchone()
                 if owner != (record.source_session_id, record.source_thread_id):
                     raise RuntimeError("fork retention release source rollout owner 不一致")

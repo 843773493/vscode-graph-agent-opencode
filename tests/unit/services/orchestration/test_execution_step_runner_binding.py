@@ -14,6 +14,7 @@ from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.core.failures import public_error
 from app.core.job_event_bus import EventType
 from app.domain.itemized.execution_admission import (
+    ExecutionAdmission,
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
@@ -24,6 +25,24 @@ from app.services.orchestration.execution_step.failures import (
 from app.services.orchestration.execution_step.runner import StepRunner
 from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.support.diagnostic_failures import DiagnosticFailure
+
+
+@pytest.fixture
+def user_admission() -> ExecutionAdmission:
+    return ExecutionAdmission(
+        session_id="session", thread_id="thread", job_id="job", turn_id="turn",
+        execution_id="execution", admission_idempotency_key="admission",
+        execution_origin="user_turn",
+    )
+
+
+@pytest.fixture
+def internal_admission() -> ExecutionAdmission:
+    return ExecutionAdmission(
+        session_id="session", thread_id="thread", job_id="job_internal", turn_id=None,
+        execution_id="execution_internal", admission_idempotency_key="admission_internal",
+        execution_origin="internal",
+    )
 
 
 @pytest.fixture
@@ -60,7 +79,7 @@ async def test_failure_before_execution_is_logged_and_publishes_only_system_reas
     await handle_step_failure(
         error=error, interrupt_state=SimpleNamespace(), message_stream_runtime=None,
         message_stream_writer=None, checkpointer=MagicMock(), session_id="session",
-        thread_id="thread", job_id="job", turn_id=None, execution_id=None,
+        thread_id="thread", job_id="job", admission=None,
         checkpoint_ns="", publish=publish, logger=logging.getLogger(__name__),
     )
     publish.assert_awaited_once_with(EventType.ERROR, {
@@ -73,7 +92,7 @@ async def test_failure_before_execution_is_logged_and_publishes_only_system_reas
 
 @pytest.mark.parametrize("boundary", ["before-execution", "execution", "interrupted"])
 async def test_diagnostic_failure_does_not_interrupt_original_step_settlement(
-    diagnostic_sink: DiagnosticFailure, boundary: str,
+    diagnostic_sink: DiagnosticFailure, boundary: str, user_admission: ExecutionAdmission,
 ) -> None:
     original = OSError(errno.EIO, "执行读取失败", "/private/execution-secret")
     diagnostic_sink.primary = original
@@ -88,7 +107,7 @@ async def test_diagnostic_failure_does_not_interrupt_original_step_settlement(
             cancellation_reason=None, tool_name=None,
         ), message_stream_runtime=runtime, message_stream_writer=writer,
         checkpointer=checkpointer, session_id="session", thread_id="thread", job_id="job",
-        turn_id="turn", execution_id=execution_id, checkpoint_ns="", publish=publish,
+        admission=user_admission if execution_id is not None else None, checkpoint_ns="", publish=publish,
         logger=logging.getLogger(__name__),
     )
     assert len(diagnostic_sink.errors) == 1 and diagnostic_sink.errors[0].errno == errno.ENOTDIR
@@ -96,7 +115,7 @@ async def test_diagnostic_failure_does_not_interrupt_original_step_settlement(
     message = "执行系统 I/O 失败: error=OSError, errno=5, reason=执行读取失败, filename='/private/execution-secret', diagnostic_sink_error=NotADirectoryError"
     if boundary == "interrupted":
         runtime.finalize_interruption_facts.assert_awaited_once_with()
-        writer.close_from_execution.assert_awaited_once_with(checkpointer, checkpointer.execution_admission.return_value)
+        writer.close_from_execution.assert_awaited_once_with(checkpointer, user_admission)
         publish.assert_not_awaited()
         checkpointer.converge_execution.assert_called_once_with(
             "session", thread_id="thread", turn_id="turn", execution_id="execution",
@@ -110,13 +129,14 @@ async def test_diagnostic_failure_does_not_interrupt_original_step_settlement(
             checkpointer.converge_execution.assert_not_called()
         else:
             runtime.fail_model.assert_awaited_once_with(code="execution_error", message=message)
-            writer.close_from_execution.assert_awaited_once_with(checkpointer, checkpointer.execution_admission.return_value)
+            writer.close_from_execution.assert_awaited_once_with(checkpointer, user_admission)
             checkpointer.converge_execution.assert_called_once_with(
                 "session", thread_id="thread", turn_id="turn", execution_id="execution",
                 outcome="failed", turn_status="failed", checkpoint_ns="",
                 failure=public_error(original, code="execution_error", stage="agent_execution"),
             )
     checkpointer.mark_execution_lost.assert_not_called()
+    checkpointer.execution_admission.assert_not_called()
 
 
 @pytest.mark.parametrize("confirm_envelope", [False, True])
@@ -174,7 +194,7 @@ def step_runner() -> tuple[StepRunner, AsyncMock]:
 
 
 @pytest.fixture
-def writerless_runtime() -> tuple[
+def writerless_runtime(tool_result_sink: AsyncMock) -> tuple[
     MessageStreamRuntime,
     AsyncMock,
     AsyncMock,
@@ -182,9 +202,6 @@ def writerless_runtime() -> tuple[
     AsyncMock,
 ]:
     canonical_sink = AsyncMock()
-    tool_result_sink = AsyncMock(wraps=lambda completion: SimpleNamespace(payload={
-        "content": completion.content, "tool_outcome": completion.tool_outcome,
-    }))
     registrar = AsyncMock(return_value="execution_internal")
     outcome_sink = AsyncMock()
     runtime = MessageStreamRuntime(
@@ -259,6 +276,7 @@ async def test_writerless_internal_failure_converges_canonical_model_and_executi
         AsyncMock,
         AsyncMock,
     ],
+    internal_admission: ExecutionAdmission,
 ) -> None:
     runtime, canonical_sink, _tool_result_sink, _registrar, outcome_sink = writerless_runtime
     await runtime.start_model("model_internal_failure", "provider")
@@ -281,8 +299,7 @@ async def test_writerless_internal_failure_converges_canonical_model_and_executi
         session_id="session",
         thread_id="thread",
         job_id="job_internal",
-        turn_id=None,
-        execution_id="execution_internal",
+        admission=internal_admission,
         checkpoint_ns="",
         publish=publish,
         logger=MagicMock(spec=logging.Logger),
@@ -326,6 +343,7 @@ async def test_writerless_internal_user_cancel_converges_tool_result_and_executi
         AsyncMock,
         AsyncMock,
     ],
+    internal_admission: ExecutionAdmission,
 ) -> None:
     runtime, canonical_sink, tool_result_sink, _registrar, outcome_sink = writerless_runtime
     await runtime.start_model("model_internal_cancel", "provider")
@@ -364,8 +382,7 @@ async def test_writerless_internal_user_cancel_converges_tool_result_and_executi
         session_id="session",
         thread_id="thread",
         job_id="job_internal",
-        turn_id=None,
-        execution_id="execution_internal",
+        admission=internal_admission,
         checkpoint_ns="",
         logger=MagicMock(spec=logging.Logger),
     )
@@ -402,7 +419,7 @@ async def test_writerless_internal_user_cancel_converges_tool_result_and_executi
 
 
 @pytest.mark.asyncio
-async def test_user_interrupt_with_exception_closes_original_turn_stream() -> None:
+async def test_user_interrupt_with_exception_closes_original_turn_stream(user_admission: ExecutionAdmission) -> None:
     runtime, writer = AsyncMock(), AsyncMock()
     checkpointer, publish = MagicMock(), AsyncMock()
     await handle_step_failure(
@@ -410,9 +427,38 @@ async def test_user_interrupt_with_exception_closes_original_turn_stream() -> No
         interrupt_state=SimpleNamespace(interrupt_request_id="interrupt-original"),
         message_stream_runtime=runtime, message_stream_writer=writer,
         checkpointer=checkpointer, session_id="session", thread_id="thread",
-        job_id="job", turn_id="turn", execution_id="execution", checkpoint_ns="",
+        job_id="job", admission=user_admission, checkpoint_ns="",
         publish=publish, logger=MagicMock(spec=logging.Logger),
     )
     runtime.finalize_interruption_facts.assert_awaited_once_with()
-    writer.close_from_execution.assert_awaited_once_with(checkpointer, checkpointer.execution_admission.return_value)
+    writer.close_from_execution.assert_awaited_once_with(checkpointer, user_admission)
+    checkpointer.execution_admission.assert_not_called()
     publish.assert_not_awaited()
+
+
+@pytest.mark.parametrize("field", ["session_id", "thread_id", "job_id"])
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_settlement_rejects_admission_owner_conflict_before_writing(
+    user_admission: ExecutionAdmission, field: str, cancelled: bool,
+) -> None:
+    checkpointer, writer = MagicMock(), AsyncMock()
+    owner = {"session_id": "session", "thread_id": "thread", "job_id": "job"}
+    owner[field] = "other"
+    with pytest.raises(ValueError, match="admission 归属冲突"):
+        if cancelled:
+            await handle_step_cancelled(
+                cancellation_error=asyncio.CancelledError(), state=SimpleNamespace(),
+                message_stream_runtime=None, message_stream_writer=writer,
+                checkpointer=checkpointer, admission=user_admission,
+                checkpoint_ns="", logger=MagicMock(spec=logging.Logger), **owner,
+            )
+        else:
+            await handle_step_failure(
+                error=RuntimeError("执行失败"), interrupt_state=SimpleNamespace(),
+                message_stream_runtime=None, message_stream_writer=writer,
+                checkpointer=checkpointer, admission=user_admission,
+                checkpoint_ns="", publish=AsyncMock(),
+                logger=MagicMock(spec=logging.Logger), **owner,
+            )
+    assert not checkpointer.mock_calls
+    writer.close_from_execution.assert_not_awaited()

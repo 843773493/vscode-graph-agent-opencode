@@ -16,7 +16,7 @@ from app.services.infrastructure.config.state import (
     ConfigEventInput,
     ConfigLifecycleState,
     ConfigPendingCandidateRecord,
-    build_secret_binding_summary,
+    build_snapshot_secret_binding_summary,
     dump_json,
     load_json_object,
     validate_state_transition,
@@ -264,7 +264,7 @@ class WorkspaceStateStorePendingMixin:
                         base_active_revision,
                         source_generation,
                         dump_json(
-                            secret_bindings or build_secret_binding_summary(payload)
+                            secret_bindings if secret_bindings is not None else build_snapshot_secret_binding_summary(payload, source_baseline)
                         ),
                         dump_json(source_edit) if source_edit is not None else None,
                     ),
@@ -374,18 +374,28 @@ class WorkspaceStateStorePendingMixin:
     def refresh_unchanged_config_sources(
         self, *, config_domain: str, candidate_id: str | None, effective_digest: str,
         expected_active_revision: int, source_baseline: dict[str, object], source_generation: int,
+        expected_source_baseline: dict[str, object],
         layer_revisions: dict[str, int], layer_digests: dict[str, str | None],
+        payload: dict[str, object],
     ) -> None:
         """有效值不变时原子刷新来源及幂等记录，不提升 active 或产生配置事件。"""
         connection = cast("WorkspaceStateStore", self)._database.connection()
         try:
             connection.execute("BEGIN IMMEDIATE")
             active = connection.execute(
-                "SELECT effective_digest, active_revision FROM config_active_snapshot WHERE config_domain=?",
+                "SELECT effective_digest, active_revision, source_baseline_json FROM config_active_snapshot WHERE config_domain=?",
                 (config_domain,),
             ).fetchone()
-            if active is None or (effective_digest, expected_active_revision) != (active[0], active[1]):
+            if active is None or (effective_digest, expected_active_revision, dump_json(expected_source_baseline)) != tuple(active):
                 raise ConfigConflictError("无有效变化的来源与当前 active 不一致")
+            if connection.execute("SELECT 1 FROM config_apply_claim WHERE config_domain=?", (config_domain,)).fetchone() is not None:
+                raise ConfigConflictError("已有配置 apply claim，禁止刷新来源")
+            for key, revision in layer_revisions.items():
+                row = connection.execute(
+                    "SELECT layer_revision, layer_digest FROM config_source_layers WHERE config_key=?", (key,),
+                ).fetchone()
+                if row is None or tuple(row) != (revision, layer_digests[key]):
+                    raise ConfigConflictError(f"无有效变化的来源基线已改变: key={key}")
             if candidate_id is not None:
                 row = connection.execute(
                     "SELECT candidate_digest, base_active_revision, source_edit_json FROM config_pending_candidate "
@@ -404,9 +414,10 @@ class WorkspaceStateStorePendingMixin:
                     connection.execute("UPDATE config_pending_candidate SET state=? WHERE config_domain=? AND candidate_id=? AND state=?",
                                        (state, config_domain, candidate_id, previous))
             connection.execute(
-                "UPDATE config_active_snapshot SET source_baseline_json=?, source_generation=?, "
+                "UPDATE config_active_snapshot SET payload_json=?, secret_bindings_json=?, source_baseline_json=?, source_generation=?, "
                 "layer_revisions_json=?, layer_digests_json=? WHERE config_domain=?",
-                (dump_json(source_baseline), source_generation, dump_json(layer_revisions), dump_json(layer_digests), config_domain),
+                (dump_json(payload), dump_json(build_snapshot_secret_binding_summary(payload, source_baseline)),
+                 dump_json(source_baseline), source_generation, dump_json(layer_revisions), dump_json(layer_digests), config_domain),
             )
             connection.commit()
         finally:
@@ -455,7 +466,7 @@ class WorkspaceStateStorePendingMixin:
                 "effective_digest=?, source_generation=?, secret_bindings_json=?, source_edit_json=? "
                 "WHERE config_domain=? AND candidate_id=? AND state='candidate_validated' AND source_edit_json=?",
                 (dump_json(payload), dump_json(source_baseline), candidate_digest, candidate_digest, source_generation,
-                 dump_json(build_secret_binding_summary(payload)), dump_json(imported), candidate.config_domain,
+                 dump_json(build_snapshot_secret_binding_summary(payload, source_baseline)), dump_json(imported), candidate.config_domain,
                  candidate.candidate_id, dump_json(intent)),
             )
             if updated.rowcount != 1:

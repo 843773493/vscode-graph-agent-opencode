@@ -20,5 +20,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .react-session-overlays .workspace-dialog-backdrop { position: fixed; padding: 16px; }
 .react-session-overlays .workspace-dialog { max-width: 100%; }
 .react-session-content [role=alert] { color: var(--vscode-errorForeground); }
-.failure-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.failure-summary { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty-state.failure-summary, .error-message.failure-summary, .node-debug-source-state.failure-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
 .app-fatal-error-card > p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }

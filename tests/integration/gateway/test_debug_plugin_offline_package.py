@@ -57,7 +57,7 @@ def test_debug_plugin_runs_from_prepared_offline_package(
         )
         config_path = root / ".boxteam/workspace.jsonc"
         config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
+        config["settings"]["workspace"].setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
             "url"
         ] = f"http://127.0.0.1:{unused_tcp_port}"
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -93,7 +93,7 @@ def test_debug_plugin_runs_from_prepared_offline_package(
             source_path = f"/api/v1/workspaces/{workspace_id}/config/sources/workspace_root_mutable_override"
             document = _data(client.get(source_path, headers=headers))
             config = commentjson.loads(document["jsonc"])
-            config.setdefault("plugins", {})["runtime"] = {"entries": [{
+            config["settings"]["workspace"].setdefault("plugins", {})["runtime"] = {"entries": [{
                 "package_id": "boxteam.developer-tools",
                 "package_version": "0.1.1",
                 "plugin_id": "debugging",

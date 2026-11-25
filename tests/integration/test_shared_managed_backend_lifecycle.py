@@ -140,8 +140,9 @@ async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[S
             schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
         )
         config = commentjson.loads(config_path.read_text())
-        provider = config["llm"]["providers"]["primary"]
-        provider["defaults"] = {
+        workspace_settings = config["settings"]["workspace"]
+        provider = workspace_settings["llm"]["providers"]["primary"]
+        config["profiles"]["provider.primary"]["settings"]["model_options"] = {
             "endpoint": f"http://127.0.0.1:{ports.port(48)}/v1",
             "api_key": "", "custom_llm_provider": "openai",
             "api_mode": {
@@ -150,7 +151,7 @@ async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[S
             },
         }
         provider["models"]["default"]["model"] = "e2e-stub-model"
-        for agent in config["agents"].values():
+        for agent in workspace_settings["agents"].values():
             agent["model"]["fallbacks"] = []
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     boxteam_home = context.boxteam_home_for_node(request.node.nodeid)
@@ -394,7 +395,7 @@ async def test_real_peer_admin_root_binding_survives_restart_and_revocation(
 
     async def publish_policy(value: list[dict[str, str]]) -> None:
         before = await case.data("GET", "/api/gateway/config/reload-status")
-        config.setdefault("permissions", {})["federation"] = {"rules": value}
+        config.setdefault("settings", {}).setdefault("gateway", {}).setdefault("permissions", {})["federation"] = {"rules": value}
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
         async with asyncio.timeout(30):
             while True:

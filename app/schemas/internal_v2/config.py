@@ -205,6 +205,7 @@ class ConfigSourceDocumentDTO(BaseModel):
     effective: dict[str, object]
     source_effective: dict[str, object]
     source_inherited: dict[str, object]
+    source_inherited_origins: list[ConfigSourceOriginDTO]
     layers: list[ConfigSourceLayerViewDTO]
     nodes: list[ConfigNodeInspectionDTO]
     origins: list[ConfigSourceOriginDTO]

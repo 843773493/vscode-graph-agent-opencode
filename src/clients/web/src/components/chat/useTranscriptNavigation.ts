@@ -8,7 +8,7 @@ import { t } from "../../../../shared/core/i18n/index.js";
 import { errorMessage } from "../../utils/errorMessage";
 import type { ChatTranscriptItem } from "./transcriptItems";
 import type { TurnToolResultDTO, TurnMessageLocationDTO, TurnMessageReferenceDTO, ThreadItemLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
-import { nodeKey, partNode, contextNode, contextAnchorReference, encodeNode, type ReadingAnchor, type DisclosureOverrides } from "../../state/timeline/transcriptNodes";
+import { nodeKey, responseNode, contextNode, contextAnchorReference, encodeNode, type ReadingAnchor, type DisclosureOverrides } from "../../state/timeline/transcriptNodes";
 
 export interface TranscriptViewportPosition { reading_anchor: ReadingAnchor | null; follow_latest: boolean; disclosures?: DisclosureOverrides }
 export type TranscriptViewportChangeReason = "scroll" | "navigation" | "layout" | "disclosure";
@@ -24,9 +24,9 @@ interface AnchorTask {
 function itemContains(item: ChatTranscriptItem, anchor: ReadingAnchor): boolean {
   const source = anchor.node_key.source_ref;
   if (item.kind === "turn") return source.kind === "context"
-    ? item.conversation.responseParts?.some(part => part.kind === "context_notice" && encodeNode(contextNode(part)) === encodeNode(anchor.node_key)) === true
+    ? item.conversation.responseItems?.some(part => part.kind === "context_notice" && encodeNode(contextNode(part)) === encodeNode(anchor.node_key)) === true
     : source.kind === "turn" ? item.conversation.turnId === source.id
-    : item.conversation.responseParts?.some(part => part.source.item_id === source.id) === true;
+    : item.conversation.responseItems?.some(part => part.source.item_id === source.id) === true;
   if (item.kind === "internal_execution") return source.kind === "item" && item.displayPart.item_id === source.id;
   if (item.kind === "execution_response") return source.kind === "execution"
     ? item.executionId === source.id && anchor.node_key.slot === `header:${item.itemId}`
@@ -110,19 +110,19 @@ export function useTranscriptNavigation({ items, scopeKey, streamRef, scrollerRe
       const nodes = [...scroller.querySelectorAll<HTMLElement>("[data-transcript-node]")];
       const target = nodes.filter(element => {
         const key = JSON.parse(element.dataset.transcriptNode!);
-        return key.source_ref.kind === "item" && key.source_ref.id === task.itemTarget && ["body","tool_input","tool_output","notice"].includes(key.slot) && element.getBoundingClientRect().height > 0;
+        return key.source_ref.kind === "item" && key.source_ref.id === task.itemTarget && !["header","group"].includes(key.slot) && element.getBoundingClientRect().height > 0;
       }).sort((left, right) => Number(JSON.parse(left.dataset.transcriptNode!).slot !== task.anchor.node_key.slot) - Number(JSON.parse(right.dataset.transcriptNode!).slot !== task.anchor.node_key.slot))[0];
       if (target) task.anchor.node_key = JSON.parse(target.dataset.transcriptNode!);
     }
     const source = task.anchor.node_key.source_ref;
     if (source.kind === "stream" && !findTranscriptNode(scroller, task.anchor.node_key)) {
-      const parts = current.current.items.flatMap(item => item.kind === "turn" ? item.conversation.responseParts ?? [] : item.kind === "execution_response" ? item.parts : []);
+      const parts = current.current.items.flatMap(item => item.kind === "turn" ? item.conversation.responseItems ?? [] : item.kind === "execution_response" ? item.parts : []);
       // text 结算成 final_text 可以换容器，但仍须唯一对应真实 producer／内容部位。
       const candidates = parts.filter(part => part.source.item_id
         && (part.kind === source.part_kind || source.part_kind === "text" && part.kind === "final_text") && (
         source.tool ? part.tool_call_id === source.tool : source.model && source.block !== undefined
           && part.source.model_call_id === source.model && part.source.content_block_index === source.block));
-      if (candidates.length === 1) task.anchor.node_key = partNode(candidates[0], task.anchor.node_key.slot);
+      if (candidates.length === 1) task.anchor.node_key = responseNode(candidates[0], task.anchor.node_key.slot);
       else if (task.fallback) {
         task.anchor = task.fallback;
         current.current.onViewStateRestoreStatus?.(t("chat.process.positionLost"));
@@ -140,18 +140,17 @@ export function useTranscriptNavigation({ items, scopeKey, streamRef, scrollerRe
         return;
       }
       if (task.sourceLoaded && source.kind === "item") {
-        const parts = current.current.items.flatMap(item => item.kind === "turn" ? item.conversation.responseParts ?? [] : item.kind === "execution_response" ? item.parts : []);
+        const parts = current.current.items.flatMap(item => item.kind === "turn" ? item.conversation.responseItems ?? [] : item.kind === "execution_response" ? item.parts : []);
         const sourceParts = parts.filter(part => part.source.item_id === source.id);
-        const targetPart = sourceParts.find(part => (part.source.part_ordinal ?? 0) === source.part);
         // 只有原 owner 已补读这个 Item，才能确认部位取消；DOM 缺失本身不参与此判断。
-        const slotExists = targetPart && (task.anchor.node_key.slot !== "tool_input" || targetPart.kind === "tool_call")
-          && (task.anchor.node_key.slot !== "tool_output" || targetPart.kind === "tool_result");
+        const slotExists = sourceParts.some(part => responseNode(part).slot === task.anchor.node_key.slot
+          || ["header", "group"].includes(task.anchor.node_key.slot));
         if (sourceParts.length && !slotExists) {
           const message = t("chat.process.positionLost");
           if (!task.restoring) { fail(task,new Error(message)); return; }
           current.current.onViewStateRestoreStatus?.(message);
           // 仍存在的同一 Item 标题是有界替代，保留“未恢复”结果，不改写原记录。
-          const header = sourceParts.map(part => findTranscriptNode(scroller,partNode(part,"header")))
+          const header = sourceParts.map(part => findTranscriptNode(scroller,responseNode(part,"header")))
             .find(node => node && !node.ancestor);
           cancelAnchor();
           if (header) {
@@ -206,7 +205,8 @@ export function useTranscriptNavigation({ items, scopeKey, streamRef, scrollerRe
     // 分段标题的 slot 已固定真实段首 Item；恢复早期段不能只读取同一 execution 的尾页。
     const segmentItemId = source.kind === "execution" && anchor.node_key.slot.startsWith("header:")
       ? anchor.node_key.slot.slice("header:".length) : undefined;
-    const item = selection?.item ?? (source.kind==="item" ? {item_id:source.id} : segmentItemId ? {item_id:segmentItemId} : undefined);
+    const item = selection?.item ?? (selection?.message || selection?.tool ? undefined
+      : source.kind==="item" ? {item_id:source.id} : segmentItemId ? {item_id:segmentItemId} : undefined);
     void onLoadAroundTurn(source.kind==="turn"?source.id:source.kind === "context" && source.process?.kind === "turn" ? source.process.id : selection?.turnId??selection?.tool?.turn_id??"",task.controller.signal,
       selection?.message,selection?.tool?.item_id,item,source.kind==="execution" && !segmentItemId ? source.id:source.kind === "context" && source.process?.kind === "execution" ? source.process.id : undefined,context).then(result=>{
       if(task.controller.signal.aborted||anchorRef.current!==task||current.current.scopeKey!==scopeKey)return;
@@ -234,7 +234,7 @@ export function useTranscriptNavigation({ items, scopeKey, streamRef, scrollerRe
   }, [cancelAnchor, fail, followsLatestRef, onLoadAroundTurn, scheduleAnchorAlignment, scopeKey, scrollerRef]);
   const navigateToTurn = React.useCallback((turnId:string,restoring=false,message?:TurnMessageReferenceDTO,tool?:TurnToolResultDTO,item?:TurnItemNavigation)=>{
     const source=item?.item_id??tool?.item_id??message?.item_id;
-    start({node_key:source?nodeKey({kind:"item",id:source,part:0}):nodeKey({kind:"turn",id:turnId},"header"),content_position:{block:0,offset_px:0},viewport_offset_px:0},restoring, message||tool||item?{turnId,message,tool,item}:undefined);
+    start({node_key:source?nodeKey({kind:"item",id:source}):nodeKey({kind:"turn",id:turnId},"header"),content_position:{block:0,offset_px:0},viewport_offset_px:0},restoring, message||tool||item?{turnId,message,tool,item}:undefined);
   }, [start]);
   const preserveViewport = React.useCallback(() => {
     if (followsLatestRef.current || anchorRef.current) return;

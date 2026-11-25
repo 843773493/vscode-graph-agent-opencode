@@ -40,9 +40,9 @@ test("execution 正文按最多四项补读，旧 revision 明确报错且手动
   let updateState!: React.Dispatch<React.SetStateAction<ReturnType<typeof appState>>>;
   const execution = { execution_id: "execution-window", job_id: "execution-job", session_id: SESSION_ID,
     thread_id: THREAD_ID, status: "completed", created_at: "2026-07-28T00:00:00Z", updated_at: "2026-07-28T00:00:01Z",
-    display_parts: Array.from({ length: 6 }, (_, index) => ({ kind: "generated_session_result", text: `report-${index}`,
+    display_items: Array.from({ length: 6 }, (_, index) => ({ kind: "generated_session_result", text: `report-${index}`,
       item_id: `execution-item-${index}`, item_sequence: index + 1, logical_item_ordinal: index,
-      created_at: "2026-07-28T00:00:00Z", provenance: {} })), response_parts: [] };
+      created_at: "2026-07-28T00:00:00Z", provenance: {} })), response_items: [] };
   globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
     const path = new URL(String(args[0]), "http://127.0.0.1").pathname;
     if (path.endsWith("/local-credential")) return Response.json({ data: { token: "execution-body-window" } });
@@ -58,7 +58,7 @@ test("execution 正文按最多四项补读，旧 revision 明确报错且手动
     }
     return Response.json({ code: 0, message: "ok", request_id: "body-history", data: { thread_id: THREAD_ID, ...HISTORY_SOURCE_BINDING,
       source_view_revision: pageRevision, projection_epoch: 1, items: [], internal_executions: [{ ...execution,
-        display_parts: ids ? execution.display_parts.filter(part => ids.includes(part.item_id)) : execution.display_parts }],
+        display_items: ids ? execution.display_items.filter(part => ids.includes(part.item_id)) : execution.display_items }],
       before_cursor: ids ? null : "frozen-older", has_before: !ids } });
   }, { preconnect: originalFetch.preconnect });
   const getTimeline = () => current.turnTimelinesBySession.get(SCOPE_KEY) ?? null;
@@ -73,24 +73,24 @@ test("execution 正文按最多四项补读，旧 revision 明确报错且手动
   try {
     await act(async () => { renderer = create(<Harness />); await wait(60); });
     await act(async () => { await history.retainTurnBodies([], []); });
-    expect(current.turnTimelinesBySession.get(SCOPE_KEY)!.internalExecutions[0].display_parts.every(part => part.bodyEvicted)).toBe(true);
-    await act(async () => { await history.retainTurnBodies([], execution.display_parts.map(part => ({
+    expect(current.turnTimelinesBySession.get(SCOPE_KEY)!.internalExecutions[0].display_items.every(part => part.bodyEvicted)).toBe(true);
+    await act(async () => { await history.retainTurnBodies([], execution.display_items.map(part => ({
       executionId: execution.execution_id, itemId: part.item_id }))); });
     expect(batches.map(ids => ids.length)).toEqual([4, 2]);
     const timeline = current.turnTimelinesBySession.get(SCOPE_KEY)!;
     expect(timeline.beforeCursor).toBe("frozen-older");
-    expect(timeline.internalExecutions[0].display_parts.map(part => part.text)).toEqual(execution.display_parts.map(part => part.text));
+    expect(timeline.internalExecutions[0].display_items.map(part => part.text)).toEqual(execution.display_items.map(part => part.text));
     await act(async () => { await history.retainTurnBodies([], []); });
     await act(async () => { updateState(previous => {
       const timelines = new Map(previous.turnTimelinesBySession);
       timelines.set(SCOPE_KEY, { ...timelines.get(SCOPE_KEY)!, historyViewRevision: 2 });
       return { ...previous, turnTimelinesBySession: timelines };
     }); });
-    const window = execution.display_parts.map(part => ({ executionId: execution.execution_id, itemId: part.item_id }));
+    const window = execution.display_items.map(part => ({ executionId: execution.execution_id, itemId: part.item_id }));
     await act(async () => { await history.retainTurnBodies([], window); });
     const stale = getTimeline()!;
     expect(stale.error).toContain("正文补读未应用");
-    expect(stale.internalExecutions[0].display_parts.every(part => part.bodyEvicted)).toBe(true);
+    expect(stale.internalExecutions[0].display_items.every(part => part.bodyEvicted)).toBe(true);
     expect(stale.beforeCursor).toBe("frozen-older");
     const readsBeforeReload = batches.length;
     pageRevision = 2;
@@ -99,7 +99,7 @@ test("execution 正文按最多四项补读，旧 revision 明确报错且手动
     expect(refreshed.generation).toBeGreaterThan(stale.generation);
     expect(refreshed.historyViewRevision).toBe(2);
     expect(refreshed.error).toBeNull();
-    expect(refreshed.internalExecutions[0].display_parts.map(part => part.text)).toEqual(execution.display_parts.map(part => part.text));
+    expect(refreshed.internalExecutions[0].display_items.map(part => part.text)).toEqual(execution.display_items.map(part => part.text));
     expect(batches).toHaveLength(readsBeforeReload);
   } finally { act(() => renderer?.unmount()); }
 });
@@ -270,7 +270,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
                 status: "completed",
                 created_at: "2026-07-28T00:00:00Z",
                 updated_at: "2026-07-28T00:00:00Z",
-                display_parts: [{
+                display_items: [{
                   kind: "generated_session_result",
                   text: "子会话结果",
                   item_id: "item-internal-only",
@@ -279,7 +279,7 @@ describe("useSessionTurnHistory partial bootstrap", () => {
                   created_at: "2026-07-28T00:00:00Z",
                   provenance: {},
                 }],
-                response_parts: [],
+                response_items: [],
               }],
               projection_epoch: 1,
             },

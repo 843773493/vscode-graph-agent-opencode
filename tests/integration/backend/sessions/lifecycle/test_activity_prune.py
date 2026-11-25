@@ -44,7 +44,7 @@ def exclude_unrelated_custom_tools(maintenance_case: MountedCase) -> None:
     for root in maintenance_case.roots.values():
         path = root / ".boxteam/workspace.jsonc"
         config = json.loads(path.read_text())
-        for agent in config["agents"].values():
+        for agent in config["settings"]["workspace"]["agents"].values():
             tools = agent.get("tools")
             if isinstance(tools, dict):
                 tools.pop("custom", None)

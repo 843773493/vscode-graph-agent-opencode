@@ -12,7 +12,6 @@ from app.agents.providers.wire_finalize import (
 )
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
-from app.core.model_request_context import SummaryCandidateScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
@@ -26,7 +25,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 
 @pytest.mark.parametrize("source_state", ["same", "other-model", "missing"])
 @pytest.mark.parametrize("summary", [False, True])
-def test_private_reasoning_seal_retry_and_cold_projection(source_seal_case, source_state: str, summary: bool) -> None:
+def test_private_reasoning_seal_retry_and_cold_projection(source_seal_case, frozen_summary_prepare, source_state: str, summary: bool) -> None:
     case = source_seal_case
     saver, owner = case.saver, case.owner
     source = ModelSource(
@@ -74,13 +73,17 @@ def test_private_reasoning_seal_retry_and_cold_projection(source_seal_case, sour
             **case.activation_contract(saver, plan_creation_idempotency_key="model-source:create"),
         }
         if summary:
-            messages = checkpoint["channel_values"]["messages"]
-            arguments["request_messages"] = messages
-            arguments["summary_candidate"] = SummaryCandidateScope(
-                0, "initial", False, True, canonical_messages=tuple(messages),
-            )
-        prepared = saver.prepare_context_for_provider(owner.session_id, owner.thread_id, **arguments)
-        retry = saver.prepare_context_for_provider(owner.session_id, owner.thread_id, **arguments)
+            items = saver.read_canonical_items(owner.session_id, owner.thread_id)
+            wire_arguments = {name: arguments[name] for name in (
+                "provider_version", "wire_profile", "wire_params", "target_format",
+            )}
+            prepared = frozen_summary_prepare(saver, owner.session_id, owner.thread_id,
+                                              key="model-source", items=items, wire_arguments=wire_arguments)
+            retry = frozen_summary_prepare(saver, owner.session_id, owner.thread_id,
+                                           key="model-source", items=items, wire_arguments=wire_arguments)
+        else:
+            prepared = saver.prepare_context_for_provider(owner.session_id, owner.thread_id, **arguments)
+            retry = saver.prepare_context_for_provider(owner.session_id, owner.thread_id, **arguments)
         assert retry["snapshot"] == prepared["snapshot"]
         assert retry["native_projection"] == prepared["native_projection"]
     body = prepared["snapshot"].request_hash_preimage

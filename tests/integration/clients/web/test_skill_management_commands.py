@@ -72,7 +72,7 @@ async def test_skill_management_commands_use_gateway_and_workspace_owners(
     source_path = "/api/gateway/config/sources/gateway_mutable_override"
     source_document = remote.get(source_path).raise_for_status().json()["data"]
     configuration = commentjson.loads(source_document["jsonc"])
-    configuration.setdefault("permissions", {})["federation"] = {
+    configuration["settings"]["gateway"].setdefault("permissions", {})["federation"] = {
         "default_effect": "deny",
         "rules": [{"capability": "read", "effect": "allow",
                    "principal_ref": principal_ref_for_gateway(gateway_id)}],

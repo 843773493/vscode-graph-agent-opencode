@@ -1,7 +1,7 @@
-import type { TurnResponsePart } from "../../types/backend";
+import type { TurnResponseItem } from "../../types/backend";
 import type { AppState, ConversationView } from "../../types/frontend";
 import {
-  messageStreamToResponseParts,
+  messageStreamToResponseItems,
   type MessageStreamState,
 } from "../messageStream/index";
 import { isTerminalStatus } from "../messageStream/state";
@@ -18,13 +18,13 @@ const ACTIVITY_PART_KINDS = new Set([
 // 消息流版本不可变；弱引用只复用展示派生值，不延长历史流的缓存生命周期。
 const streamProjections = new WeakMap<MessageStreamState, {
   startedAt: string | undefined;
-  responseParts: TurnResponsePart[];
+  responseItems: TurnResponseItem[];
   activityStats: NonNullable<ConversationView["activityStats"]>;
 }>();
 
 function messageStreamActivityStats(
   stream: MessageStreamState,
-  parts: TurnResponsePart[],
+  parts: TurnResponseItem[],
   turnStartedAt?: string,
 ): NonNullable<ConversationView["activityStats"]> {
   // live 展示计时从 turnStartedAt 到已收到 block/tool execution 的最晚时间，
@@ -130,16 +130,16 @@ export function applyMessageStreamProjection(
     const startedAt = conversation.userMessage?.created_at;
     let projection = streamProjections.get(stream);
     if (!projection || projection.startedAt !== startedAt) {
-      const responseParts = projection?.responseParts ?? messageStreamToResponseParts(stream);
+      const responseItems = projection?.responseItems ?? messageStreamToResponseItems(stream);
       projection = {
         startedAt,
-        responseParts,
-        activityStats: messageStreamActivityStats(stream, responseParts, startedAt),
+        responseItems,
+        activityStats: messageStreamActivityStats(stream, responseItems, startedAt),
       };
       streamProjections.set(stream, projection);
     }
-    const { responseParts: liveResponseParts, activityStats: liveActivityStats } = projection;
-    const responseParts = [...liveResponseParts, ...(conversation.responseParts ?? []).filter(part => part.kind === "context_notice")];
+    const { responseItems: liveResponseItems, activityStats: liveActivityStats } = projection;
+    const responseItems = [...liveResponseItems, ...(conversation.responseItems ?? []).filter(part => part.kind === "context_notice")];
     if (terminalTurn) {
       // Job API/Turn projection 已经确认终态时，任何旧 stream（包括错误的
       // completed）只能作为诊断镜像保留，不能重新驱动聊天状态或活动遮罩。
@@ -153,7 +153,7 @@ export function applyMessageStreamProjection(
         ...(conversation.displayMode === "live"
           && isTerminalStatus(stream.streamStatus)
           ? {
-              responseParts,
+              responseItems,
               activityStats: liveActivityStats,
             }
           : {}),
@@ -183,7 +183,7 @@ export function applyMessageStreamProjection(
         : "running";
     return {
       ...conversation,
-      responseParts,
+      responseItems,
       activityStats: liveActivityStats,
       status: terminalStatus,
       activeJobOverlay: !isTerminalStatus(stream.streamStatus),

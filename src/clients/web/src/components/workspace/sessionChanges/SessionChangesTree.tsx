@@ -1,3 +1,4 @@
+import { failureSummary } from "../../../../../shared/core/failurePresentation";
 import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import type {
   SessionChangeset,
@@ -76,7 +77,7 @@ export default function SessionChangesTree({
       </div>
 
 
-      {error ? <div className="panel-feedback" role="alert">{error}</div> : null}
+      {error ? <div className="panel-feedback failure-summary" role="alert">{failureSummary(error)}</div> : null}
 
       <section className="auxiliary-tree-section">
         <header>{t("changes.sets")}</header>

@@ -161,6 +161,8 @@ class CanonicalItemCommitMixin:
                         "content": completion.content, "tool_outcome": completion.tool_outcome,
                         "execution_confirmed": completion.tool_outcome != "unknown",
                         **({"artifact": completion.artifact} if completion.artifact is not None else {}),
+                        **({"tool_execution": completion.tool_execution.to_dict()}
+                           if completion.tool_execution is not None else {}),
                     },
                     projection_identity=identity, turn_id=admission.turn_id,
                     turn_scope="turn_member" if admission.turn_id is not None else None,
@@ -315,7 +317,7 @@ class CanonicalItemCommitMixin:
                 with self._storage.jsonl_path(
                     session_id, checkpoint_ns, thread_id=thread_id
                 ).open("rb") as source_stream:
-                    self._storage._read_v2_item_at(
+                    self._storage._read_item_at(
                         connection,
                         source_stream,
                         sequence=strict_non_negative_int(

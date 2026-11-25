@@ -43,11 +43,15 @@ def shutdown_lifetime(
     original_config_bytes = b"// Preserve original formatting\n{}\n"
     config_path.write_bytes(original_config_bytes)
     config = {
-        "llm": {"providers": {
-            "primary": {"defaults": {"api_mode": "chat_completions"}, "models": {"default": {"model": "chat-fixture"}}},
-            "backup_3": {"defaults": {"api_mode": "responses"}, "models": {"default": {"model": "responses-fixture"}}},
+        "config_version": 4,
+        "settings": {"workspace": {
+            "llm": {"providers": {"primary": {"models": {"default": {"model": "chat-fixture"}}}}},
+            "agents": {"default": {"model": {"fallbacks": [{"provider_id": "backup_3", "model_id": "default"}]}}},
         }},
-        "agents": {"default": {"model": {"fallbacks": [{"provider_id": "backup_3", "model_id": "default"}]}}},
+        "profiles": {
+            "provider.primary": {"settings": {"model_options": {"api_mode": {"protocol": "chat_completions"}}}},
+            "provider.backup_3": {"settings": {"model_options": {"api_mode": {"protocol": "responses"}}}},
+        },
     }
     # 只验证装具资源归属；配置解析与schema校验是明确的替身边界。
     monkeypatch.setattr(shutdown_case, "read_jsonc_object", Mock(return_value=config))
@@ -90,13 +94,14 @@ def test_shutdown_environment_exposes_live_short_path_then_restores_exact_config
     assert Path(expected_path).resolve() == state.temporary_directory
     assert not descriptor_released(descriptor)
     config = json.loads(state.config_path.read_text())
-    primary = config["llm"]["providers"]["primary"]
-    assert primary["defaults"]["endpoint"] == (
-        "https://www.cctq.ai/v1" if primary["defaults"]["api_mode"] == "responses" else "https://opencode.ai/zen/v1"
+    primary = config["settings"]["workspace"]["llm"]["providers"]["primary"]
+    options = config["profiles"]["provider.primary"]["settings"]["model_options"]
+    assert options["endpoint"] == (
+        "https://www.cctq.ai/v1" if options["api_mode"]["protocol"] == "responses" else "https://opencode.ai/zen/v1"
     )
-    assert primary["defaults"]["api_key"] == ""
-    assert primary["models"]["default"]["model"] == ("gpt-5.6-luna" if primary["defaults"]["api_mode"] == "responses" else "big-pickle")
-    assert config["agents"]["default"]["model"]["fallbacks"] == []
+    assert options["api_key"] == ""
+    assert primary["models"]["default"]["model"] == ("gpt-5.6-luna" if options["api_mode"]["protocol"] == "responses" else "big-pickle")
+    assert config["settings"]["workspace"]["agents"]["default"]["model"]["fallbacks"] == []
 
     state.fixture.close()
 

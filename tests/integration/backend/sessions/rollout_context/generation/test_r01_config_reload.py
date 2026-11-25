@@ -57,7 +57,7 @@ def instruction_file_input(input_kind: str, producer_id: str, monkeypatch: pytes
                                        kind="files", tail_segments=("root", path.name))
             config_path = workspace / ".boxteam/workspace.jsonc"
             payload = read_jsonc_object(config_path)
-            instructions = payload.setdefault("agents", {}).setdefault("default", {}).setdefault("instructions", {})
+            instructions = payload["settings"].setdefault("workspace", {}).setdefault("agents", {}).setdefault("default", {}).setdefault("instructions", {})
             if producer_id == "R01":
                 instructions["system_prompt_file"] = uri
             else:
@@ -268,8 +268,9 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
 
     # 写入正式测试工作区的真实 source 层，由 ConfigService 发布并激活快照。
     config_path = case.runner.workspace / ".boxteam" / "workspace.jsonc"
-    source_config = read_jsonc_object(config_path) if config_path.exists() else {}
-    source_config.setdefault("agents", {}).setdefault("default", {}).setdefault(
+    source_config = read_jsonc_object(config_path)
+    workspace_settings = source_config["settings"].setdefault("workspace", {})
+    workspace_settings.setdefault("agents", {}).setdefault("default", {}).setdefault(
         "instructions", {}
     )
     if input_kind == "file":
@@ -277,9 +278,9 @@ async def test_real_config_reload_refreshes_instruction_generation_without_rewri
         instruction_file_input[0].write_text(new_content, encoding="utf-8")
     else:
         if producer_id == "R01":
-            source_config["agents"]["default"]["instructions"]["system_prompt"] = new_content
+            workspace_settings["agents"]["default"]["instructions"]["system_prompt"] = new_content
         else:
-            source_config["agents"]["default"]["instructions"].setdefault("runtime_identity", {})["description"] = new_content
+            workspace_settings["agents"]["default"]["instructions"].setdefault("runtime_identity", {})["description"] = new_content
         config_path.write_text(json.dumps(source_config, ensure_ascii=False), encoding="utf-8")
     assert await config.reload(idempotency_key="r01-instructions-refresh")
     after = config.get_snapshot()

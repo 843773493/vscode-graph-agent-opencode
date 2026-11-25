@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package boxteam.workspace.v2;
+
+import "boxteam/workspace/v2/public.proto";
+import "google/protobuf/timestamp.proto";
+
+// 来源缺省时由原 rollout owner 冻结最近已提交的闭合前缀；空工具列表不允许工具。
+message DerivedExecutionSourceDTO {
+  repeated string item_ids = 1;
+}
+
+message DerivedExecutionSubmitRequest {
+  string session_id = 1;
+  string thread_id = 2;
+  string idempotency_key = 3;
+  string instruction = 4;
+  optional DerivedExecutionSourceDTO source = 5;
+  repeated string allowed_tool_ids = 6;
+  optional ModelReferenceDTO model = 7;
+  double timeout_seconds = 8;
+  int32 max_model_calls = 9;
+  bool foreground = 10;
+}
+
+message DerivedExecutionScopeRequest {
+  string session_id = 1;
+  string thread_id = 2;
+}
+
+// 只返回已有 canonical 结果的身份；答案与冻结输入仍由原详情 owner 读取。
+message DerivedItemReferenceDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  string item_id = 3;
+  string content_hash = 4;
+}
+
+message DerivedDispatchReferenceDTO {
+  string assembly_id = 1;
+  string model_call_id = 2;
+  string request_hash = 3;
+  string reference_hash = 4;
+}
+
+message DerivedExecutionResultDTO {
+  string execution_id = 1;
+  DerivedDispatchReferenceDTO dispatch_ref = 2;
+  repeated DerivedItemReferenceDTO output_refs = 3;
+  int32 output_ref_count = 4;
+  bool output_refs_truncated = 5;
+}
+
+message DerivedExecutionDTO {
+  string task_id = 1;
+  string session_id = 2;
+  string thread_id = 3;
+  string status = 4;
+  google.protobuf.Timestamp created_at = 5;
+  optional google.protobuf.Timestamp started_at = 6;
+  optional google.protobuf.Timestamp ended_at = 7;
+  optional DerivedExecutionResultDTO result = 8;
+  string source_view_id = 9;
+  DerivedItemReferenceDTO source_last_ref = 10;
+  optional string error = 11;
+}

@@ -15,6 +15,7 @@
 .service-plugin-package-list .extension-list-item { cursor: pointer; }
 .service-plugin-package-list .publisher-name { font-size: 12px; color: var(--vscode-descriptionForeground); }
 .service-plugin-package-list [data-plugin-runtime-error]:not([hidden]) { color: var(--vscode-errorForeground); }
+[data-plugin-runtime-error], .service-plugin-feedback > span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .service-plugin-editor { container-type: inline-size; font-family: var(--boxteam-ui-font-family); }
 .service-plugin-editor > .header > .details { min-width: 0; }
 .service-plugin-editor > .header > .details > .title > .version { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }

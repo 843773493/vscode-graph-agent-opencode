@@ -136,7 +136,7 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
         if record.get("turn_id") == PARTIAL_TEXT_TURN_ID
         and record.get("item_id") == PARTIAL_TEXT_ITEM_ID
     )
-    assert boundary_record["format_version"] == 2
+    assert boundary_record["format_version"] == 3
     assert boundary_record["record_type"] == "item"
     assert boundary_record["semantic_kind"] == "assistant_output"
     assert boundary_record["payload_kind"] == "text"
@@ -161,7 +161,7 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
     assert history_item["assistant_text"] == [PARTIAL_TEXT_CONTENT]
     partial_response_part = next(
         part
-        for part in history_item["response_parts"]
+        for part in history_item["response_items"]
         if part.get("text") == PARTIAL_TEXT_CONTENT
     )
     assert partial_response_part["kind"] == "text"

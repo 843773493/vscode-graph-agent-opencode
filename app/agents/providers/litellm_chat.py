@@ -365,8 +365,8 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             resource_refs=binding.resource_refs if binding is not None else (),
         )
         kwargs.setdefault("client", client)
-        if self.invocation_purpose == "model_test":
-            kwargs["max_retries"] = kwargs["num_retries"] = 0
+        # LangChain 已消费构造时冻结的 max_retries；SDK 不再叠加一层重试。
+        kwargs["max_retries"] = kwargs["num_retries"] = 0
         try:
             return super().completion_with_retry(run_manager=run_manager, **kwargs)
         except ScopeCancelledError:
@@ -395,8 +395,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             resource_refs=binding.resource_refs if binding is not None else (),
         )
         kwargs.setdefault("client", client)
-        if self.invocation_purpose == "model_test":
-            kwargs["max_retries"] = kwargs["num_retries"] = 0
+        kwargs["max_retries"] = kwargs["num_retries"] = 0
         try:
             return await super().acompletion_with_retry(
                 run_manager=run_manager, **kwargs
@@ -1212,7 +1211,7 @@ def build_litellm_chat_model(
         "model": model_name,
         "api_key": provider["api_key"],
         "custom_llm_provider": provider["custom_llm_provider"],
-        "max_retries": 0 if invocation_purpose == "model_test" else 3,
+        "max_retries": 0 if invocation_purpose in {"model_test", "derived", "compaction"} else 3,
         "streaming": api_mode.streaming,
         "disable_streaming": not api_mode.streaming,
         "model_kwargs": request_parameters,

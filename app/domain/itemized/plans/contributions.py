@@ -19,6 +19,7 @@ from app.domain.itemized.hashing import (
     copy_json_value,
     validate_hash_token,
 )
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import (
     ContextRef,
 )
@@ -27,7 +28,7 @@ from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.validation import _non_empty_string
 
 _SOURCE_BINDING_FIELDS = frozenset(
-    {"source_ref", "overlay_ref", "overlay_id", "overlay_role", "source_overlay_epoch"}
+    {"source_ref", "overlay_ref", "overlay_id", "overlay_role", "source_overlay_epoch", "summary_result_ref"}
 )
 _CONTRIBUTION_BINDING_MANIFEST_FIELDS = frozenset(
     {"root_placement", "source_binding", "extensions"}
@@ -49,8 +50,12 @@ class SourceBinding:
     overlay_id: str | None = None
     overlay_role: str = BaseDeltaRole.NONE
     source_overlay_epoch: int | None = None
+    # 合并摘要沿原 contribution 保存直接结果依赖，供冷读、fork 与清理使用。
+    summary_result_ref: DetailRef | None = None
 
     def __post_init__(self) -> None:
+        if self.summary_result_ref is not None and not isinstance(self.summary_result_ref, DetailRef):
+            raise ItemSchemaError("SourceBinding.summary_result_ref 必须是 typed DetailRef")
         for name in ("source_ref", "overlay_ref", "overlay_id"):
             value = getattr(self, name)
             if value is not None:
@@ -74,12 +79,18 @@ class SourceBinding:
             raise ItemSchemaError("SourceBinding 必须是 object")
         if not value.keys() <= _SOURCE_BINDING_FIELDS or "overlay_role" not in value:
             raise ItemSchemaError("SourceBinding 缺少 overlay_role 或含未知字段")
-        return cls(**value)
+        fields = dict(value)
+        if fields.get("summary_result_ref") is not None:
+            fields["summary_result_ref"] = DetailRef.from_dict(fields["summary_result_ref"])
+        return cls(**fields)
 
     def to_dict(self) -> dict[str, object]:
-        return {name: value for name in (
+        result = {name: value for name in (
             "source_ref", "overlay_ref", "overlay_id", "overlay_role", "source_overlay_epoch"
         ) if (value := getattr(self, name)) is not None}
+        if self.summary_result_ref is not None:
+            result["summary_result_ref"] = self.summary_result_ref.to_dict()
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +205,8 @@ class ContextContribution:
         validate_extensions(self.extensions, field="ContextContribution.extensions")
         if self.source_binding is not None and not isinstance(self.source_binding, SourceBinding):
             raise ItemSchemaError("ContextContribution.source_binding 必须是 typed SourceBinding")
+        if self.source_binding is not None and self.source_binding.summary_result_ref is not None and self.contribution_kind != "model_message":
+            raise ItemSchemaError("只有实际摘要消息才能绑定 summary_result_ref")
         role = self.source_binding.overlay_role if self.source_binding is not None else BaseDeltaRole.NONE
         if self.contribution_kind.startswith("overlay_"):
             if role != self.contribution_kind.removeprefix("overlay_"):
@@ -202,17 +215,19 @@ class ContextContribution:
             raise ItemSchemaError("非 overlay contribution 不得绑定 overlay SourceBinding")
         if self.body is not None:
             if self.contribution_kind == "model_message":
-                if not isinstance(self.body, Mapping) or set(self.body) != {"message", "item_ids", "retry_source_item_ids"}:
-                    raise ItemSchemaError("model_message 必须绑定精确 message 与 canonical item IDs")
-                message, ids = self.body["message"], self.body["item_ids"]
-                retry_ids = self.body["retry_source_item_ids"]
+                if not isinstance(self.body, Mapping) or set(self.body) != {
+                    "message", "result_ref", "output_refs", "dispatch_ref", "coverage",
+                }:
+                    raise ItemSchemaError("model_message 必须绑定精确摘要结果与 canonical coverage")
+                message = self.body["message"]
                 if (not isinstance(message, Mapping) or set(message) != {"type", "data"}
-                    or message["type"] not in {"human", "ai", "tool"} or not isinstance(message["data"], Mapping)
-                    or not isinstance(ids, list) or not all(isinstance(value, str) and value for value in ids)
-                    or len(ids) != len(set(ids))
-                    or not isinstance(retry_ids, list) or not all(isinstance(value, str) and value for value in retry_ids)
-                    or len(retry_ids) != len(set(retry_ids))):
-                    raise ItemSchemaError("model_message 的角色、消息数据或 canonical refs 非法")
+                    or message["type"] != "human" or not isinstance(message["data"], Mapping)
+                    or not isinstance(self.body["output_refs"], list) or not self.body["output_refs"]
+                    or not isinstance(self.body["coverage"], list) or not self.body["coverage"]):
+                    raise ItemSchemaError("model_message 的角色、消息数据或 canonical coverage 非法")
+                result_ref = DetailRef.from_dict(self.body["result_ref"])
+                if self.source_binding is None or self.source_binding.summary_result_ref != result_ref:
+                    raise ItemSchemaError("model_message 结果正文与 typed source binding 不一致")
             # 摘要与长度复用同次规范编码；不为构造校验再次遍历整份正文。
             expected_hash, expected_length = contribution_content_hash_and_length(
                 self.contribution_kind, self.body,

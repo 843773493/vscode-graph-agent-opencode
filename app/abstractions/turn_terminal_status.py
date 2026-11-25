@@ -9,6 +9,7 @@ from app.domain.itemized.execution_admission import (
     ExecutionTerminalResult,
 )
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.item_projection import ToolExecutionEvidence
 from app.domain.itemized.records import CanonicalItemRecord
 
 ToolResultContent = str | list[str | dict[str, object]]
@@ -38,6 +39,7 @@ class ToolResultCompletion:
     content: ToolResultContent
     tool_outcome: Literal["success", "failure", "cancelled", "unknown"]
     artifact: object = None
+    tool_execution: ToolExecutionEvidence | None = None
 
     def __post_init__(self) -> None:
         for name in ("model_call_id", "tool_call_id", "tool_invocation_id", "tool_attempt_id", "tool_name"):
@@ -48,6 +50,11 @@ class ToolResultCompletion:
         canonical_json_bytes({"content": self.content, "artifact": self.artifact})
         if self.tool_outcome not in {"success", "failure", "cancelled", "unknown"}:
             raise ValueError(f"未知工具终态: {self.tool_outcome}")
+        if self.tool_execution is not None and (
+            self.tool_execution.tool_invocation_id != self.tool_invocation_id
+            or self.tool_execution.tool_attempt_id != self.tool_attempt_id
+        ):
+            raise ValueError("工具终态通知的执行证据与 invocation/attempt 不一致")
 
     @property
     def item_id(self) -> str:

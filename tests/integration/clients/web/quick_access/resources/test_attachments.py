@@ -108,11 +108,13 @@ async def test_thread_attachment_quick_access_paginates_and_opens_original_previ
     main_thread = _api_data(await client.get(f"/api/v1/sessions/{session_id}/main-thread"))
     thread_id = cast(str, main_thread["thread_id"])
     config = commentjson.loads((workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-    primary = next(provider for provider in config["llm"]["providers"] if provider["id"] == "primary")
+    primary = config["settings"]["workspace"]["llm"]["providers"]["primary"]
+    model = primary["models"]["default"]["model"]
+    endpoint = config["profiles"]["provider.primary"]["settings"]["model_options"]["endpoint"]
     model_calls = replay.control.plan_model_calls(
         session_id,
         thread_id,
-        _completion(primary["model"], primary["endpoint"].rstrip("/") + "/chat/completions"),
+        _completion(model, endpoint.rstrip("/") + "/chat/completions"),
     )
 
     text_name = "thread-quick-access-preview.txt"

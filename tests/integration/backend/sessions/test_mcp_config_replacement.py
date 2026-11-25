@@ -68,7 +68,7 @@ def plan_tool_loop(replay, container, session_id, thread_id, marker):
 
 
 def mcp_servers(payload):
-    mcp = payload["mcp"]
+    mcp = payload["settings"]["workspace"]["mcp"]
     assert isinstance(mcp, dict)
     servers = mcp["servers"]
     assert isinstance(servers, dict)
@@ -130,8 +130,9 @@ async def test_watcher_replacement_preserves_sealed_network_target_and_publishes
     async with http_schema_endpoint_factory("old") as old, http_schema_endpoint_factory("new") as new:
         for root in mounted_case.roots.values():
             path = root / ".boxteam/workspace.jsonc"
-            payload = read_jsonc_object(path) if path.exists() else {}
-            payload["mcp"] = {"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": old.url}}}
+            payload = {"config_version": 4, "extends": "builtin:workspace", "settings": {"workspace": {
+                "mcp": {"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": old.url}}},
+            }}}
             path.write_text(json.dumps(payload), encoding="utf-8")
         async with main.lifespan(main.app) as _main_lifespan_state:
             await _main_lifespan_state["after_http_startup"]()
@@ -240,7 +241,7 @@ async def test_watcher_replacement_preserves_sealed_network_target_and_publishes
             assert sibling.mcp_catalog_owner.binding_snapshot() == sibling_binding
             # 仍需重启的监督参数与 HTTP 变更整体延后，不能提前应用连接部分。
             mcp_servers(payload).pop("zz_failure")
-            mcp_config = payload["mcp"]
+            mcp_config = payload["settings"]["workspace"]["mcp"]
             assert isinstance(mcp_config, dict)
             mcp_config["supervision"] = {"sealed_call_timeout_seconds": 300}
             path.write_text(json.dumps(payload), encoding="utf-8")
@@ -268,12 +269,13 @@ async def test_source_api_add_header_reference_replace_disable_remove_and_reenab
     ):
         root, sibling_root = mounted_case.roots.values()
         for workspace in (root, sibling_root):
-            (workspace / ".boxteam/workspace.jsonc").write_text(json.dumps({"mcp": {"servers": {}}}))
+            (workspace / ".boxteam/workspace.jsonc").write_text(json.dumps({"config_version": 4,
+                "extends": "builtin:workspace", "settings": {"workspace": {"mcp": {"servers": {}}}}}))
         path = root / ".boxteam/workspace.jsonc"
-        payload = {"mcp": {"servers": {"schema": {
+        payload = {"config_version": 4, "extends": "builtin:workspace", "settings": {"workspace": {"mcp": {"servers": {"schema": {
             "enabled": True, "transport": "streamable_http", "url": old.url,
             "headers": {"Authorization": "Bearer ${MCP_TEST_OLD_CREDENTIAL}"},
-        }}}}
+        }}}}}}
         async with main.lifespan(main.app) as _main_lifespan_state:
             await _main_lifespan_state["after_http_startup"]()
             first, sibling = mounted_case.containers
@@ -364,12 +366,13 @@ async def test_disabled_sealed_call_commits_failure_and_releases_qualification_b
     async with http_schema_endpoint_factory(f"disabled-{boundary}") as endpoint:
         root, sibling_root = mounted_case.roots.values()
         path = root / ".boxteam/workspace.jsonc"
-        payload = {
+        payload = {"config_version": 4, "extends": "builtin:workspace", "settings": {"workspace": {
             "mcp": {"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": endpoint.url}}},
             "context": {"resource_activation": {"overrides": {"mcp_tool_catalog": boundary}}},
-        }
+        }}}
         path.write_text(json.dumps(payload), encoding="utf-8")
-        (sibling_root / ".boxteam/workspace.jsonc").write_text(json.dumps({"mcp": {"servers": {}}}), encoding="utf-8")
+        (sibling_root / ".boxteam/workspace.jsonc").write_text(json.dumps({"config_version": 4,
+            "extends": "builtin:workspace", "settings": {"workspace": {"mcp": {"servers": {}}}}}), encoding="utf-8")
         async with main.lifespan(main.app) as _main_lifespan_state:
             await _main_lifespan_state["after_http_startup"]()
             first, _sibling = mounted_case.containers
