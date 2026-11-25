@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Literal
@@ -366,18 +367,21 @@ class RolloutViewMembershipMixin:
             insert_view_jumps(connection, view_id, parent_view_id)
             return view_id
         materialized_sequences = tuple(dict.fromkeys((*parent_sequences, *sequence_values)))
+        # 同批元数据交给 SQLite 一次编码、Python 一次解码；避免多个 checkpoint
+        # worker 为每一行反复切换 GIL，长时间占用各自 Thread 的写锁。
         message_rows = (
-            connection.execute(
+            json.loads(connection.execute(
                 # 一次取回 Turn 与 canonical locator，避免再遍历消息并逐条查 catalog。
                 # 按消息聚合仍区分 locator 缺失和重复，不能用任意一条匹配掩盖损坏。
-                "SELECT m.message_sequence,m.turn_id,m.message_id,MIN(item.item_id),COUNT(item.item_id) "
+                "SELECT json_group_array(json_array(message_sequence,turn_id,message_id,item_id,item_count)) FROM ("
+                "SELECT m.message_sequence,m.turn_id,m.message_id,MIN(item.item_id) AS item_id,COUNT(item.item_id) AS item_count "
                 "FROM messages m LEFT JOIN item_catalog item "
                 "ON item.jsonl_offset=m.jsonl_offset AND item.jsonl_length=m.jsonl_length "
                 "WHERE m.message_sequence IN ("
                 + ",".join("?" for _ in materialized_sequences)
-                + ") GROUP BY m.message_sequence ORDER BY m.message_sequence",
+                + ") GROUP BY m.message_sequence ORDER BY m.message_sequence)",
                 materialized_sequences,
-            ).fetchall()
+            ).fetchone()[0])
             if materialized_sequences
             else []
         )
@@ -573,11 +577,12 @@ class RolloutViewMembershipMixin:
         inherited_members: dict[str, tuple[str, int, int, str, int, int | None]] = {}
         backing_only_ids: set[str] = set()
         if parent_view_id is not None and view_kind in {"checkpoint", "checkpoint_messages", "compaction"}:
-            parent_members = connection.execute(
-                "SELECT item_id, logical_item_ordinal, visible, source_kind, context_selected, context_ordinal "
-                "FROM context_view_items WHERE view_id = ? ORDER BY logical_item_ordinal",
+            parent_members = [tuple(row) for row in json.loads(connection.execute(
+                "SELECT json_group_array(json_array(item_id,logical_item_ordinal,visible,source_kind,context_selected,context_ordinal)) FROM ("
+                "SELECT item_id,logical_item_ordinal,visible,source_kind,context_selected,context_ordinal "
+                "FROM context_view_items WHERE view_id=? ORDER BY logical_item_ordinal)",
                 (parent_view_id,),
-            ).fetchall()
+            ).fetchone()[0])]
             inherited_members = {row[0]: row for row in parent_members}
             backing_only_ids = {row[0] for row in parent_members if row[2] == 0}
             parent_item_order = [row[0] for row in parent_members]
@@ -593,11 +598,12 @@ class RolloutViewMembershipMixin:
             candidate_item_ids.update(display_only_item_ids)
         if candidate_item_ids:
             placeholders = ",".join("?" for _ in candidate_item_ids)
-            ordered_item_rows = connection.execute(
-                "SELECT item_id, semantic_kind, turn_id, turn_scope, execution_id "
-                f"FROM item_catalog WHERE item_id IN ({placeholders}) ORDER BY item_sequence, item_id",
+            ordered_item_rows = json.loads(connection.execute(
+                "SELECT json_group_array(json_array(item_id,semantic_kind,turn_id,turn_scope,execution_id)) FROM ("
+                "SELECT item_id,semantic_kind,turn_id,turn_scope,execution_id "
+                f"FROM item_catalog WHERE item_id IN ({placeholders}) ORDER BY item_sequence,item_id)",
                 tuple(candidate_item_ids),
-            ).fetchall()
+            ).fetchone()[0])
             # 派生 view 继承父 view 已确定的逻辑相对顺序；新成员才按本次
             # canonical 物理坐标追加，不能用 item_sequence 重排既有成员。
             item_rows_by_id = {row[0]: row for row in ordered_item_rows}
