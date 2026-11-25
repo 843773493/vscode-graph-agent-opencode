@@ -41,6 +41,19 @@ def sdk(monkeypatch: pytest.MonkeyPatch) -> Iterator[ModuleType]:
         utils._invalidate_model_cost_lowercase_map()
 
 
+def test_model_request_url_selects_responses_contract_from_explicit_endpoint(
+    sdk: ModuleType, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 进程中的另一份 Azure endpoint 不能改变显式连接所选的实际 SDK 合同。
+    monkeypatch.setattr(sdk, "api_base", None)
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://other.models.ai.azure.com")
+    assert litellm_runtime.model_request_url({
+        "custom_llm_provider": "azure_ai", "model": "gpt-4.1",
+        "endpoint": "https://explicit.openai.azure.com/openai/v1",
+        "api_mode": {"protocol": "responses"},
+    }) == "https://explicit.openai.azure.com/openai/v1/responses"
+
+
 @pytest.fixture
 def pending_refresh(
     sdk: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

@@ -85,7 +85,7 @@ def model_request_url(connection: Mapping[str, Any]) -> str:
             # TODO: SDK 提供无认证副作用的地址准备入口后直接复用；当前构造器会创建令牌目录。
             # 与 ChatGPTResponsesAPIConfig.get_complete_url 的显式 api_base 分支一致。
             return endpoint.rstrip("/") + "/responses"
-        config = ProviderConfigManager.get_provider_responses_api_config(provider, connection["model"])
+        config = ProviderConfigManager.get_provider_responses_api_config(provider, connection["model"], api_base=endpoint)
         if config is None:
             raise ValueError(f"Provider {provider} 没有 Responses 地址合同")
         return config.get_complete_url(api_base=endpoint, litellm_params={})
